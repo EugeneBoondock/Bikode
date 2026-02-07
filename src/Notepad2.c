@@ -1,4 +1,4 @@
-/******************************************************************************
+﻿/******************************************************************************
 *
 *
 * Notepad2
@@ -53,6 +53,12 @@
 #include "Extension/User32Helper.h"
 #include "Extension/VersionHelper.h"
 #include "Extension/ViewHelper.h"
+#include "Extension/AICommands.h"
+#include "Extension/AIBridge.h"
+#include "Extension/ChatPanel.h"
+#include "Extension/DarkMode.h"
+#include "Extension/Terminal.h"
+#include "Extension/MarkdownPreview.h"
 
 
 
@@ -921,12 +927,40 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
     case WM_NCHITTEST:
     case WM_NCCALCSIZE:
     case WM_NCPAINT:
-    case WM_PAINT:
-    case WM_ERASEBKGND:
     case WM_NCLBUTTONDOWN:
     case WM_WINDOWPOSCHANGING:
     case WM_WINDOWPOSCHANGED:
       return DefWindowProc(hwnd, umsg, wParam, lParam);
+
+    // [biko]: Dark mode aware background painting
+    case WM_ERASEBKGND:
+      if (DarkMode_IsEnabled())
+      {
+          HDC hdc = (HDC)wParam;
+          RECT rc;
+          GetClientRect(hwnd, &rc);
+          HBRUSH hBrush = CreateSolidBrush(RGB(37, 37, 38));
+          FillRect(hdc, &rc, hBrush);
+          DeleteObject(hBrush);
+          return 1;
+      }
+      return DefWindowProc(hwnd, umsg, wParam, lParam);
+
+    case WM_PAINT:
+    {
+      if (DarkMode_IsEnabled())
+      {
+          PAINTSTRUCT ps;
+          HDC hdc = BeginPaint(hwnd, &ps);
+          HBRUSH hBrush = CreateSolidBrush(RGB(37, 37, 38));
+          FillRect(hdc, &ps.rcPaint, hBrush);
+          DeleteObject(hBrush);
+          EndPaint(hwnd, &ps);
+          return 0;
+      }
+      return DefWindowProc(hwnd, umsg, wParam, lParam);
+    }
+    // [/biko]
 
     // [2e]: Hide pointer while typing #230
     SET_CURSOR_HANDLER();
@@ -1027,6 +1061,10 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
 
         // call SaveSettings() when hwndToolbar is still valid
         SaveSettings(FALSE);
+
+        // [biko]: Shutdown AI subsystem
+        AICommands_Shutdown();
+        // [/biko]
 
         MRU_Destroy(pFileMRU);
         MRU_Destroy(mruFind);
@@ -1520,6 +1558,20 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
       break;
     // [/2e]
 
+    // [biko]: AI subsystem messages
+    case WM_AI_RESPONSE:
+    case WM_AI_STATUS:
+    case WM_AI_CONNECTED:
+    case WM_AI_DISCONNECTED:
+    case WM_AI_CHUNK:
+      return AICommands_HandleMessage(hwnd, umsg, wParam, lParam);
+
+    case WM_USER + 0x600:
+      // Deferred dark mode init — all windows are now ready
+      if (DarkMode_IsEnabled())
+          DarkMode_ApplyAll(hwnd, _hwndEdit, hwndToolbar, hwndStatus, hwndReBar);
+      return 0;
+    // [/biko]
 
     default:
       if (umsg == msgTaskbarCreated)
@@ -1742,6 +1794,14 @@ LRESULT MsgCreate(HWND hwnd, WPARAM wParam, LPARAM lParam)
   n2e_UpdateViews();
   // [2e]: DPI awareness #154
   n2e_UpdateViewsDPI(GetDPIFromWindow(hwnd));
+
+  // [biko]: Initialize AI subsystem
+  AICommands_Init(hwnd, _hwndEdit);
+  AICommands_CreateMenu(GetMenu(hwnd));
+  // Defer dark mode application to after WM_CREATE completes
+  PostMessage(hwnd, WM_USER + 0x600, 0, 0);
+  // [/biko]
+
   return (0);
 }
 
@@ -2039,6 +2099,21 @@ void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam)
     GetWindowRect(hwndStatus, &rc);
     cy -= (rc.bottom - rc.top);
   }
+
+  // [biko]: Reserve space for panels
+  {
+    int panelH;
+    // Terminal stays at the bottom
+    panelH = Terminal_Layout(hwnd, cx, y + cy);
+    cy -= panelH;
+    // Chat panel is a right sidebar
+    int chatW = ChatPanel_Layout(hwnd, cx, y, cy);
+    cx -= chatW;
+    // Markdown preview takes width from the right
+    int mdW = MarkdownPreview_Layout(hwnd, cx, cy);
+    cx -= mdW;
+  }
+  // [/biko]
 
   hdwp = BeginDeferWindowPos(2);
 
@@ -5590,6 +5665,13 @@ LRESULT MsgCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
       SciCall_SetSel(SciCall_GetAnchor(), SciCall_PositionFromLine(n2e_GetAltPageLine(wCommandID == CMD_ALTSHIFTPAGEUP)));
       break;
     // [/2e]
+
+    // [biko]: AI command dispatch
+    default:
+      if (AICommands_HandleCommand(hwnd, wCommandID))
+        return 0;
+      break;
+    // [/biko]
   }
   return (0);
 }

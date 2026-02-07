@@ -110,7 +110,7 @@
     <CodeAnalysisRuleSet>AllRules.ruleset</CodeAnalysisRuleSet>
     <CodeAnalysisRules />
     <CodeAnalysisRuleAssemblies />
-    <TargetName>$(ProjectName)</TargetName>
+    <TargetName>Biko</TargetName>
     <GenerateManifest>false</GenerateManifest>
   </PropertyGroup>
   <ItemDefinitionGroup>
@@ -120,16 +120,17 @@
     </PreBuildEvent>
     <ClCompile>
       <AdditionalIncludeDirectories>scintilla\include;scintilla\src;scintilla\lexlib;scintilla\win32;$(ProjectDir)src;$(ProjectDir)src\Extension;$(ProjectDir)scintilla\lua\src;$(OutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;STATIC_BUILD;SCI_LEXER;SCI_OWNREGEX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;STATIC_BUILD;SCI_LEXER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <DataExecutionPrevention>true</DataExecutionPrevention>
       <RandomizedBaseAddress>true</RandomizedBaseAddress>
       <BufferSecurityCheck>true</BufferSecurityCheck>
       <MinimalRebuild>false</MinimalRebuild>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>comctl32.lib;shlwapi.lib;imm32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>comctl32.lib;shlwapi.lib;imm32.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(SolutionDir)bin\$(Platform)\$(Configuration)\$(TargetName)$(TargetExt)</OutputFile>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
@@ -151,7 +152,7 @@
       <PreprocessorDefinitions>INCLUDE_DEPRECATED_FEATURES;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
     </ClCompile>
     <Link>
       <AdditionalLibraryDirectories>$(BOOST_ROOT)\stage\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
@@ -291,7 +292,8 @@
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="scintilla\boostregex\BoostRegExSearch.cxx" />
+    <!-- Boost not installed; using built-in Scintilla regex instead -->
+    <!-- <ClCompile Include="scintilla\boostregex\BoostRegExSearch.cxx" /> -->
     <ClCompile Include="scintilla\boostregex\UTF8DocumentIterator.cxx" />
     <ClCompile Include="scintilla\lexers\LexA68k.cxx" />
     <ClCompile Include="scintilla\lexers\LexAbaqus.cxx" />
@@ -469,6 +471,20 @@
     <ClCompile Include="src\Extension\Utils.c" />
     <ClCompile Include="src\Extension\VersionHelper.c" />
     <ClCompile Include="src\Extension\ViewHelper.c" />
+    <ClCompile Include="src\Extension\mono_json.c" />
+    <ClCompile Include="src\Extension\AIBridge.c" />
+    <ClCompile Include="src\Extension\AIDirectCall.c" />
+    <ClCompile Include="src\Extension\AIContext.c" />
+    <ClCompile Include="src\Extension\AICommands.c" />
+    <ClCompile Include="src\Extension\AIProvider.c" />
+    <ClCompile Include="src\Extension\DiffParse.c" />
+    <ClCompile Include="src\Extension\DiffPreview.c" />
+    <ClCompile Include="src\Extension\PatchUndo.c" />
+    <ClCompile Include="src\Extension\ChatPanel.c" />
+    <ClCompile Include="src\Extension\DarkMode.c" />
+    <ClCompile Include="src\Extension\GitUI.c" />
+    <ClCompile Include="src\Extension\Terminal.c" />
+    <ClCompile Include="src\Extension\MarkdownPreview.c" />
     <ClCompile Include="src\Helpers.c" />
     <ClCompile Include="src\Notepad2.c" />
     <ClCompile Include="src\Print.cpp" />
@@ -608,6 +624,19 @@
     <ClInclude Include="src\Extension\Utils.h" />
     <ClInclude Include="src\Extension\VersionHelper.h" />
     <ClInclude Include="src\Extension\ViewHelper.h" />
+    <ClInclude Include="src\Extension\mono_json.h" />
+    <ClInclude Include="src\Extension\AIBridge.h" />
+    <ClInclude Include="src\Extension\AIContext.h" />
+    <ClInclude Include="src\Extension\AICommands.h" />
+    <ClInclude Include="src\Extension\AIProvider.h" />
+    <ClInclude Include="src\Extension\DiffParse.h" />
+    <ClInclude Include="src\Extension\DiffPreview.h" />
+    <ClInclude Include="src\Extension\PatchUndo.h" />
+    <ClInclude Include="src\Extension\ChatPanel.h" />
+    <ClInclude Include="src\Extension\DarkMode.h" />
+    <ClInclude Include="src\Extension\GitUI.h" />
+    <ClInclude Include="src\Extension\Terminal.h" />
+    <ClInclude Include="src\Extension\MarkdownPreview.h" />
     <ClInclude Include="src\Helpers.h" />
     <ClInclude Include="src\Notepad2.h" />
     <ClInclude Include="src\Styles.h" />

@@ -3,6 +3,7 @@
 #include <WTypes.h>
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 #include "StringRecoding-fwd.h"
 

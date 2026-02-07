@@ -1,5 +1,5 @@
 #include "EditHelper.h"
-#include <cassert>
+#include <assert.h>
 #include <commctrl.h>
 #include "CommonUtils.h"
 #include "CommentAwareLineWrapping.h"

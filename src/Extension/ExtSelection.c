@@ -1,5 +1,5 @@
 #include "stdafx.h"
-#include <cassert>
+#include <assert.h>
 #include "CommonUtils.h"
 #include "Edit.h"
 #include "EditHelper.h"

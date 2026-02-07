@@ -23,7 +23,7 @@
 
 //==== Main Window ============================================================
 // [2e]: application name fix
-#define WC_NOTEPAD2 L"Notepad 2e"
+#define WC_NOTEPAD2 L"Biko"
 
 
 //==== Data Type for WM_COPYDATA ==============================================

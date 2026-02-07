@@ -27,16 +27,16 @@
 #define VERSION_FILEVERSION_BUILD_STRING  TOSTRING(VERSION_FILEVERSION_BUILD)
 #define VERSION_FILEVERSION_NUM      1,VERSION_FILEVERSION_BUILD
 #define VERSION_FILEVERSION_SHORT    L"1." VERSION_FILEVERSION_BUILD_STRING
-#define VERSION_LEGALCOPYRIGHT_SHORT L"Copyright © 2004-2011"
-#define VERSION_LEGALCOPYRIGHT_LONG  L"© Florian Balmer and contributors"
+#define VERSION_LEGALCOPYRIGHT_SHORT L"Copyright ï¿½ 2004-2011"
+#define VERSION_LEGALCOPYRIGHT_LONG  L"ï¿½ Florian Balmer and contributors"
 #if defined(ICU_BUILD) && defined(LPEG_LEXER)
-#define VERSION_FILEDESCRIPTION_BASE L"Notepad 2e-ICU-LPeg"
+#define VERSION_FILEDESCRIPTION_BASE L"Biko"
 #elif ICU_BUILD
-#define VERSION_FILEDESCRIPTION_BASE L"Notepad 2e-ICU"
+#define VERSION_FILEDESCRIPTION_BASE L"Biko"
 #elif LPEG_LEXER
-#define VERSION_FILEDESCRIPTION_BASE L"Notepad 2e-LPeg"
+#define VERSION_FILEDESCRIPTION_BASE L"Biko"
 #else
-#define VERSION_FILEDESCRIPTION_BASE L"Notepad 2e"
+#define VERSION_FILEDESCRIPTION_BASE L"Biko"
 #endif
 #ifdef _WIN64
 #define VERSION_FILEDESCRIPTION      VERSION_FILEDESCRIPTION_BASE L" x64"
@@ -44,22 +44,22 @@
 #define VERSION_FILEDESCRIPTION      VERSION_FILEDESCRIPTION_BASE
 #endif
 #if defined(ICU_BUILD) && defined(LPEG_LEXER)
-#define VERSION_INTERNALNAME         L"Notepad2e-ICU-LPeg"
-#define VERSION_ORIGINALFILENAME     L"Notepad2eil.exe"
+#define VERSION_INTERNALNAME         L"Biko"
+#define VERSION_ORIGINALFILENAME     L"Biko.exe"
 #elif ICU_BUILD
-#define VERSION_INTERNALNAME         L"Notepad2e-ICU"
-#define VERSION_ORIGINALFILENAME     L"Notepad2ei.exe"
+#define VERSION_INTERNALNAME         L"Biko"
+#define VERSION_ORIGINALFILENAME     L"Biko.exe"
 #elif LPEG_LEXER
-#define VERSION_INTERNALNAME         L"Notepad2e-LPeg"
-#define VERSION_ORIGINALFILENAME     L"Notepad2el.exe"
+#define VERSION_INTERNALNAME         L"Biko"
+#define VERSION_ORIGINALFILENAME     L"Biko.exe"
 #else
-#define VERSION_INTERNALNAME         L"Notepad2e"
-#define VERSION_ORIGINALFILENAME     L"Notepad2e.exe"
+#define VERSION_INTERNALNAME         L"Biko"
+#define VERSION_ORIGINALFILENAME     L"Biko.exe"
 #endif
 #define VERSION_AUTHORNAME           L"Florian Balmer"
 #define VERSION_WEBPAGEDISPLAY       L"flo's freeware - http://www.flos-freeware.ch"
 #define VERSION_EMAILDISPLAY         L"florian.balmer@gmail.com"
-#define VERSION_EXT_VERSION          L"Extended Edition © 2013-"BUILD_YEAR_STR
+#define VERSION_EXT_VERSION          L"Extended Edition ï¿½ 2013-"BUILD_YEAR_STR
 #define VERSION_EXT_BY               L"By Proger_XP and contributors"
-#define VERSION_EXT_PAGE             L"https://github.com/ProgerXP/Notepad2e"
+#define VERSION_EXT_PAGE             L"https://github.com/user/biko"
 #define VERSION_COMMIT               L"6c3f5ac"

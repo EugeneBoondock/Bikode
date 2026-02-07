@@ -87,6 +87,7 @@
 #define IDC_CONSISTENTEOLS              102
 #define IDB_PREV                        102
 #define IDI_STYLES                      102
+#define IDI_BIKO_LIGHT                  500
 #define IDC_ASCIIASUTF8                 102
 #define IDC_WEBPAGE                     102
 #define IDC_POSNUM                      102

@@ -1,5 +1,7 @@
 #include "EditHelperEx.h"
-#include <boost/regex.hpp>
+#include <map>
+#include <regex>
+#include <tuple>
 #include "../scintilla/src/UniConversion.h"
 #include "Scintilla.h"
 
@@ -177,7 +179,7 @@ extern "C"
   {
     try
     {
-      boost::regex reg(str, boost::regex_constants::ECMAScript);
+      std::regex reg(str, std::regex_constants::ECMAScript);
       return 1;
     }
     catch (...)
@@ -190,7 +192,7 @@ extern "C"
   {
     try
     {
-      return boost::regex_match(text, boost::wregex(regexFormat));
+      return std::regex_match(text, std::wregex(regexFormat));
     }
     catch (...)
     {
