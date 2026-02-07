@@ -30,45 +30,47 @@
 
 #define C(dk, lt) (DarkMode_IsEnabled() ? (dk) : (lt))
 
-// --- Dark mode ---
-#define DK_BG            RGB(18, 18, 18)
-#define DK_SURFACE       RGB(24, 24, 24)
-#define DK_SURFACE2      RGB(30, 30, 32)
-#define DK_HEADER        RGB(20, 20, 20)
-#define DK_BORDER        RGB(48, 48, 48)
-#define DK_BORDER_HOV    RGB(65, 65, 68)
-#define DK_BORDER_FOCUS  RGB(75, 139, 245)
+// --- Dark mode (matches WelcomeScreen palette) ---
+#define DK_BG            RGB(24, 24, 24)
+#define DK_SURFACE       RGB(36, 36, 36)
+#define DK_SURFACE2      RGB(36, 36, 36)
+#define DK_HEADER        RGB(24, 24, 24)
+#define DK_SURFACE_HOV   RGB(48, 50, 54)
+#define DK_BORDER        RGB(55, 55, 55)
+#define DK_BORDER_HOV    RGB(80, 120, 200)
+#define DK_BORDER_FOCUS  RGB(80, 120, 200)
 #define DK_TEXT1         RGB(230, 230, 230)
 #define DK_TEXT2         RGB(150, 150, 150)
 #define DK_MUTED         RGB(80, 80, 80)
 #define DK_ACCENT        RGB(75, 139, 245)
 #define DK_ACCENT_HOV    RGB(100, 160, 255)
-#define DK_DIVIDER       RGB(40, 40, 40)
-#define DK_INPUT_BG      RGB(28, 28, 30)
-#define DK_INPUT_BD      RGB(55, 55, 58)
-#define DK_CLOSE_HOV     RGB(42, 42, 45)
+#define DK_DIVIDER       RGB(50, 50, 50)
+#define DK_INPUT_BG      RGB(36, 36, 36)
+#define DK_INPUT_BD      RGB(55, 55, 55)
+#define DK_CLOSE_HOV     RGB(48, 50, 54)
 #define DK_BADGE_BG      RGB(42, 42, 42)
 #define DK_BADGE_BD      RGB(60, 60, 60)
 
-// --- Light mode ---
+// --- Light mode (matches WelcomeScreen palette) ---
 #define LT_BG            RGB(248, 249, 251)
 #define LT_SURFACE       RGB(255, 255, 255)
-#define LT_SURFACE2      RGB(245, 246, 248)
-#define LT_HEADER        RGB(250, 250, 252)
-#define LT_BORDER        RGB(215, 215, 218)
-#define LT_BORDER_HOV    RGB(190, 190, 195)
-#define LT_BORDER_FOCUS  RGB(50, 110, 215)
+#define LT_SURFACE2      RGB(255, 255, 255)
+#define LT_HEADER        RGB(248, 249, 251)
+#define LT_SURFACE_HOV   RGB(237, 242, 252)
+#define LT_BORDER        RGB(215, 215, 215)
+#define LT_BORDER_HOV    RGB(70, 120, 210)
+#define LT_BORDER_FOCUS  RGB(70, 120, 210)
 #define LT_TEXT1         RGB(28, 28, 28)
 #define LT_TEXT2         RGB(100, 100, 100)
 #define LT_MUTED         RGB(165, 165, 165)
 #define LT_ACCENT        RGB(50, 110, 215)
 #define LT_ACCENT_HOV    RGB(30, 90, 195)
 #define LT_DIVIDER       RGB(228, 228, 228)
-#define LT_INPUT_BG      RGB(242, 243, 245)
-#define LT_INPUT_BD      RGB(200, 200, 205)
-#define LT_CLOSE_HOV     RGB(232, 232, 235)
-#define LT_BADGE_BG      RGB(238, 238, 240)
-#define LT_BADGE_BD      RGB(210, 210, 215)
+#define LT_INPUT_BG      RGB(255, 255, 255)
+#define LT_INPUT_BD      RGB(215, 215, 215)
+#define LT_CLOSE_HOV     RGB(237, 242, 252)
+#define LT_BADGE_BG      RGB(238, 238, 238)
+#define LT_BADGE_BD      RGB(210, 210, 210)
 
 //=============================================================================
 // Layout constants
@@ -79,9 +81,9 @@
 #define CHAT_INPUT_AREA_HEIGHT  92
 #define CHAT_INPUT_PAD          10
 #define CHAT_INPUT_INNER_PAD    10
-#define CHAT_INPUT_RADIUS       10
+#define CHAT_INPUT_RADIUS       8
 #define CHAT_SEND_SIZE          30
-#define CHAT_SPLITTER_WIDTH     1
+#define CHAT_SPLITTER_WIDTH     0
 #define CHAT_HDR_BTN_SIZE       28
 #define CHAT_STATUS_DOT_R       4
 
@@ -203,7 +205,7 @@ static void FillRoundRect(HDC hdc, const RECT* prc, int r,
     HPEN   hPen = CreatePen(PS_SOLID, 1, border);
     HBRUSH hOldBr  = (HBRUSH)SelectObject(hdc, hBr);
     HPEN   hOldPen = (HPEN)SelectObject(hdc, hPen);
-    RoundRect(hdc, prc->left, prc->top, prc->right, prc->bottom, r * 2, r * 2);
+    RoundRect(hdc, prc->left, prc->top, prc->right, prc->bottom, r, r);
     SelectObject(hdc, hOldBr);
     SelectObject(hdc, hOldPen);
     DeleteObject(hBr);
@@ -299,7 +301,7 @@ BOOL ChatPanel_Create(HWND hwndParent)
     // --- Scintilla output ---
     s_hwndOutput = CreateWindowExW(
         0, L"Scintilla", L"",
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL,
+        WS_CHILD | WS_VISIBLE,
         0, 0, 0, 0, s_hwndPanel,
         (HMENU)(UINT_PTR)IDC_CHAT_OUTPUT, hInst, NULL);
 
@@ -308,6 +310,8 @@ BOOL ChatPanel_Create(HWND hwndParent)
         SetupOutputStyles(s_hwndOutput);
         SendMessage(s_hwndOutput, SCI_SETREADONLY, TRUE, 0);
         SendMessage(s_hwndOutput, SCI_SETWRAPMODE, SC_WRAP_WORD, 0);
+        SendMessage(s_hwndOutput, SCI_SETVSCROLLBAR, TRUE, 0);
+        SendMessage(s_hwndOutput, SCI_SETHSCROLLBAR, FALSE, 0);
     }
 
     // --- Multiline input (borderless -- we draw our own card) ---
@@ -429,14 +433,17 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
 {
     if (!s_bVisible || !s_hwndPanel) return 0;
 
-    int panelLeft = parentRight - s_iPanelWidth;
+    // Overlap 2px into the editor area to cover the editor frame border
+    int overlap = 2;
+    int panelLeft = parentRight - s_iPanelWidth - overlap;
     if (panelLeft < 200) panelLeft = 200;
 
-    int totalW = s_iPanelWidth;
+    int totalW = s_iPanelWidth + overlap;
     MoveWindow(s_hwndPanel, panelLeft, editorTop, totalW, editorHeight, TRUE);
 
-    int x = CHAT_SPLITTER_WIDTH;
-    int innerW = totalW - CHAT_SPLITTER_WIDTH;
+    // Content starts after the overlap region
+    int x = overlap;
+    int innerW = totalW - overlap;
 
     // Header
     int y = CHAT_HEADER_HEIGHT;
@@ -458,9 +465,9 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
 
     // Input card
     int cardLeft   = x + CHAT_INPUT_PAD;
-    int cardTop    = y + 8;
+    int cardTop    = y + 6;
     int cardRight  = x + innerW - CHAT_INPUT_PAD;
-    int cardBottom = y + CHAT_INPUT_AREA_HEIGHT - 8;
+    int cardBottom = y + CHAT_INPUT_AREA_HEIGHT - 6;
 
     s_rcInputCard.left   = cardLeft;
     s_rcInputCard.top    = cardTop;
@@ -486,7 +493,7 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
         MoveWindow(s_hwndSend, sendLeft, sendTop,
                    CHAT_SEND_SIZE, CHAT_SEND_SIZE, TRUE);
 
-    return totalW;
+    return s_iPanelWidth;
 }
 
 //=============================================================================
@@ -612,11 +619,11 @@ void ChatPanel_ApplyDarkMode(void)
 static void SetupOutputStyles(HWND hwndOutput)
 {
     BOOL bDark = DarkMode_IsEnabled();
-    COLORREF bgClr = bDark ? DK_SURFACE : LT_SURFACE;
+    COLORREF bgClr = bDark ? DK_BG : LT_BG;
 
-    // Default style
+    // Default style - body text
     SendMessage(hwndOutput, SCI_STYLESETFONT, STYLE_DEFAULT, (LPARAM)"Segoe UI");
-    SendMessage(hwndOutput, SCI_STYLESETSIZE, STYLE_DEFAULT, 10);
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, STYLE_DEFAULT, 9);
     SendMessage(hwndOutput, SCI_STYLESETBACK, STYLE_DEFAULT, bgClr);
     SendMessage(hwndOutput, SCI_STYLESETFORE, STYLE_DEFAULT,
                 bDark ? DK_TEXT1 : LT_TEXT1);
@@ -635,37 +642,53 @@ static void SetupOutputStyles(HWND hwndOutput)
     // Markdown base styles
     MarkdownPreview_SetupStyles(hwndOutput);
 
-    // Style 20: User label (accent, bold)
-    SendMessage(hwndOutput, SCI_STYLESETFONT, 20, (LPARAM)"Segoe UI");
-    SendMessage(hwndOutput, SCI_STYLESETSIZE, 20, 10);
+    // Style 20: User label (accent, semibold, smaller)
+    SendMessage(hwndOutput, SCI_STYLESETFONT, 20, (LPARAM)"Segoe UI Semibold");
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, 20, 9);
     SendMessage(hwndOutput, SCI_STYLESETFORE, 20,
                 bDark ? DK_ACCENT : LT_ACCENT);
-    SendMessage(hwndOutput, SCI_STYLESETBOLD, 20, TRUE);
+    SendMessage(hwndOutput, SCI_STYLESETBOLD, 20, FALSE);
     SendMessage(hwndOutput, SCI_STYLESETBACK, 20, bgClr);
 
-    // Style 21: AI label (primary text, bold)
-    SendMessage(hwndOutput, SCI_STYLESETFONT, 21, (LPARAM)"Segoe UI");
-    SendMessage(hwndOutput, SCI_STYLESETSIZE, 21, 10);
+    // Style 21: AI label (primary text, semibold, smaller)
+    SendMessage(hwndOutput, SCI_STYLESETFONT, 21, (LPARAM)"Segoe UI Semibold");
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, 21, 9);
     SendMessage(hwndOutput, SCI_STYLESETFORE, 21,
                 bDark ? DK_TEXT1 : LT_TEXT1);
-    SendMessage(hwndOutput, SCI_STYLESETBOLD, 21, TRUE);
+    SendMessage(hwndOutput, SCI_STYLESETBOLD, 21, FALSE);
     SendMessage(hwndOutput, SCI_STYLESETBACK, 21, bgClr);
 
-    // Style 22: System (muted italic)
+    // Style 22: System (muted, smaller)
     SendMessage(hwndOutput, SCI_STYLESETFONT, 22, (LPARAM)"Segoe UI");
-    SendMessage(hwndOutput, SCI_STYLESETSIZE, 22, 9);
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, 22, 8);
     SendMessage(hwndOutput, SCI_STYLESETFORE, 22,
-                bDark ? DK_MUTED : LT_MUTED);
-    SendMessage(hwndOutput, SCI_STYLESETITALIC, 22, TRUE);
+                bDark ? DK_TEXT2 : LT_TEXT2);
+    SendMessage(hwndOutput, SCI_STYLESETITALIC, 22, FALSE);
     SendMessage(hwndOutput, SCI_STYLESETBACK, 22, bgClr);
 
     // Left margin
-    SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 0, 14);
+    SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 0, 12);
     SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 1, 0);
+    SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 2, 0);
+    SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 3, 0);
+    SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 4, 0);
+
+    // Margin backgrounds must match panel background
+    SendMessage(hwndOutput, SCI_SETMARGINBACKN, 0, bgClr);
+    SendMessage(hwndOutput, SCI_SETMARGINBACKN, 1, bgClr);
+    SendMessage(hwndOutput, SCI_SETMARGINBACKN, 2, bgClr);
+
+    // Line number style background (controls margin 0 background)
+    SendMessage(hwndOutput, SCI_STYLESETBACK, STYLE_LINENUMBER, bgClr);
+    SendMessage(hwndOutput, SCI_STYLESETFORE, STYLE_LINENUMBER, bgClr);
+
+    // Fold margin colours
+    SendMessage(hwndOutput, SCI_SETFOLDMARGINCOLOUR, TRUE, bgClr);
+    SendMessage(hwndOutput, SCI_SETFOLDMARGINHICOLOUR, TRUE, bgClr);
 
     // Extra line spacing
-    SendMessage(hwndOutput, SCI_SETEXTRAASCENT, 3, 0);
-    SendMessage(hwndOutput, SCI_SETEXTRADESCENT, 3, 0);
+    SendMessage(hwndOutput, SCI_SETEXTRAASCENT, 2, 0);
+    SendMessage(hwndOutput, SCI_SETEXTRADESCENT, 2, 0);
 
     // Scrollbar theme
     if (bDark)
@@ -686,14 +709,14 @@ static void AppendToOutput(const char* prefix, const char* text, int style)
 
     int len = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
 
-    // Blank line separator
+    // Single blank line separator (not double)
     if (len > 0)
     {
-        SendMessage(s_hwndOutput, SCI_APPENDTEXT, 2, (LPARAM)"\n\n");
-        len += 2;
+        SendMessage(s_hwndOutput, SCI_APPENDTEXT, 1, (LPARAM)"\n");
+        len += 1;
     }
 
-    // Prefix label
+    // Prefix label on its own line
     if (prefix && prefix[0])
     {
         int prefixLen = (int)strlen(prefix);
@@ -769,42 +792,20 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
 
         SetBkMode(hm, TRANSPARENT);
 
-        // ---- Background ----
+        // ---- Seamless background (matches WelcomeScreen BG) ----
         {
-            HBRUSH hBg = CreateSolidBrush(C(DK_SURFACE, LT_SURFACE));
+            HBRUSH hBg = CreateSolidBrush(C(DK_BG, LT_BG));
             FillRect(hm, &rc, hBg);
             DeleteObject(hBg);
         }
 
-        // ---- Left edge splitter  (1px subtle divider) ----
+        // ---- Header (no dividers, seamless with background) ----
         {
-            RECT rcSplit = { 0, 0, CHAT_SPLITTER_WIDTH, cyH };
-            HBRUSH hSpl = CreateSolidBrush(C(DK_DIVIDER, LT_DIVIDER));
-            FillRect(hm, &rcSplit, hSpl);
-            DeleteObject(hSpl);
-        }
-
-        // ---- Header ----
-        {
-            RECT rcHdr = { CHAT_SPLITTER_WIDTH, 0, cxW, CHAT_HEADER_HEIGHT };
-            HBRUSH hHdr = CreateSolidBrush(C(DK_HEADER, LT_HEADER));
-            FillRect(hm, &rcHdr, hHdr);
-            DeleteObject(hHdr);
-
-            // Header bottom divider
-            RECT rcDiv = { CHAT_SPLITTER_WIDTH, CHAT_HEADER_HEIGHT - 1,
-                           cxW, CHAT_HEADER_HEIGHT };
-            HBRUSH hDiv = CreateSolidBrush(C(DK_DIVIDER, LT_DIVIDER));
-            FillRect(hm, &rcDiv, hDiv);
-            DeleteObject(hDiv);
-
-            // Status dot (accent blue)
-            int dotX = CHAT_SPLITTER_WIDTH + 16;
+            int dotX = 16;
             int dotY = CHAT_HEADER_HEIGHT / 2;
             DrawStatusDot(hm, dotX, dotY, CHAT_STATUS_DOT_R,
                           C(DK_ACCENT, LT_ACCENT));
 
-            // "Biko AI" title
             if (s_hFontHeader) SelectObject(hm, s_hFontHeader);
             SetTextColor(hm, C(DK_TEXT1, LT_TEXT1));
             RECT rcTitle = {
@@ -816,7 +817,6 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             DrawTextW(hm, L"Biko AI", -1, &rcTitle,
                       DT_SINGLELINE | DT_VCENTER | DT_LEFT);
 
-            // Close button (rounded rect on hover + X icon)
             if (s_bCloseHover)
             {
                 FillRoundRectSolid(hm, &s_rcCloseBtn, 6,
@@ -825,50 +825,13 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             DrawCloseX(hm, &s_rcCloseBtn, C(DK_TEXT2, LT_TEXT2));
         }
 
-        // ---- Input area background & card ----
+        // ---- Input card (WelcomeScreen card style) ----
         {
-            int outputBottom = CHAT_HEADER_HEIGHT;
-            if (s_hwndOutput)
-            {
-                RECT rcOut;
-                GetWindowRect(s_hwndOutput, &rcOut);
-                MapWindowPoints(NULL, hwnd, (POINT*)&rcOut, 2);
-                outputBottom = rcOut.bottom;
-            }
-
-            // Surface behind input area
-            RECT rcIA = { CHAT_SPLITTER_WIDTH, outputBottom, cxW, cyH };
-            HBRUSH hIA = CreateSolidBrush(C(DK_SURFACE, LT_SURFACE));
-            FillRect(hm, &rcIA, hIA);
-            DeleteObject(hIA);
-
-            // Divider above input area
-            RECT rcIDiv = { CHAT_SPLITTER_WIDTH, outputBottom,
-                            cxW, outputBottom + 1 };
-            HBRUSH hIDv = CreateSolidBrush(C(DK_DIVIDER, LT_DIVIDER));
-            FillRect(hm, &rcIDiv, hIDv);
-            DeleteObject(hIDv);
-
-            // Input card (rounded rect with accent border on focus)
             COLORREF cardBd = s_bInputFocused
                 ? C(DK_BORDER_FOCUS, LT_BORDER_FOCUS)
                 : C(DK_INPUT_BD, LT_INPUT_BD);
             FillRoundRect(hm, &s_rcInputCard, CHAT_INPUT_RADIUS,
                           C(DK_INPUT_BG, LT_INPUT_BG), cardBd);
-
-            // Left accent stripe when focused (WelcomeScreen hover pattern)
-            if (s_bInputFocused)
-            {
-                RECT rcStripe = {
-                    s_rcInputCard.left + 1,
-                    s_rcInputCard.top + CHAT_INPUT_RADIUS,
-                    s_rcInputCard.left + 3,
-                    s_rcInputCard.bottom - CHAT_INPUT_RADIUS
-                };
-                HBRUSH hStr = CreateSolidBrush(C(DK_ACCENT, LT_ACCENT));
-                FillRect(hm, &rcStripe, hStr);
-                DeleteObject(hStr);
-            }
         }
 
         // ---- Blit ----
@@ -916,18 +879,19 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
         DRAWITEMSTRUCT* pDIS = (DRAWITEMSTRUCT*)lParam;
         if (pDIS && pDIS->CtlID == IDC_CHAT_SEND)
         {
+            // Subtle ghost button matching WelcomeScreen card style
             COLORREF bgClr = s_bSendHover
-                ? C(DK_ACCENT_HOV, LT_ACCENT_HOV)
-                : C(DK_ACCENT, LT_ACCENT);
+                ? C(DK_SURFACE_HOV, LT_SURFACE_HOV)
+                : C(DK_INPUT_BG, LT_INPUT_BG);
+            COLORREF arrowClr = s_bSendHover
+                ? C(DK_TEXT1, LT_TEXT1)
+                : C(DK_TEXT2, LT_TEXT2);
 
-            // Accent circle
-            FillRoundRectSolid(pDIS->hDC, &pDIS->rcItem,
-                               CHAT_SEND_SIZE, bgClr);
+            FillRoundRectSolid(pDIS->hDC, &pDIS->rcItem, 6, bgClr);
 
-            // White arrow
             int bcx = (pDIS->rcItem.left + pDIS->rcItem.right) / 2;
             int bcy = (pDIS->rcItem.top + pDIS->rcItem.bottom) / 2;
-            DrawSendArrow(pDIS->hDC, bcx, bcy, RGB(255, 255, 255));
+            DrawSendArrow(pDIS->hDC, bcx, bcy, arrowClr);
 
             return TRUE;
         }
