@@ -53,8 +53,9 @@ static BOOL s_bClassRegistered = FALSE;
 //=============================================================================
 
 static LRESULT CALLBACK MdPanelWndProc(HWND, UINT, WPARAM, LPARAM);
-static void SetupPreviewStyles(HWND hwndView);
-static void RenderMarkdown(HWND hwndView, const char* pszText, int len);
+static LRESULT CALLBACK MdPanelWndProc(HWND, UINT, WPARAM, LPARAM);
+void MarkdownPreview_SetupStyles(HWND hwndView);
+void MarkdownPreview_StyleRange(HWND hwndView, int startPos, int len, const char* pszText);
 
 // Simple markdown span types
 typedef struct MdSpan {
@@ -143,7 +144,7 @@ void MarkdownPreview_Show(HWND hwndParent)
 
             if (s_hwndView)
             {
-                SetupPreviewStyles(s_hwndView);
+                MarkdownPreview_SetupStyles(s_hwndView);
                 SendMessage(s_hwndView, SCI_SETREADONLY, TRUE, 0);
                 SendMessage(s_hwndView, SCI_SETWRAPMODE, SC_WRAP_WORD, 0);
             }
@@ -240,7 +241,8 @@ void MarkdownPreview_Refresh(HWND hwndSrc)
     tr.lpstrText = pszText;
     SendMessage(hwndSrc, SCI_GETTEXTRANGE, 0, (LPARAM)&tr);
 
-    RenderMarkdown(s_hwndView, pszText, len);
+    SendMessage(s_hwndView, SCI_ADDTEXT, len, (LPARAM)pszText);
+    MarkdownPreview_StyleRange(s_hwndView, 0, len, pszText);
 
     n2e_Free(pszText);
 }
@@ -262,7 +264,11 @@ BOOL MarkdownPreview_IsMarkdownFile(const WCHAR* pszFile)
 // Internal: Preview styles
 //=============================================================================
 
-static void SetupPreviewStyles(HWND hwndView)
+//=============================================================================
+// Internal: Preview styles
+//=============================================================================
+
+void MarkdownPreview_SetupStyles(HWND hwndView)
 {
     if (!hwndView) return;
 
@@ -270,28 +276,28 @@ static void SetupPreviewStyles(HWND hwndView)
     COLORREF bgColor = bDark ? RGB(30, 30, 30) : RGB(255, 255, 255);
     COLORREF fgColor = bDark ? RGB(212, 212, 212) : RGB(30, 30, 30);
 
-    // Default
+    // Default - Use Segoe UI Variable or Segoe UI
     SendMessage(hwndView, SCI_STYLESETFONT, STYLE_DEFAULT, (LPARAM)"Segoe UI");
-    SendMessage(hwndView, SCI_STYLESETSIZE, STYLE_DEFAULT, 11);
+    SendMessage(hwndView, SCI_STYLESETSIZE, STYLE_DEFAULT, 10);
     SendMessage(hwndView, SCI_STYLESETBACK, STYLE_DEFAULT, bgColor);
     SendMessage(hwndView, SCI_STYLESETFORE, STYLE_DEFAULT, fgColor);
     SendMessage(hwndView, SCI_STYLECLEARALL, 0, 0);
 
     // H1
-    SendMessage(hwndView, SCI_STYLESETFONT, MD_STYLE_H1, (LPARAM)"Segoe UI");
-    SendMessage(hwndView, SCI_STYLESETSIZE, MD_STYLE_H1, 22);
+    SendMessage(hwndView, SCI_STYLESETFONT, MD_STYLE_H1, (LPARAM)"Segoe UI Semibold");
+    SendMessage(hwndView, SCI_STYLESETSIZE, MD_STYLE_H1, 16);
     SendMessage(hwndView, SCI_STYLESETBOLD, MD_STYLE_H1, TRUE);
     SendMessage(hwndView, SCI_STYLESETFORE, MD_STYLE_H1, fgColor);
 
     // H2
-    SendMessage(hwndView, SCI_STYLESETFONT, MD_STYLE_H2, (LPARAM)"Segoe UI");
-    SendMessage(hwndView, SCI_STYLESETSIZE, MD_STYLE_H2, 18);
+    SendMessage(hwndView, SCI_STYLESETFONT, MD_STYLE_H2, (LPARAM)"Segoe UI Semibold");
+    SendMessage(hwndView, SCI_STYLESETSIZE, MD_STYLE_H2, 14);
     SendMessage(hwndView, SCI_STYLESETBOLD, MD_STYLE_H2, TRUE);
     SendMessage(hwndView, SCI_STYLESETFORE, MD_STYLE_H2, fgColor);
 
     // H3
-    SendMessage(hwndView, SCI_STYLESETFONT, MD_STYLE_H3, (LPARAM)"Segoe UI");
-    SendMessage(hwndView, SCI_STYLESETSIZE, MD_STYLE_H3, 14);
+    SendMessage(hwndView, SCI_STYLESETFONT, MD_STYLE_H3, (LPARAM)"Segoe UI Semibold");
+    SendMessage(hwndView, SCI_STYLESETSIZE, MD_STYLE_H3, 12);
     SendMessage(hwndView, SCI_STYLESETBOLD, MD_STYLE_H3, TRUE);
     SendMessage(hwndView, SCI_STYLESETFORE, MD_STYLE_H3, fgColor);
 
@@ -304,18 +310,22 @@ static void SetupPreviewStyles(HWND hwndView)
     SendMessage(hwndView, SCI_STYLESETFORE, MD_STYLE_ITALIC, fgColor);
 
     // Inline code
-    SendMessage(hwndView, SCI_STYLESETFONT, MD_STYLE_CODE, (LPARAM)"Consolas");
-    SendMessage(hwndView, SCI_STYLESETSIZE, MD_STYLE_CODE, 10);
+    SendMessage(hwndView, SCI_STYLESETFONT, MD_STYLE_CODE, (LPARAM)"Cascadia Code");
+    SendMessage(hwndView, SCI_STYLESETSIZE, MD_STYLE_CODE, 9);
     SendMessage(hwndView, SCI_STYLESETBACK, MD_STYLE_CODE,
-        bDark ? RGB(50, 50, 50) : RGB(240, 240, 240));
+        bDark ? RGB(45, 45, 45) : RGB(242, 242, 242));
+    SendMessage(hwndView, SCI_STYLESETFORE, MD_STYLE_CODE,
+        bDark ? RGB(220, 160, 160) : RGB(180, 50, 50)); // Syntax color for inline code
 
     // Code block
-    SendMessage(hwndView, SCI_STYLESETFONT, MD_STYLE_CODEBLOCK, (LPARAM)"Consolas");
-    SendMessage(hwndView, SCI_STYLESETSIZE, MD_STYLE_CODEBLOCK, 10);
+    SendMessage(hwndView, SCI_STYLESETFONT, MD_STYLE_CODEBLOCK, (LPARAM)"Cascadia Code");
+    SendMessage(hwndView, SCI_STYLESETSIZE, MD_STYLE_CODEBLOCK, 9);
     SendMessage(hwndView, SCI_STYLESETBACK, MD_STYLE_CODEBLOCK,
-        bDark ? RGB(40, 40, 40) : RGB(245, 245, 245));
+        bDark ? RGB(40, 40, 40) : RGB(250, 250, 250));
     SendMessage(hwndView, SCI_STYLESETFORE, MD_STYLE_CODEBLOCK,
         bDark ? RGB(200, 200, 200) : RGB(60, 60, 60));
+    // Add border (box) around code block using multiple styles? Scintilla doesn't support easy borders per span.
+    // Instead use background color difference.
 
     // Link
     SendMessage(hwndView, SCI_STYLESETFORE, MD_STYLE_LINK,
@@ -330,10 +340,12 @@ static void SetupPreviewStyles(HWND hwndView)
     SendMessage(hwndView, SCI_STYLESETFORE, MD_STYLE_QUOTE,
         bDark ? RGB(160, 160, 160) : RGB(100, 100, 100));
     SendMessage(hwndView, SCI_STYLESETITALIC, MD_STYLE_QUOTE, TRUE);
+    SendMessage(hwndView, SCI_STYLESETBACK, MD_STYLE_QUOTE,
+        bDark ? RGB(35, 35, 35) : RGB(248, 248, 248)); // Subtle bg for quote
 
     // Horizontal rule
     SendMessage(hwndView, SCI_STYLESETFORE, MD_STYLE_HR,
-        bDark ? RGB(80, 80, 80) : RGB(180, 180, 180));
+        bDark ? RGB(80, 80, 80) : RGB(200, 200, 200));
 
     // No margins
     SendMessage(hwndView, SCI_SETMARGINWIDTHN, 0, 8); // small left margin
@@ -383,12 +395,9 @@ static void SpanList_Free(MdSpanList* pList)
     pList->capacity = 0;
 }
 
-static void RenderMarkdown(HWND hwndView, const char* pszText, int len)
+void MarkdownPreview_StyleRange(HWND hwndView, int startPos, int len, const char* pszText)
 {
     if (!hwndView || !pszText) return;
-
-    SendMessage(hwndView, SCI_SETREADONLY, FALSE, 0);
-    SendMessage(hwndView, SCI_CLEARALL, 0, 0);
 
     // We'll build a "rendered" version: strip markdown syntax, build spans
     // For simplicity, we render line-by-line for block elements,
@@ -396,10 +405,6 @@ static void RenderMarkdown(HWND hwndView, const char* pszText, int len)
 
     MdSpanList spans;
     SpanList_Init(&spans);
-
-    // Simple approach: copy text verbatim, then apply styles
-    // This preserves line structure for a "styled source" preview
-    SendMessage(hwndView, SCI_ADDTEXT, len, (LPARAM)pszText);
 
     // Parse and style line by line
     const char* p = pszText;
@@ -538,17 +543,25 @@ static void RenderMarkdown(HWND hwndView, const char* pszText, int len)
         }
     }
 
-    // Apply all collected style spans
+    // Apply all collected style spans (with bounds checking)
+    int docLen = (int)SendMessage(hwndView, SCI_GETLENGTH, 0, 0);
     for (int i = 0; i < spans.count; i++)
     {
-        SendMessage(hwndView, SCI_STARTSTYLING, spans.items[i].start, 0);
-        SendMessage(hwndView, SCI_SETSTYLING, spans.items[i].length, spans.items[i].style);
+        int spanStart = startPos + spans.items[i].start;
+        int spanLen = spans.items[i].length;
+        // Clamp to document length to avoid assertion in CellBuffer
+        if (spanStart >= docLen) continue;
+        if (spanStart + spanLen > docLen)
+            spanLen = docLen - spanStart;
+        if (spanLen <= 0) continue;
+        SendMessage(hwndView, SCI_STARTSTYLING, spanStart, 0);
+        SendMessage(hwndView, SCI_SETSTYLING, spanLen, spans.items[i].style);
     }
 
     SpanList_Free(&spans);
 
-    SendMessage(hwndView, SCI_SETREADONLY, TRUE, 0);
-    SendMessage(hwndView, SCI_GOTOPOS, 0, 0);
+    //SendMessage(hwndView, SCI_SETREADONLY, TRUE, 0);
+    //SendMessage(hwndView, SCI_GOTOPOS, 0, 0);
 }
 
 //=============================================================================

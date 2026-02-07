@@ -53,6 +53,13 @@ void    MarkdownPreview_Refresh(HWND hwndSrc);
 // Check if the current file is a Markdown file.
 BOOL    MarkdownPreview_IsMarkdownFile(const WCHAR* pszFile);
 
+// Style a range of text as Markdown (assumes text is already in the buffer).
+// Used by ChatPanel to render rich messages.
+void    MarkdownPreview_StyleRange(HWND hwndView, int startPos, int length, const char* text);
+
+// Setup Scintilla styles for Markdown (fonts, colors).
+void    MarkdownPreview_SetupStyles(HWND hwndView);
+
 #ifdef __cplusplus
 }
 #endif

@@ -66,6 +66,9 @@ void    Terminal_SendCommand(const char* pszCommand);
 // Focus the terminal view.
 void    Terminal_Focus(void);
 
+// Returns the terminal panel HWND (or NULL if not created).
+HWND    Terminal_GetPanelHwnd(void);
+
 //=============================================================================
 // Run command
 //=============================================================================

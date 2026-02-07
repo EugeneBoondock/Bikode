@@ -43,13 +43,14 @@ typedef struct TerminalInstance {
     HPCON           hPseudoConsole;
     HANDLE          hProcess;
     HANDLE          hThread;
-    HANDLE          hPipeIn;        // Write end â†’ shell stdin
-    HANDLE          hPipeOut;       // Read end â† shell stdout
+    HANDLE          hPipeIn;        // Write end Ã¢â€ â€™ shell stdin
+    HANDLE          hPipeOut;       // Read end Ã¢â€ Â shell stdout
     HANDLE          hInputRead;     // Shell reads from here
     HANDLE          hOutputWrite;   // Shell writes to here
     HANDLE          hReadThread;    // Background reader thread
     HWND            hwndView;       // Scintilla control
     volatile BOOL   bAlive;
+    int             currentStyle;   // Current text style (ANSI color)
 } TerminalInstance;
 
 static HWND                 s_hwndMain = NULL;
@@ -159,6 +160,7 @@ BOOL Terminal_New(HWND hwndParent)
     s_pTerminal = (TerminalInstance*)n2e_Alloc(sizeof(TerminalInstance));
     if (!s_pTerminal) return FALSE;
     ZeroMemory(s_pTerminal, sizeof(TerminalInstance));
+    s_pTerminal->currentStyle = STYLE_DEFAULT;
 
     HINSTANCE hInst = (HINSTANCE)GetWindowLongPtr(hwndParent, GWLP_HINSTANCE);
 
@@ -311,6 +313,11 @@ void Terminal_Focus(void)
         SetFocus(s_pTerminal->hwndView);
 }
 
+HWND Terminal_GetPanelHwnd(void)
+{
+    return s_hwndPanel;
+}
+
 void Terminal_RunCommand(HWND hwndParent, const char* pszCommand)
 {
     if (!s_pTerminal || !s_pTerminal->bAlive)
@@ -423,7 +430,7 @@ static BOOL CreateTerminalProcess(TerminalInstance* pTerm, COORD size)
                     EXTENDED_STARTUPINFO_PRESENT, NULL, NULL,
                     &si.StartupInfo, &pi);
             }
-            // Don't delete the attribute list yet â€” process needs it
+            // Don't delete the attribute list yet Ã¢â‚¬â€ process needs it
         }
     }
 
@@ -452,9 +459,9 @@ static BOOL CreateTerminalProcess(TerminalInstance* pTerm, COORD size)
     }
 
     // Cleanup handles the shell doesn't need on our side
-    // (ConPTY handles the pipe endpoints internally)
     if (s_bConPTYAvailable && pTerm->hPseudoConsole)
     {
+        // ConPTY handles the pipe endpoints internally
         CloseHandle(hPipeInRead);
         CloseHandle(hPipeOutWrite);
         pTerm->hInputRead = NULL;
@@ -465,6 +472,15 @@ static BOOL CreateTerminalProcess(TerminalInstance* pTerm, COORD size)
             DeleteProcThreadAttributeList(si.lpAttributeList);
             n2e_Free(si.lpAttributeList);
         }
+    }
+    else if (bCreated)
+    {
+        // Fallback pipe mode: close the child's inherited handles on our side
+        // so ReadFile on hPipeOut can detect EOF when the child exits
+        CloseHandle(hPipeInRead);
+        CloseHandle(hPipeOutWrite);
+        pTerm->hInputRead = NULL;
+        pTerm->hOutputWrite = NULL;
     }
 
     return bCreated;
@@ -565,27 +581,51 @@ static void SetupTerminalStyles(HWND hwndView)
 {
     if (!hwndView) return;
 
-    SendMessage(hwndView, SCI_STYLESETFONT, STYLE_DEFAULT, (LPARAM)"Consolas");
+    SendMessage(hwndView, SCI_STYLESETFONT, STYLE_DEFAULT, (LPARAM)"Cascadia Code");
     SendMessage(hwndView, SCI_STYLESETSIZE, STYLE_DEFAULT, 10);
 
-    if (DarkMode_IsEnabled())
-    {
-        SendMessage(hwndView, SCI_STYLESETBACK, STYLE_DEFAULT, RGB(12, 12, 12));
-        SendMessage(hwndView, SCI_STYLESETFORE, STYLE_DEFAULT, RGB(204, 204, 204));
-    }
-    else
-    {
-        SendMessage(hwndView, SCI_STYLESETBACK, STYLE_DEFAULT, RGB(255, 255, 255));
-        SendMessage(hwndView, SCI_STYLESETFORE, STYLE_DEFAULT, RGB(0, 0, 0));
+    COLORREF bg = DarkMode_IsEnabled() ? RGB(12, 12, 12) : RGB(255, 255, 255);
+    COLORREF fg = DarkMode_IsEnabled() ? RGB(204, 204, 204) : RGB(0, 0, 0);
+
+    SendMessage(hwndView, SCI_STYLESETBACK, STYLE_DEFAULT, bg);
+    SendMessage(hwndView, SCI_STYLESETFORE, STYLE_DEFAULT, fg);
+    SendMessage(hwndView, SCI_STYLECLEARALL, 0, 0);
+
+    // ANSI Colors (Styles 40-47: Normal, 48-55: Bright)
+    // 0: Black, 1: Red, 2: Green, 3: Yellow, 4: Blue, 5: Magenta, 6: Cyan, 7: White
+    COLORREF colors[8] = {
+        RGB(0, 0, 0),       RGB(197, 15, 31),   RGB(19, 161, 14),   RGB(193, 156, 0),
+        RGB(0, 55, 218),    RGB(136, 23, 152),  RGB(58, 150, 221),  RGB(204, 204, 204)
+    };
+    COLORREF colorsBright[8] = {
+        RGB(118, 118, 118), RGB(231, 72, 86),   RGB(22, 198, 12),   RGB(249, 241, 165),
+        RGB(59, 120, 255),  RGB(180, 0, 158),   RGB(97, 214, 214),  RGB(242, 242, 242)
+    };
+
+    if (DarkMode_IsEnabled()) {
+        // Adjust for dark mode visibility
+        colors[0] = RGB(128, 128, 128); // Black -> Gray
+        colors[7] = RGB(242, 242, 242); // White -> Bright White
+        colors[4] = RGB(59, 120, 255);  // Blue -> Bright Blue
     }
 
-    SendMessage(hwndView, SCI_STYLECLEARALL, 0, 0);
+    for (int i = 0; i < 8; i++) {
+        int styleId = 40 + i;
+        SendMessage(hwndView, SCI_STYLESETFORE, styleId, colors[i]);
+        SendMessage(hwndView, SCI_STYLESETFONT, styleId, (LPARAM)"Cascadia Code");
+        SendMessage(hwndView, SCI_STYLESETSIZE, styleId, 10);
+        
+        int styleIdBright = 48 + i;
+        SendMessage(hwndView, SCI_STYLESETFORE, styleIdBright, colorsBright[i]);
+        SendMessage(hwndView, SCI_STYLESETFONT, styleIdBright, (LPARAM)"Cascadia Code");
+        SendMessage(hwndView, SCI_STYLESETSIZE, styleIdBright, 10);
+    }
+
     SendMessage(hwndView, SCI_SETMARGINWIDTHN, 0, 0);
     SendMessage(hwndView, SCI_SETMARGINWIDTHN, 1, 0);
     SendMessage(hwndView, SCI_SETWRAPMODE, SC_WRAP_CHAR, 0);
     SendMessage(hwndView, SCI_SETREADONLY, FALSE, 0);
-    SendMessage(hwndView, SCI_SETCARETFORE,
-        DarkMode_IsEnabled() ? RGB(204, 204, 204) : RGB(0, 0, 0), 0);
+    SendMessage(hwndView, SCI_SETCARETFORE, fg, 0);
 }
 
 //=============================================================================
@@ -596,49 +636,113 @@ static void AppendTerminalOutput(HWND hwndView, const char* data, int len)
 {
     if (!hwndView || !data || len <= 0) return;
 
-    // Simple approach: append raw text, stripping ANSI escape sequences
-    // (A full VT100 parser would be ideal but is out of scope for MVP)
-
+    // We process the data and flush text to Scintilla in chunks when style changes
     const char* p = data;
     const char* end = data + len;
-    char clean[4096];
-    int ci = 0;
+    const char* start = p; // Start of current text chunk
 
-    while (p < end && ci < (int)sizeof(clean) - 1)
+    while (p < end)
     {
         if (*p == '\033')
         {
-            // Skip ANSI escape sequence (\033[...m or similar)
-            p++;
+            // Flush valid text before escape
+            if (p > start) {
+                int L = (int)(p - start);
+                int docLen = (int)SendMessage(hwndView, SCI_GETLENGTH, 0, 0);
+                SendMessage(hwndView, SCI_APPENDTEXT, L, (LPARAM)start);
+                SendMessage(hwndView, SCI_STARTSTYLING, docLen, 0);
+                SendMessage(hwndView, SCI_SETSTYLING, L, s_pTerminal->currentStyle);
+            }
+
+            // Parse escape sequence
+            const char* escStart = p;
+            p++; // Skip ESC
             if (p < end && *p == '[')
             {
                 p++;
-                while (p < end && *p != 'm' && *p != 'H' && *p != 'J' &&
-                       *p != 'K' && *p != 'A' && *p != 'B' && *p != 'C' &&
-                       *p != 'D' && *p != 'h' && *p != 'l')
+                // Parse params (e.g. 31;1m)
+                int params[5] = { 0 };
+                int paramCount = 0;
+                int val = 0;
+                BOOL hasVal = FALSE;
+
+                while (p < end) {
+                    if (*p >= '0' && *p <= '9') {
+                        val = val * 10 + (*p - '0');
+                        hasVal = TRUE;
+                    } else if (*p == ';') {
+                        if (paramCount < 5) params[paramCount++] = val;
+                        val = 0; hasVal = FALSE;
+                    } else {
+                        break; // End of params (e.g. 'm')
+                    }
                     p++;
-                if (p < end) p++;
+                }
+                if (hasVal && paramCount < 5) params[paramCount++] = val;
+
+                if (p < end && *p == 'm') {
+                    // SGR - Select Graphic Rendition
+                    // Reset if 0 or empty
+                    if (paramCount == 0) s_pTerminal->currentStyle = STYLE_DEFAULT;
+                    
+                    for (int i=0; i<paramCount; i++) {
+                        int code = params[i];
+                        if (code == 0) s_pTerminal->currentStyle = STYLE_DEFAULT;
+                        else if (code >= 30 && code <= 37) s_pTerminal->currentStyle = 40 + (code - 30);
+                        else if (code >= 90 && code <= 97) s_pTerminal->currentStyle = 48 + (code - 90);
+                        else if (code == 1) { 
+                            // Bold - map 40-47 to 48-55 (approximation)
+                            if (s_pTerminal->currentStyle >= 40 && s_pTerminal->currentStyle <= 47)
+                                s_pTerminal->currentStyle += 8;
+                        }
+                    }
+                    p++; // Skip 'm'
+                } 
+                else {
+                    // Unknown command, skip until valid char or end
+                   while (p < end && !(*p >= 64 && *p <= 126)) p++;
+                   if (p < end) p++;
+                }
             }
+            start = p; // Reset start to after escape
         }
         else if (*p == '\r')
         {
-            // Skip carriage return (handle \r\n â†’ \n)
+            // Flush before CR
+             if (p > start) {
+                int L = (int)(p - start);
+                int docLen = (int)SendMessage(hwndView, SCI_GETLENGTH, 0, 0);
+                SendMessage(hwndView, SCI_APPENDTEXT, L, (LPARAM)start);
+                SendMessage(hwndView, SCI_STARTSTYLING, docLen, 0);
+                SendMessage(hwndView, SCI_SETSTYLING, L, s_pTerminal->currentStyle);
+            }
+            // Handle CR (move cursor to start of line?)
+            // Scintilla doesn't really support overwriting easily.
+            // For now, just skip it to avoid weird symbols, treat as newline if followed by \n
             p++;
+            if (p < end && *p == '\n') {
+                // It's CRLF, let text chunk handle \n
+                start = p; 
+            } else {
+                start = p; // Just skip \r
+            }
         }
         else
         {
-            clean[ci++] = *p++;
+            p++;
         }
     }
-    clean[ci] = '\0';
 
-    if (ci > 0)
-    {
+    // Flush remaining
+    if (p > start) {
+        int L = (int)(p - start);
         int docLen = (int)SendMessage(hwndView, SCI_GETLENGTH, 0, 0);
-        SendMessage(hwndView, SCI_APPENDTEXT, ci, (LPARAM)clean);
-        SendMessage(hwndView, SCI_SCROLLTOEND, 0, 0);
-        SendMessage(hwndView, SCI_GOTOPOS, docLen + ci, 0);
+        SendMessage(hwndView, SCI_APPENDTEXT, L, (LPARAM)start);
+        SendMessage(hwndView, SCI_STARTSTYLING, docLen, 0);
+        SendMessage(hwndView, SCI_SETSTYLING, L, s_pTerminal->currentStyle);
     }
+    
+    SendMessage(hwndView, SCI_SCROLLTOEND, 0, 0);
 }
 
 //=============================================================================
@@ -752,24 +856,26 @@ static LRESULT CALLBACK TermViewSubclassProc(HWND hwnd, UINT msg, WPARAM wParam,
     {
     case WM_CHAR:
     {
-        // Forward typed characters to the shell
+        // Forward typed characters to the shell (including Enter=\r, Backspace=\b, Tab=\t)
+        // All text-generating keys are handled here to avoid double-sending
         char ch = (char)wParam;
-        Terminal_Write(&ch, 1);
+
+        if (ch == '\r')
+        {
+            // Enter: send \r to ConPTY (it handles line discipline)
+            Terminal_Write("\r", 1);
+        }
+        else
+        {
+            Terminal_Write(&ch, 1);
+        }
         return 0; // Don't let Scintilla handle it
     }
 
     case WM_KEYDOWN:
+        // Only handle keys that do NOT generate WM_CHAR
         switch (wParam)
         {
-        case VK_RETURN:
-            Terminal_Write("\r\n", 2);
-            return 0;
-        case VK_BACK:
-            Terminal_Write("\b", 1);
-            return 0;
-        case VK_ESCAPE:
-            Terminal_Hide();
-            return 0;
         case VK_UP:
             Terminal_Write("\033[A", 3);
             return 0;
@@ -782,15 +888,37 @@ static LRESULT CALLBACK TermViewSubclassProc(HWND hwnd, UINT msg, WPARAM wParam,
         case VK_RIGHT:
             Terminal_Write("\033[C", 3);
             return 0;
-        case VK_TAB:
-            Terminal_Write("\t", 1);
+        case VK_DELETE:
+            Terminal_Write("\033[3~", 4);
+            return 0;
+        case VK_HOME:
+            Terminal_Write("\033[H", 3);
+            return 0;
+        case VK_END:
+            Terminal_Write("\033[F", 3);
+            return 0;
+        case VK_ESCAPE:
+            Terminal_Hide();
             return 0;
         }
 
-        // Ctrl+C â†’ send interrupt
-        if (wParam == 'C' && (GetKeyState(VK_CONTROL) & 0x8000))
+        // Ctrl+V: paste from clipboard into terminal
+        if (wParam == 'V' && (GetKeyState(VK_CONTROL) & 0x8000))
         {
-            Terminal_Write("\x03", 1);
+            if (OpenClipboard(hwnd))
+            {
+                HANDLE hData = GetClipboardData(CF_TEXT);
+                if (hData)
+                {
+                    const char* pszText = (const char*)GlobalLock(hData);
+                    if (pszText)
+                    {
+                        Terminal_Write(pszText, (int)strlen(pszText));
+                        GlobalUnlock(hData);
+                    }
+                }
+                CloseClipboard();
+            }
             return 0;
         }
         break;

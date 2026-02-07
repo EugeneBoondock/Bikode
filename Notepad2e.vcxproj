@@ -486,6 +486,7 @@
     <ClCompile Include="src\Extension\GitUI.c" />
     <ClCompile Include="src\Extension\Terminal.c" />
     <ClCompile Include="src\Extension\MarkdownPreview.c" />
+    <ClCompile Include="src\Extension\WelcomeScreen.c" />
     <ClCompile Include="src\Helpers.c" />
     <ClCompile Include="src\Notepad2.c" />
     <ClCompile Include="src\Print.cpp" />

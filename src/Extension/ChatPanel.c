@@ -9,6 +9,7 @@
 ******************************************************************************/
 
 #include "ChatPanel.h"
+#include "MarkdownPreview.h"
 #include "AIBridge.h"
 #include "AIAgent.h"
 #include "AIDirectCall.h"
@@ -81,6 +82,11 @@ static void RegisterChatPanelClass(HINSTANCE hInst)
 //=============================================================================
 // Public: Lifecycle
 //=============================================================================
+
+HWND ChatPanel_GetPanelHwnd(void)
+{
+    return s_hwndPanel;
+}
 
 BOOL ChatPanel_Create(HWND hwndParent)
 {
@@ -156,6 +162,7 @@ BOOL ChatPanel_Create(HWND hwndParent)
         hInst,
         NULL);
 
+    ChatPanel_AppendSystem("Biko AI Ready. \"I write what I like.\"");
     return TRUE;
 }
 
@@ -276,17 +283,17 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop, int editor
 
 void ChatPanel_AppendUserMessage(const char* pszMessage)
 {
-    AppendToOutput("You: ", pszMessage, 1);
+    AppendToOutput("You: ", pszMessage, 20);
 }
 
 void ChatPanel_AppendResponse(const char* pszResponse)
 {
-    AppendToOutput("AI: ", pszResponse, 2);
+    AppendToOutput("Biko: ", pszResponse, 21);
 }
 
 void ChatPanel_AppendSystem(const char* pszMessage)
 {
-    AppendToOutput("--- ", pszMessage, 3);
+    AppendToOutput("--- ", pszMessage, 22);
 }
 
 void ChatPanel_Clear(void)
@@ -428,43 +435,43 @@ void ChatPanel_ApplyDarkMode(void)
 
 static void SetupOutputStyles(HWND hwndOutput)
 {
-    // Base style
-    SendMessage(hwndOutput, SCI_STYLESETFONT, STYLE_DEFAULT, (LPARAM)"Consolas");
-    SendMessage(hwndOutput, SCI_STYLESETSIZE, STYLE_DEFAULT, 10);
-    SendMessage(hwndOutput, SCI_STYLECLEARALL, 0, 0);
+    // Base markdown styles
+    MarkdownPreview_SetupStyles(hwndOutput);
 
-    // Style 0: Default (context/system)
-    SendMessage(hwndOutput, SCI_STYLESETFORE, 0, RGB(128, 128, 128));
+    // Chat specific styles (using indices > 20 to avoid conflict with MD styles)
+    // Style 20: User messages
+    SendMessage(hwndOutput, SCI_STYLESETFONT, 20, (LPARAM)"Segoe UI");
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, 20, 10);
+    SendMessage(hwndOutput, SCI_STYLESETFORE, 20, RGB(30, 80, 180));
+    SendMessage(hwndOutput, SCI_STYLESETBOLD, 20, TRUE);
 
-    // Style 1: User messages
-    SendMessage(hwndOutput, SCI_STYLESETFORE, 1, RGB(30, 80, 180));
-    SendMessage(hwndOutput, SCI_STYLESETBOLD, 1, TRUE);
+    // Style 21: AI Prefix
+    SendMessage(hwndOutput, SCI_STYLESETFONT, 21, (LPARAM)"Segoe UI");
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, 21, 10);
+    SendMessage(hwndOutput, SCI_STYLESETFORE, 21, RGB(20, 120, 20)); // Greenish
+    SendMessage(hwndOutput, SCI_STYLESETBOLD, 21, TRUE);
 
-    // Style 2: AI responses
-    SendMessage(hwndOutput, SCI_STYLESETFORE, 2, RGB(20, 120, 20));
+    // Style 22: System messages
+    SendMessage(hwndOutput, SCI_STYLESETFONT, 22, (LPARAM)"Segoe UI");
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, 22, 10);
+    SendMessage(hwndOutput, SCI_STYLESETFORE, 22, RGB(160, 160, 160));
+    SendMessage(hwndOutput, SCI_STYLESETITALIC, 22, TRUE);
 
-    // Style 3: System messages
-    SendMessage(hwndOutput, SCI_STYLESETFORE, 3, RGB(160, 160, 160));
-    SendMessage(hwndOutput, SCI_STYLESETITALIC, 3, TRUE);
-
-    // Apply dark mode colors if active
+    // Apply dark mode overrides
     if (DarkMode_IsEnabled())
     {
-        SendMessage(hwndOutput, SCI_STYLESETBACK, STYLE_DEFAULT, RGB(30, 30, 30));
-        SendMessage(hwndOutput, SCI_STYLESETFORE, STYLE_DEFAULT, RGB(200, 200, 200));
-        SendMessage(hwndOutput, SCI_STYLECLEARALL, 0, 0);
-
-        SendMessage(hwndOutput, SCI_STYLESETFORE, 0, RGB(150, 150, 150));
-        SendMessage(hwndOutput, SCI_STYLESETFORE, 1, RGB(100, 160, 255));
-        SendMessage(hwndOutput, SCI_STYLESETBOLD, 1, TRUE);
-        SendMessage(hwndOutput, SCI_STYLESETFORE, 2, RGB(80, 200, 80));
-        SendMessage(hwndOutput, SCI_STYLESETFORE, 3, RGB(120, 120, 120));
-        SendMessage(hwndOutput, SCI_STYLESETITALIC, 3, TRUE);
+        SendMessage(hwndOutput, SCI_STYLESETFORE, 20, RGB(100, 160, 255)); // User (lighter blue)
+        SendMessage(hwndOutput, SCI_STYLESETFORE, 21, RGB(80, 200, 80));   // AI (lighter green)
+        SendMessage(hwndOutput, SCI_STYLESETFORE, 22, RGB(120, 120, 120)); // System
     }
 
-    // Margins
-    SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 0, 0); // no line numbers
+    // Margins - add some padding
+    SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 0, 8); // left padding
     SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 1, 0);
+
+    // Extra line spacing for readability
+    SendMessage(hwndOutput, SCI_SETEXTRAASCENT, 2, 0);
+    SendMessage(hwndOutput, SCI_SETEXTRADESCENT, 2, 0);
 }
 
 static void AppendToOutput(const char* prefix, const char* text, int style)
@@ -474,34 +481,57 @@ static void AppendToOutput(const char* prefix, const char* text, int style)
     SendMessage(s_hwndOutput, SCI_SETREADONLY, FALSE, 0);
 
     int len = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
-
-    // Add newline if not at start
     if (len > 0)
     {
-        SendMessage(s_hwndOutput, SCI_APPENDTEXT, 1, (LPARAM)"\n");
-        len++;
+        SendMessage(s_hwndOutput, SCI_APPENDTEXT, 1, (LPARAM)"\n\n"); // More spacing between messages
+        len += 2;
     }
 
-    // Add prefix
-    int prefixLen = (int)strlen(prefix);
-    SendMessage(s_hwndOutput, SCI_APPENDTEXT, prefixLen, (LPARAM)prefix);
+    // Append prefix
+    if (prefix && prefix[0])
+    {
+        int prefixLen = (int)strlen(prefix);
+        SendMessage(s_hwndOutput, SCI_APPENDTEXT, prefixLen, (LPARAM)prefix);
 
-    // Style the prefix
-    int newLen = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
-    SendMessage(s_hwndOutput, SCI_STARTSTYLING, len, 0);
-    SendMessage(s_hwndOutput, SCI_SETSTYLING, prefixLen, style);
+        // Style the prefix (use relevant style or default to System if unknown)
+        int prefixStyle = (style == 21) ? 21 : (style == 20 ? 20 : 22);
+        
+        int docLen = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
+        if (len + prefixLen <= docLen && prefixLen > 0)
+        {
+            SendMessage(s_hwndOutput, SCI_STARTSTYLING, len, 0);
+            SendMessage(s_hwndOutput, SCI_SETSTYLING, prefixLen, prefixStyle);
+        }
+        len += prefixLen;
+    }
 
-    // Add text
+    // Append text
     int textLen = (int)strlen(text);
     SendMessage(s_hwndOutput, SCI_APPENDTEXT, textLen, (LPARAM)text);
 
     // Style the text
-    SendMessage(s_hwndOutput, SCI_STARTSTYLING, len + prefixLen, 0);
-    SendMessage(s_hwndOutput, SCI_SETSTYLING, textLen, style);
+    if (style == 21 && textLen > 0) // AI Message -> Markdown
+    {
+        // Use the Markdown renderer
+        // Ensure styles are allocated first by calling SCI_COLOURISE
+        SendMessage(s_hwndOutput, SCI_COLOURISE, 0, -1);
+        MarkdownPreview_StyleRange(s_hwndOutput, len, textLen, text);
+    }
+    else if (textLen > 0)
+    {
+        // Plain styling - verify bounds
+        int docLen = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
+        int styleLen = textLen;
+        if (len + styleLen > docLen)
+            styleLen = docLen - len;
+        if (styleLen > 0)
+        {
+            SendMessage(s_hwndOutput, SCI_STARTSTYLING, len, 0);
+            SendMessage(s_hwndOutput, SCI_SETSTYLING, styleLen, style);
+        }
+    }
 
     SendMessage(s_hwndOutput, SCI_SETREADONLY, TRUE, 0);
-
-    // Scroll to end
     SendMessage(s_hwndOutput, SCI_SCROLLTOEND, 0, 0);
 }
 
@@ -649,7 +679,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             char* pszTool = (char*)lParam;
             if (pszTool)
             {
-                AppendToOutput("", pszTool, 3);
+                AppendToOutput("", pszTool, 22);
                 free(pszTool);
             }
             return 0;

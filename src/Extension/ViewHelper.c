@@ -12,6 +12,8 @@
 #include "Utils.h"
 #include "ViewHelper.h"
 #include "Notepad2.h"
+#include "Terminal.h"
+#include "ChatPanel.h"
 
 extern HWND hwndMain;
 extern HWND _hwndEdit;
@@ -222,9 +224,21 @@ HWND n2e_GetActiveEditCheckFocus()
   const HWND hwndFocus = GetFocus();
   DWORD dwProcessID = 0;
   GetWindowThreadProcessId(hwndFocus, &dwProcessID);
-  return (hwndFocus && (dwProcessID == GetCurrentProcessId()) && n2e_IsScintillaWindow(hwndFocus))
-    ? hwndFocus
-    : n2e_GetActiveEdit();
+
+  // Don't treat terminal or chat panel Scintilla windows as editor windows
+  if (hwndFocus && (dwProcessID == GetCurrentProcessId()) && n2e_IsScintillaWindow(hwndFocus))
+  {
+    HWND hTermPanel = Terminal_GetPanelHwnd();
+    HWND hChatPanel = ChatPanel_GetPanelHwnd();
+    if ((hTermPanel && IsChild(hTermPanel, hwndFocus)) ||
+        (hChatPanel && IsChild(hChatPanel, hwndFocus)))
+    {
+      // This is a terminal/chat Scintilla, not an editor Scintilla
+      return n2e_GetActiveEdit();
+    }
+    return hwndFocus;
+  }
+  return n2e_GetActiveEdit();
 }
 
 HWND n2e_GetActiveEdit()

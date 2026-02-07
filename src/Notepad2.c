@@ -59,6 +59,7 @@
 #include "Extension/DarkMode.h"
 #include "Extension/Terminal.h"
 #include "Extension/MarkdownPreview.h"
+#include "Extension/WelcomeScreen.h"
 
 
 
@@ -517,10 +518,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInst, LPSTR lpCmdLine, in
         continue;
     }
 
-    if (!TranslateAccelerator(hwnd, hAccMain, &msg))
+    // Skip accelerator translation when terminal or chat panel has focus
+    // so that keystrokes reach those controls instead of triggering menu commands
     {
-      TranslateMessage(&msg);
-      DispatchMessage(&msg);
+      BOOL bSkipAccel = FALSE;
+      HWND hTermPanel = Terminal_GetPanelHwnd();
+      HWND hChatPanel = ChatPanel_GetPanelHwnd();
+      if (hTermPanel && (msg.hwnd == hTermPanel || IsChild(hTermPanel, msg.hwnd)))
+        bSkipAccel = TRUE;
+      else if (hChatPanel && (msg.hwnd == hChatPanel || IsChild(hChatPanel, msg.hwnd)))
+        bSkipAccel = TRUE;
+
+      if (bSkipAccel || !TranslateAccelerator(hwnd, hAccMain, &msg))
+      {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+      }
     }
   }
 
@@ -770,6 +783,11 @@ HWND InitInstance(HINSTANCE hInstance, LPSTR pszCmdLine, int nCmdShow)
       iOriginalEncoding = iSrcEncoding;
       SendMessage(hwndEdit, SCI_SETCODEPAGE, (iEncoding == CPI_DEFAULT) ? iDefaultCodePage : SC_CP_UTF8, 0);
     }
+    
+    // Welcome Screen
+    WelcomeScreen_Init(hwndMain);
+    if (!flagNewFromClipboard)
+        WelcomeScreen_Show(hwndMain);
   }
 
   // reset
@@ -1124,15 +1142,28 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
 
     case WM_SIZE:
       MsgSize(hwnd, wParam, lParam);
+      WelcomeScreen_OnResize(hwnd, LOWORD(lParam), HIWORD(lParam));
       break;
 
 
     case WM_SETFOCUS:
-      n2e_RestoreActiveEdit(FALSE);
+    {
+      // Don't steal focus from terminal or chat panel
+      HWND hTermPanel = Terminal_GetPanelHwnd();
+      HWND hChatPanel = ChatPanel_GetPanelHwnd();
+      HWND hPrev = (HWND)wParam;  // Window that lost focus
+      BOOL bTermOrChat = FALSE;
+      if (hTermPanel && (hPrev == hTermPanel || IsChild(hTermPanel, hPrev)))
+        bTermOrChat = TRUE;
+      else if (hChatPanel && (hPrev == hChatPanel || IsChild(hChatPanel, hPrev)))
+        bTermOrChat = TRUE;
+
+      if (!bTermOrChat)
+        n2e_RestoreActiveEdit(FALSE);
       UpdateToolbar();
       UpdateStatusbar();
-
       break;
+    }
 
 
     case WM_DROPFILES: {
@@ -7611,6 +7642,7 @@ BOOL FileIO(BOOL fLoad, LPCWSTR psz, BOOL bNoEncDetect, int *ienc, int *ieol,
 //
 BOOL FileLoad(BOOL bDontSave, BOOL bNew, BOOL bReload, BOOL bNoEncDetect, LPCWSTR lpszFile)
 {
+  WelcomeScreen_Hide();
   const BOOL res = _FileLoad(bDontSave, bNew, bReload, bNoEncDetect, lpszFile, FALSE);
   // [2e]: Autosaving directory for unsaved windows #480
   if (!res)

@@ -29,6 +29,9 @@ extern "C" {
 // Create the chat panel (call from WM_CREATE or on first toggle).
 BOOL    ChatPanel_Create(HWND hwndParent);
 
+// Returns the chat panel HWND (or NULL if not created).
+HWND    ChatPanel_GetPanelHwnd(void);
+
 // Destroy the chat panel.
 void    ChatPanel_Destroy(void);
 
