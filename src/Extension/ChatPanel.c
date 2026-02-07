@@ -10,6 +10,7 @@
 
 #include "ChatPanel.h"
 #include "AIBridge.h"
+#include "AIAgent.h"
 #include "AIDirectCall.h"
 #include "AIContext.h"
 #include "CommonUtils.h"
@@ -300,11 +301,6 @@ void ChatPanel_Clear(void)
 // Public: Input
 //=============================================================================
 
-static const char* CHAT_SYSTEM_PROMPT =
-    "You are an AI coding assistant embedded in Biko, a lightweight AI IDE. "
-    "You help with programming questions, code review, debugging, and general development tasks. "
-    "Be concise and practical. When suggesting code changes, provide them as diffs when appropriate.";
-
 void ChatPanel_SendInput(void)
 {
     if (!s_hwndInput) return;
@@ -332,8 +328,11 @@ void ChatPanel_SendInput(void)
         {
             ChatPanel_AppendSystem("Thinking...");
 
-            // Fire async HTTP request directly (no engine process needed)
-            AIDirectCall_ChatAsync(pCfg, CHAT_SYSTEM_PROMPT, utf8, s_hwndPanel);
+            // Launch agentic AI loop (reads/writes files, runs commands)
+            if (!AIAgent_ChatAsync(pCfg, utf8, s_hwndPanel))
+            {
+                ChatPanel_AppendSystem("AI is busy with a previous request. Please wait.");
+            }
         }
         else
         {
@@ -630,6 +629,28 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             {
                 ChatPanel_AppendResponse(pszResponse);
                 free(pszResponse);
+            }
+            return 0;
+        }
+        // Handle agent status updates
+        if (msg == WM_AI_AGENT_STATUS)
+        {
+            char* pszStatus = (char*)lParam;
+            if (pszStatus)
+            {
+                ChatPanel_AppendSystem(pszStatus);
+                free(pszStatus);
+            }
+            return 0;
+        }
+        // Handle agent tool call display
+        if (msg == WM_AI_AGENT_TOOL)
+        {
+            char* pszTool = (char*)lParam;
+            if (pszTool)
+            {
+                AppendToOutput("", pszTool, 3);
+                free(pszTool);
             }
             return 0;
         }

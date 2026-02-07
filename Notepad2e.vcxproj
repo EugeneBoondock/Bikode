@@ -474,6 +474,7 @@
     <ClCompile Include="src\Extension\mono_json.c" />
     <ClCompile Include="src\Extension\AIBridge.c" />
     <ClCompile Include="src\Extension\AIDirectCall.c" />
+    <ClCompile Include="src\Extension\AIAgent.c" />
     <ClCompile Include="src\Extension\AIContext.c" />
     <ClCompile Include="src\Extension\AICommands.c" />
     <ClCompile Include="src\Extension\AIProvider.c" />

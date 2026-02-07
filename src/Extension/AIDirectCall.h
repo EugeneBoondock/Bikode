@@ -45,6 +45,20 @@ BOOL AIDirectCall_ChatAsync(const AIProviderConfig* pCfg,
                             const char* szUserMessage,
                             HWND hwndTarget);
 
+//=============================================================================
+// Multi-message conversation support
+//=============================================================================
+
+typedef struct {
+    const char* role;       // "system", "user", "assistant"
+    const char* content;    // message text (UTF-8)
+} AIChatMessage;
+
+// Synchronous multi-message call. Returns heap-allocated response (caller frees).
+char* AIDirectCall_ChatMulti(const AIProviderConfig* pCfg,
+                             const AIChatMessage* messages,
+                             int messageCount);
+
 #ifdef __cplusplus
 }
 #endif

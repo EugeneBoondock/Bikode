@@ -408,14 +408,12 @@ static char* ParseLLMResponse(const char* respJson, EAIRequestFormat fmt)
 }
 
 //=============================================================================
-// Synchronous WinHTTP call
+// Shared WinHTTP call (takes pre-built body, returns parsed response)
 //=============================================================================
 
 #define MAX_RESPONSE_SIZE (4 * 1024 * 1024)
 
-char* AIDirectCall_Chat(const AIProviderConfig* pCfg,
-                        const char* szSystemPrompt,
-                        const char* szUserMessage)
+static char* SendHTTPRequest(const AIProviderConfig* pCfg, const char* body, int bodyLen)
 {
     const AIProviderDef* pDef = AIProvider_Get(pCfg->eProvider);
     if (!pDef)
@@ -430,17 +428,10 @@ char* AIDirectCall_Chat(const AIProviderConfig* pCfg,
         return _strdup(errBuf);
     }
 
-    // Resolve connection parameters
     const char *szHost, *szPath;
     int iPort, bSSL;
     AIProviderConfig_Resolve(pCfg, &szHost, &szPath, &iPort, &bSSL);
 
-    // Build request body
-    StrBuf body;
-    sb_init(&body, 4096);
-    BuildRequestBody(&body, pCfg, pDef, szSystemPrompt, szUserMessage);
-
-    // --- WinHTTP ---
     WCHAR wszHost[512];
     MultiByteToWideChar(CP_UTF8, 0, szHost, -1, wszHost, 512);
 
@@ -460,18 +451,15 @@ char* AIDirectCall_Chat(const AIProviderConfig* pCfg,
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS, 0);
-
-    if (!hSession) { sb_free(&body); return _strdup("Error: WinHttpOpen failed"); }
+    if (!hSession) return _strdup("Error: WinHttpOpen failed");
 
     int timeoutMs = pCfg->iTimeoutSec > 0 ? pCfg->iTimeoutSec * 1000 : 120000;
     WinHttpSetTimeouts(hSession, timeoutMs, timeoutMs, timeoutMs, timeoutMs);
 
-    HINTERNET hConnect = WinHttpConnect(hSession, wszHost,
-        (INTERNET_PORT)iPort, 0);
+    HINTERNET hConnect = WinHttpConnect(hSession, wszHost, (INTERNET_PORT)iPort, 0);
     if (!hConnect)
     {
         WinHttpCloseHandle(hSession);
-        sb_free(&body);
         return _strdup("Error: WinHttpConnect failed -- check host/port");
     }
 
@@ -482,7 +470,6 @@ char* AIDirectCall_Chat(const AIProviderConfig* pCfg,
     {
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
-        sb_free(&body);
         return _strdup("Error: WinHttpOpenRequest failed");
     }
 
@@ -497,9 +484,7 @@ char* AIDirectCall_Chat(const AIProviderConfig* pCfg,
 
     BOOL bSent = WinHttpSendRequest(hRequest,
         WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-        body.data, body.len, body.len, 0);
-    sb_free(&body);
-
+        (LPVOID)body, bodyLen, bodyLen, 0);
     if (!bSent)
     {
         DWORD err = GetLastError();
@@ -571,6 +556,163 @@ char* AIDirectCall_Chat(const AIProviderConfig* pCfg,
     sb_free(&resp);
 
     return content ? content : _strdup("Error: Empty response from API");
+}
+
+//=============================================================================
+// Single-message call (delegates to SendHTTPRequest)
+//=============================================================================
+
+char* AIDirectCall_Chat(const AIProviderConfig* pCfg,
+                        const char* szSystemPrompt,
+                        const char* szUserMessage)
+{
+    AIChatMessage msgs[2];
+    msgs[0].role = "system";
+    msgs[0].content = szSystemPrompt;
+    msgs[1].role = "user";
+    msgs[1].content = szUserMessage;
+    return AIDirectCall_ChatMulti(pCfg, msgs, 2);
+}
+
+//=============================================================================
+// Multi-message body builders
+//=============================================================================
+
+static void BuildBodyMulti_OpenAI(StrBuf* body, const AIProviderConfig* cfg,
+                                   const AIChatMessage* msgs, int count)
+{
+    const char* model = cfg->szModel[0] ? cfg->szModel : "gpt-4o-mini";
+    sb_append(body, "{", 1);
+    sb_appendf(body, "\"model\":\"%s\",", model);
+    sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
+    if (cfg->iMaxTokens > 0)
+        sb_appendf(body, "\"max_tokens\":%d,", cfg->iMaxTokens);
+    sb_append(body, "\"messages\":[", -1);
+    for (int i = 0; i < count; i++)
+    {
+        if (i > 0) sb_append(body, ",", 1);
+        sb_appendf(body, "{\"role\":\"%s\",\"content\":", msgs[i].role);
+        json_escape_append(body, msgs[i].content);
+        sb_append(body, "}", 1);
+    }
+    sb_append(body, "]}", -1);
+}
+
+static void BuildBodyMulti_Anthropic(StrBuf* body, const AIProviderConfig* cfg,
+                                      const AIChatMessage* msgs, int count)
+{
+    const char* model = cfg->szModel[0] ? cfg->szModel : "claude-sonnet-4-20250514";
+    sb_append(body, "{", 1);
+    sb_appendf(body, "\"model\":\"%s\",", model);
+    if (cfg->iMaxTokens > 0)
+        sb_appendf(body, "\"max_tokens\":%d,", cfg->iMaxTokens);
+    else
+        sb_append(body, "\"max_tokens\":4096,", -1);
+    sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
+
+    // Extract system prompt (first system message)
+    const char* sysPrompt = "";
+    int firstNonSys = 0;
+    for (int i = 0; i < count; i++)
+    {
+        if (strcmp(msgs[i].role, "system") == 0)
+        {
+            sysPrompt = msgs[i].content;
+            firstNonSys = i + 1;
+        }
+        else break;
+    }
+
+    sb_append(body, "\"system\":", -1);
+    json_escape_append(body, sysPrompt);
+    sb_append(body, ",", 1);
+
+    sb_append(body, "\"messages\":[", -1);
+    int first = 1;
+    for (int i = firstNonSys; i < count; i++)
+    {
+        if (strcmp(msgs[i].role, "system") == 0) continue;
+        if (!first) sb_append(body, ",", 1);
+        first = 0;
+        sb_appendf(body, "{\"role\":\"%s\",\"content\":", msgs[i].role);
+        json_escape_append(body, msgs[i].content);
+        sb_append(body, "}", 1);
+    }
+    sb_append(body, "]}", -1);
+}
+
+static void BuildBodyMulti_Google(StrBuf* body, const AIProviderConfig* cfg,
+                                   const AIChatMessage* msgs, int count)
+{
+    sb_append(body, "{", 1);
+
+    // System instruction
+    const char* sysPrompt = "";
+    for (int i = 0; i < count; i++)
+    {
+        if (strcmp(msgs[i].role, "system") == 0)
+            sysPrompt = msgs[i].content;
+        else break;
+    }
+    sb_append(body, "\"systemInstruction\":{\"parts\":[{\"text\":", -1);
+    json_escape_append(body, sysPrompt);
+    sb_append(body, "}]},", -1);
+
+    // Contents
+    sb_append(body, "\"contents\":[", -1);
+    int first = 1;
+    for (int i = 0; i < count; i++)
+    {
+        if (strcmp(msgs[i].role, "system") == 0) continue;
+        if (!first) sb_append(body, ",", 1);
+        first = 0;
+        const char* gRole = strcmp(msgs[i].role, "assistant") == 0 ? "model" : "user";
+        sb_appendf(body, "{\"role\":\"%s\",\"parts\":[{\"text\":", gRole);
+        json_escape_append(body, msgs[i].content);
+        sb_append(body, "}]}", 1);
+    }
+    sb_append(body, "],", -1);
+
+    sb_appendf(body, "\"generationConfig\":{\"temperature\":%.2f", cfg->dTemperature);
+    if (cfg->iMaxTokens > 0)
+        sb_appendf(body, ",\"maxOutputTokens\":%d", cfg->iMaxTokens);
+    sb_append(body, "}}", -1);
+}
+
+static void BuildRequestBodyMulti(StrBuf* body, const AIProviderConfig* cfg,
+                                   const AIProviderDef* pDef,
+                                   const AIChatMessage* msgs, int count)
+{
+    EAIRequestFormat fmt = pDef ? pDef->eFormat : AI_FORMAT_OPENAI;
+    switch (fmt)
+    {
+    case AI_FORMAT_ANTHROPIC: BuildBodyMulti_Anthropic(body, cfg, msgs, count); break;
+    case AI_FORMAT_GOOGLE:    BuildBodyMulti_Google(body, cfg, msgs, count);    break;
+    case AI_FORMAT_OPENAI:
+    case AI_FORMAT_COHERE:
+    default:                  BuildBodyMulti_OpenAI(body, cfg, msgs, count);    break;
+    }
+}
+
+//=============================================================================
+// Multi-message synchronous call
+//=============================================================================
+
+char* AIDirectCall_ChatMulti(const AIProviderConfig* pCfg,
+                             const AIChatMessage* messages,
+                             int messageCount)
+{
+    const AIProviderDef* pDef = AIProvider_Get(pCfg->eProvider);
+    if (!pDef)
+        return _strdup("Error: Unknown provider");
+
+    StrBuf body;
+    sb_init(&body, 4096);
+    BuildRequestBodyMulti(&body, pCfg, pDef, messages, messageCount);
+
+    char* result = SendHTTPRequest(pCfg, body.data, body.len);
+    sb_free(&body);
+    return result;
 }
 
 //=============================================================================
