@@ -32,8 +32,11 @@ void    Terminal_Shutdown(void);
 // Terminal management
 //=============================================================================
 
-// Create and show a new terminal instance.
+// Create and show a new terminal instance (uses active shell).
 BOOL    Terminal_New(HWND hwndParent);
+
+// Create a new terminal with a specific shell type (0=PowerShell, 1=CMD, 2=Git Bash, 3=WSL).
+BOOL    Terminal_NewShell(HWND hwndParent, int shellType);
 
 // Toggle terminal panel visibility.
 void    Terminal_Toggle(HWND hwndParent);
