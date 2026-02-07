@@ -3,8 +3,8 @@
 * Biko
 *
 * ChatPanel.c
-*   Dockable chat panel implementation.
-*   Uses a Scintilla control for rich output and a standard edit for input.
+*   World-class dockable chat panel.
+*   Uses a Scintilla control for rich output and a custom input area.
 *
 ******************************************************************************/
 
@@ -24,23 +24,64 @@
 #include <stdio.h>
 
 //=============================================================================
+// Design constants
+//=============================================================================
+
+#define CHAT_PANEL_WIDTH        380
+#define CHAT_HEADER_HEIGHT      36
+#define CHAT_INPUT_AREA_HEIGHT  80
+#define CHAT_INPUT_PADDING      8
+#define CHAT_SPLITTER_WIDTH     3
+#define CHAT_SEND_SIZE          28
+
+// Colors - Dark mode
+#define CLR_DK_SURFACE       RGB(25, 25, 25)
+#define CLR_DK_SURFACE2      RGB(30, 30, 30)
+#define CLR_DK_HEADER        RGB(20, 20, 20)
+#define CLR_DK_INPUT_BG      RGB(40, 40, 42)
+#define CLR_DK_INPUT_BORDER  RGB(60, 60, 65)
+#define CLR_DK_TEXT          RGB(220, 220, 220)
+#define CLR_DK_TEXT_DIM      RGB(140, 140, 145)
+#define CLR_DK_ACCENT        RGB(99, 102, 241)
+#define CLR_DK_USER_TEXT     RGB(165, 180, 252)
+#define CLR_DK_AI_TEXT       RGB(167, 243, 208)
+#define CLR_DK_SYSTEM_TEXT   RGB(100, 100, 110)
+#define CLR_DK_SPLITTER      RGB(45, 45, 50)
+#define CLR_DK_SEND_BG      RGB(99, 102, 241)
+#define CLR_DK_SEND_HOVER   RGB(129, 140, 248)
+
+// Colors - Light mode
+#define CLR_LT_SURFACE       RGB(255, 255, 255)
+#define CLR_LT_SURFACE2      RGB(249, 250, 251)
+#define CLR_LT_HEADER        RGB(248, 248, 252)
+#define CLR_LT_INPUT_BG      RGB(243, 244, 246)
+#define CLR_LT_INPUT_BORDER  RGB(209, 213, 219)
+#define CLR_LT_TEXT          RGB(17, 24, 39)
+#define CLR_LT_TEXT_DIM      RGB(107, 114, 128)
+#define CLR_LT_ACCENT        RGB(79, 70, 229)
+#define CLR_LT_USER_TEXT     RGB(67, 56, 202)
+#define CLR_LT_AI_TEXT       RGB(5, 150, 105)
+#define CLR_LT_SYSTEM_TEXT   RGB(156, 163, 175)
+#define CLR_LT_SPLITTER      RGB(229, 231, 235)
+#define CLR_LT_SEND_BG      RGB(79, 70, 229)
+#define CLR_LT_SEND_HOVER   RGB(99, 102, 241)
+
+//=============================================================================
 // Internal state
 //=============================================================================
 
-#define CHAT_PANEL_WIDTH    320
-#define CHAT_INPUT_HEIGHT   28
-#define CHAT_BUTTON_WIDTH   60
-#define CHAT_SPLITTER_WIDTH 4
-
 static HWND     s_hwndPanel = NULL;
-static HWND     s_hwndOutput = NULL;    // Scintilla control for chat output
-static HWND     s_hwndInput = NULL;     // Edit control for user input
-static HWND     s_hwndSend = NULL;      // Send button
+static HWND     s_hwndOutput = NULL;
+static HWND     s_hwndInput = NULL;
+static HWND     s_hwndSend = NULL;
 static BOOL     s_bVisible = FALSE;
 static int      s_iPanelWidth = CHAT_PANEL_WIDTH;
 static WNDPROC  s_pfnOrigInputProc = NULL;
+static WNDPROC  s_pfnOrigSendProc = NULL;
+static BOOL     s_bSendHover = FALSE;
+static HFONT    s_hFontHeader = NULL;
+static HFONT    s_hFontInput = NULL;
 
-// Chat history for context
 #define MAX_CHAT_HISTORY 100
 static char*    s_chatHistory[MAX_CHAT_HISTORY];
 static int      s_iHistoryCount = 0;
@@ -49,10 +90,12 @@ static int      s_iHistoryCount = 0;
 // Forward declarations
 //=============================================================================
 
-static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-static LRESULT CALLBACK ChatInputSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+static LRESULT CALLBACK ChatPanelWndProc(HWND, UINT, WPARAM, LPARAM);
+static LRESULT CALLBACK ChatInputSubclassProc(HWND, UINT, WPARAM, LPARAM);
+static LRESULT CALLBACK SendBtnProc(HWND, UINT, WPARAM, LPARAM);
 static void SetupOutputStyles(HWND hwndOutput);
 static void AppendToOutput(const char* prefix, const char* text, int style);
+static void DrawSendButton(HDC hdc, RECT rc, BOOL bHover, BOOL bDark);
 
 //=============================================================================
 // Panel window class
@@ -72,11 +115,29 @@ static void RegisterChatPanelClass(HINSTANCE hInst)
     wc.lpfnWndProc = ChatPanelWndProc;
     wc.hInstance = hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_3DFACE + 1);
+    wc.hbrBackground = NULL;
     wc.lpszClassName = CHAT_PANEL_CLASS;
 
     RegisterClassExW(&wc);
     s_bClassRegistered = TRUE;
+}
+
+static void CreateFonts(void)
+{
+    if (!s_hFontHeader)
+    {
+        s_hFontHeader = CreateFontW(
+            -14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    }
+    if (!s_hFontInput)
+    {
+        s_hFontInput = CreateFontW(
+            -13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    }
 }
 
 //=============================================================================
@@ -94,32 +155,22 @@ BOOL ChatPanel_Create(HWND hwndParent)
 
     HINSTANCE hInst = (HINSTANCE)GetWindowLongPtr(hwndParent, GWLP_HINSTANCE);
     RegisterChatPanelClass(hInst);
+    CreateFonts();
 
-    // Create the panel container
     s_hwndPanel = CreateWindowExW(
-        0,
-        CHAT_PANEL_CLASS,
-        L"",
+        0, CHAT_PANEL_CLASS, L"",
         WS_CHILD | WS_CLIPCHILDREN,
-        0, 0, 0, 0,
-        hwndParent,
-        (HMENU)(UINT_PTR)IDC_CHAT_PANEL,
-        hInst,
-        NULL);
+        0, 0, 0, 0, hwndParent,
+        (HMENU)(UINT_PTR)IDC_CHAT_PANEL, hInst, NULL);
 
     if (!s_hwndPanel) return FALSE;
 
-    // Create Scintilla output control
+    // --- Scintilla output ---
     s_hwndOutput = CreateWindowExW(
-        0,
-        L"Scintilla",
-        L"",
+        0, L"Scintilla", L"",
         WS_CHILD | WS_VISIBLE | WS_VSCROLL,
-        0, 0, 0, 0,
-        s_hwndPanel,
-        (HMENU)(UINT_PTR)IDC_CHAT_OUTPUT,
-        hInst,
-        NULL);
+        0, 0, 0, 0, s_hwndPanel,
+        (HMENU)(UINT_PTR)IDC_CHAT_OUTPUT, hInst, NULL);
 
     if (s_hwndOutput)
     {
@@ -128,39 +179,33 @@ BOOL ChatPanel_Create(HWND hwndParent)
         SendMessage(s_hwndOutput, SCI_SETWRAPMODE, SC_WRAP_WORD, 0);
     }
 
-    // Create input edit control
+    // --- Multiline input ---
     s_hwndInput = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
-        L"EDIT",
-        L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        0, 0, 0, 0,
-        s_hwndPanel,
-        (HMENU)(UINT_PTR)IDC_CHAT_INPUT,
-        hInst,
-        NULL);
+        0, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
+        0, 0, 0, 0, s_hwndPanel,
+        (HMENU)(UINT_PTR)IDC_CHAT_INPUT, hInst, NULL);
 
-    // Subclass input for Enter key handling
     if (s_hwndInput)
     {
         s_pfnOrigInputProc = (WNDPROC)SetWindowLongPtrW(
             s_hwndInput, GWLP_WNDPROC, (LONG_PTR)ChatInputSubclassProc);
-
-        // Set placeholder text (cue banner)
-        SendMessageW(s_hwndInput, EM_SETCUEBANNER, TRUE, (LPARAM)L"Ask AI something...");
+        SendMessage(s_hwndInput, WM_SETFONT, (WPARAM)s_hFontInput, TRUE);
+        SendMessageW(s_hwndInput, EM_SETCUEBANNER, TRUE, (LPARAM)L"Message Biko...");
     }
 
-    // Create Send button
+    // --- Owner-drawn send button ---
     s_hwndSend = CreateWindowExW(
-        0,
-        L"BUTTON",
-        L"Send",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
-        0, 0, CHAT_BUTTON_WIDTH, CHAT_INPUT_HEIGHT,
-        s_hwndPanel,
-        (HMENU)(UINT_PTR)IDC_CHAT_SEND,
-        hInst,
-        NULL);
+        0, L"BUTTON", L"",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        0, 0, CHAT_SEND_SIZE, CHAT_SEND_SIZE, s_hwndPanel,
+        (HMENU)(UINT_PTR)IDC_CHAT_SEND, hInst, NULL);
+
+    if (s_hwndSend)
+    {
+        s_pfnOrigSendProc = (WNDPROC)SetWindowLongPtrW(
+            s_hwndSend, GWLP_WNDPROC, (LONG_PTR)SendBtnProc);
+    }
 
     ChatPanel_AppendSystem("Biko AI Ready. \"I write what I like.\"");
     return TRUE;
@@ -177,7 +222,6 @@ void ChatPanel_Destroy(void)
         s_hwndSend = NULL;
     }
 
-    // Free chat history
     for (int i = 0; i < s_iHistoryCount; i++)
     {
         if (s_chatHistory[i]) n2e_Free(s_chatHistory[i]);
@@ -185,6 +229,9 @@ void ChatPanel_Destroy(void)
     }
     s_iHistoryCount = 0;
     s_bVisible = FALSE;
+
+    if (s_hFontHeader) { DeleteObject(s_hFontHeader); s_hFontHeader = NULL; }
+    if (s_hFontInput) { DeleteObject(s_hFontInput); s_hFontInput = NULL; }
 }
 
 //=============================================================================
@@ -209,7 +256,6 @@ void ChatPanel_Show(HWND hwndParent)
         ShowWindow(s_hwndPanel, SW_SHOW);
         s_bVisible = TRUE;
 
-        // Trigger parent relayout
         RECT rc;
         GetClientRect(hwndParent, &rc);
         SendMessage(hwndParent, WM_SIZE, SIZE_RESTORED,
@@ -226,7 +272,6 @@ void ChatPanel_Hide(void)
         ShowWindow(s_hwndPanel, SW_HIDE);
         s_bVisible = FALSE;
 
-        // Trigger parent relayout
         HWND hwndParent = GetParent(s_hwndPanel);
         if (hwndParent)
         {
@@ -252,27 +297,35 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop, int editor
     if (!s_bVisible || !s_hwndPanel) return 0;
 
     int panelLeft = parentRight - s_iPanelWidth;
-    if (panelLeft < 200) panelLeft = 200; // minimum editor width
+    if (panelLeft < 200) panelLeft = 200;
 
     int totalW = s_iPanelWidth;
     MoveWindow(s_hwndPanel, panelLeft, editorTop, totalW, editorHeight, TRUE);
 
-    int innerW = totalW - CHAT_SPLITTER_WIDTH - 4;
+    int innerW = totalW - CHAT_SPLITTER_WIDTH;
+    int pad = CHAT_INPUT_PADDING;
     int x = CHAT_SPLITTER_WIDTH;
-    int y = 4;
-    int innerH = editorHeight - CHAT_INPUT_HEIGHT - 12;
 
-    // Output area (fills most of the sidebar)
+    // Header
+    int y = CHAT_HEADER_HEIGHT;
+
+    // Output
+    int outputH = editorHeight - CHAT_HEADER_HEIGHT - CHAT_INPUT_AREA_HEIGHT;
+    if (outputH < 80) outputH = 80;
+
     if (s_hwndOutput)
-        MoveWindow(s_hwndOutput, x, y, innerW, innerH, TRUE);
-    y += innerH + 4;
+        MoveWindow(s_hwndOutput, x, y, innerW, outputH, TRUE);
+    y += outputH;
 
-    // Input + Send button at the bottom
-    int inputW = innerW - CHAT_BUTTON_WIDTH - 4;
+    // Input area
+    int inputH = CHAT_INPUT_AREA_HEIGHT - pad * 2;
+    int sendBtnY = y + CHAT_INPUT_AREA_HEIGHT - pad - CHAT_SEND_SIZE;
+    int inputW = innerW - pad * 2 - CHAT_SEND_SIZE - 6;
+
     if (s_hwndInput)
-        MoveWindow(s_hwndInput, x, y, inputW, CHAT_INPUT_HEIGHT, TRUE);
+        MoveWindow(s_hwndInput, x + pad, y + pad, inputW, inputH, TRUE);
     if (s_hwndSend)
-        MoveWindow(s_hwndSend, x + inputW + 2, y, CHAT_BUTTON_WIDTH, CHAT_INPUT_HEIGHT, TRUE);
+        MoveWindow(s_hwndSend, x + pad + inputW + 6, sendBtnY, CHAT_SEND_SIZE, CHAT_SEND_SIZE, TRUE);
 
     return totalW;
 }
@@ -283,17 +336,17 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop, int editor
 
 void ChatPanel_AppendUserMessage(const char* pszMessage)
 {
-    AppendToOutput("You: ", pszMessage, 20);
+    AppendToOutput("\xE2\x96\xB6 You", pszMessage, 20);
 }
 
 void ChatPanel_AppendResponse(const char* pszResponse)
 {
-    AppendToOutput("Biko: ", pszResponse, 21);
+    AppendToOutput("\xE2\x9C\xA8 Biko", pszResponse, 21);
 }
 
 void ChatPanel_AppendSystem(const char* pszMessage)
 {
-    AppendToOutput("--- ", pszMessage, 22);
+    AppendToOutput("", pszMessage, 22);
 }
 
 void ChatPanel_Clear(void)
@@ -319,39 +372,33 @@ void ChatPanel_SendInput(void)
     if (!wszText) return;
     GetWindowTextW(s_hwndInput, wszText, len + 1);
 
-    // Convert to UTF-8
     int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wszText, -1, NULL, 0, NULL, NULL);
     char* utf8 = (char*)n2e_Alloc(utf8Len);
     if (utf8)
     {
         WideCharToMultiByte(CP_UTF8, 0, wszText, -1, utf8, utf8Len, NULL, NULL);
 
-        // Show user message in output
         ChatPanel_AppendUserMessage(utf8);
 
-        // Get provider config from AIBridge
         const AIProviderConfig* pCfg = AIBridge_GetProviderConfig();
         if (pCfg && pCfg->szApiKey[0])
         {
             ChatPanel_AppendSystem("Thinking...");
 
-            // Launch agentic AI loop (reads/writes files, runs commands)
             if (!AIAgent_ChatAsync(pCfg, utf8, s_hwndPanel))
             {
-                ChatPanel_AppendSystem("AI is busy with a previous request. Please wait.");
+                ChatPanel_AppendSystem("AI is busy. Please wait.");
             }
         }
         else
         {
-            ChatPanel_AppendSystem("No API key configured. Use Biko > AI Settings to set one.");
+            ChatPanel_AppendSystem("No API key. Use Biko \xE2\x86\x92 AI Settings.");
         }
 
         n2e_Free(utf8);
     }
-
     n2e_Free(wszText);
 
-    // Clear input
     SetWindowTextW(s_hwndInput, L"");
 }
 
@@ -391,42 +438,12 @@ void ChatPanel_ApplyDarkMode(void)
 {
     if (!s_hwndPanel) return;
 
-    BOOL bDark = DarkMode_IsEnabled();
-
-    // Re-setup Scintilla output colors
     if (s_hwndOutput)
         SetupOutputStyles(s_hwndOutput);
 
-    // Apply dark theme to the Edit input control
-    if (s_hwndInput)
-    {
-        if (bDark)
-        {
-            SetWindowTheme(s_hwndInput, L"DarkMode_CFD", NULL);
-        }
-        else
-        {
-            SetWindowTheme(s_hwndInput, NULL, NULL);
-        }
-        InvalidateRect(s_hwndInput, NULL, TRUE);
-    }
-
-    // Apply dark theme to the Send button
-    if (s_hwndSend)
-    {
-        if (bDark)
-        {
-            SetWindowTheme(s_hwndSend, L"DarkMode_Explorer", NULL);
-        }
-        else
-        {
-            SetWindowTheme(s_hwndSend, NULL, NULL);
-        }
-        InvalidateRect(s_hwndSend, NULL, TRUE);
-    }
-
-    // Repaint the panel itself
     InvalidateRect(s_hwndPanel, NULL, TRUE);
+    if (s_hwndInput) InvalidateRect(s_hwndInput, NULL, TRUE);
+    if (s_hwndSend) InvalidateRect(s_hwndSend, NULL, TRUE);
 }
 
 //=============================================================================
@@ -435,44 +452,75 @@ void ChatPanel_ApplyDarkMode(void)
 
 static void SetupOutputStyles(HWND hwndOutput)
 {
-    // Base markdown styles
+    BOOL bDark = DarkMode_IsEnabled();
+
+    // Default style
+    SendMessage(hwndOutput, SCI_STYLESETFONT, STYLE_DEFAULT, (LPARAM)"Cascadia Code");
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, STYLE_DEFAULT, 10);
+    SendMessage(hwndOutput, SCI_STYLESETBACK, STYLE_DEFAULT,
+        bDark ? CLR_DK_SURFACE : CLR_LT_SURFACE);
+    SendMessage(hwndOutput, SCI_STYLESETFORE, STYLE_DEFAULT,
+        bDark ? CLR_DK_TEXT : CLR_LT_TEXT);
+    SendMessage(hwndOutput, SCI_STYLECLEARALL, 0, 0);
+
+    // Caret
+    SendMessage(hwndOutput, SCI_SETCARETFORE,
+        bDark ? CLR_DK_TEXT : CLR_LT_TEXT, 0);
+
+    // Selection
+    SendMessage(hwndOutput, SCI_SETSELBACK, TRUE,
+        bDark ? RGB(55, 55, 70) : RGB(180, 215, 255));
+    SendMessage(hwndOutput, SCI_SETSELFORE, TRUE,
+        bDark ? CLR_DK_TEXT : CLR_LT_TEXT);
+
+    // Markdown base styles
     MarkdownPreview_SetupStyles(hwndOutput);
 
-    // Chat specific styles (using indices > 20 to avoid conflict with MD styles)
-    // Style 20: User messages
+    // Style 20: User label
     SendMessage(hwndOutput, SCI_STYLESETFONT, 20, (LPARAM)"Segoe UI");
     SendMessage(hwndOutput, SCI_STYLESETSIZE, 20, 10);
-    SendMessage(hwndOutput, SCI_STYLESETFORE, 20, RGB(30, 80, 180));
+    SendMessage(hwndOutput, SCI_STYLESETFORE, 20,
+        bDark ? CLR_DK_USER_TEXT : CLR_LT_USER_TEXT);
     SendMessage(hwndOutput, SCI_STYLESETBOLD, 20, TRUE);
+    SendMessage(hwndOutput, SCI_STYLESETBACK, 20,
+        bDark ? CLR_DK_SURFACE : CLR_LT_SURFACE);
 
-    // Style 21: AI Prefix
+    // Style 21: AI label
     SendMessage(hwndOutput, SCI_STYLESETFONT, 21, (LPARAM)"Segoe UI");
     SendMessage(hwndOutput, SCI_STYLESETSIZE, 21, 10);
-    SendMessage(hwndOutput, SCI_STYLESETFORE, 21, RGB(20, 120, 20)); // Greenish
+    SendMessage(hwndOutput, SCI_STYLESETFORE, 21,
+        bDark ? CLR_DK_AI_TEXT : CLR_LT_AI_TEXT);
     SendMessage(hwndOutput, SCI_STYLESETBOLD, 21, TRUE);
+    SendMessage(hwndOutput, SCI_STYLESETBACK, 21,
+        bDark ? CLR_DK_SURFACE : CLR_LT_SURFACE);
 
-    // Style 22: System messages
+    // Style 22: System (dim italic)
     SendMessage(hwndOutput, SCI_STYLESETFONT, 22, (LPARAM)"Segoe UI");
-    SendMessage(hwndOutput, SCI_STYLESETSIZE, 22, 10);
-    SendMessage(hwndOutput, SCI_STYLESETFORE, 22, RGB(160, 160, 160));
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, 22, 9);
+    SendMessage(hwndOutput, SCI_STYLESETFORE, 22,
+        bDark ? CLR_DK_SYSTEM_TEXT : CLR_LT_SYSTEM_TEXT);
     SendMessage(hwndOutput, SCI_STYLESETITALIC, 22, TRUE);
+    SendMessage(hwndOutput, SCI_STYLESETBACK, 22,
+        bDark ? CLR_DK_SURFACE : CLR_LT_SURFACE);
 
-    // Apply dark mode overrides
-    if (DarkMode_IsEnabled())
-    {
-        SendMessage(hwndOutput, SCI_STYLESETFORE, 20, RGB(100, 160, 255)); // User (lighter blue)
-        SendMessage(hwndOutput, SCI_STYLESETFORE, 21, RGB(80, 200, 80));   // AI (lighter green)
-        SendMessage(hwndOutput, SCI_STYLESETFORE, 22, RGB(120, 120, 120)); // System
-    }
-
-    // Margins - add some padding
-    SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 0, 8); // left padding
+    // Left padding
+    SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 0, 12);
     SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 1, 0);
 
-    // Extra line spacing for readability
-    SendMessage(hwndOutput, SCI_SETEXTRAASCENT, 2, 0);
-    SendMessage(hwndOutput, SCI_SETEXTRADESCENT, 2, 0);
+    // Line spacing
+    SendMessage(hwndOutput, SCI_SETEXTRAASCENT, 3, 0);
+    SendMessage(hwndOutput, SCI_SETEXTRADESCENT, 3, 0);
+
+    // Dark scrollbar
+    if (bDark)
+        SetWindowTheme(hwndOutput, L"DarkMode_Explorer", NULL);
+    else
+        SetWindowTheme(hwndOutput, NULL, NULL);
 }
+
+//=============================================================================
+// Internal: Append to output
+//=============================================================================
 
 static void AppendToOutput(const char* prefix, const char* text, int style)
 {
@@ -481,21 +529,20 @@ static void AppendToOutput(const char* prefix, const char* text, int style)
     SendMessage(s_hwndOutput, SCI_SETREADONLY, FALSE, 0);
 
     int len = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
+
     if (len > 0)
     {
-        SendMessage(s_hwndOutput, SCI_APPENDTEXT, 1, (LPARAM)"\n\n"); // More spacing between messages
+        SendMessage(s_hwndOutput, SCI_APPENDTEXT, 2, (LPARAM)"\n\n");
         len += 2;
     }
 
-    // Append prefix
+    // Prefix on its own line
     if (prefix && prefix[0])
     {
         int prefixLen = (int)strlen(prefix);
         SendMessage(s_hwndOutput, SCI_APPENDTEXT, prefixLen, (LPARAM)prefix);
 
-        // Style the prefix (use relevant style or default to System if unknown)
         int prefixStyle = (style == 21) ? 21 : (style == 20 ? 20 : 22);
-        
         int docLen = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
         if (len + prefixLen <= docLen && prefixLen > 0)
         {
@@ -503,23 +550,23 @@ static void AppendToOutput(const char* prefix, const char* text, int style)
             SendMessage(s_hwndOutput, SCI_SETSTYLING, prefixLen, prefixStyle);
         }
         len += prefixLen;
+
+        SendMessage(s_hwndOutput, SCI_APPENDTEXT, 1, (LPARAM)"\n");
+        len += 1;
     }
 
-    // Append text
     int textLen = (int)strlen(text);
+    if (textLen <= 0) goto done;
+
     SendMessage(s_hwndOutput, SCI_APPENDTEXT, textLen, (LPARAM)text);
 
-    // Style the text
-    if (style == 21 && textLen > 0) // AI Message -> Markdown
+    if (style == 21 && textLen > 0)
     {
-        // Use the Markdown renderer
-        // Ensure styles are allocated first by calling SCI_COLOURISE
         SendMessage(s_hwndOutput, SCI_COLOURISE, 0, -1);
         MarkdownPreview_StyleRange(s_hwndOutput, len, textLen, text);
     }
     else if (textLen > 0)
     {
-        // Plain styling - verify bounds
         int docLen = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
         int styleLen = textLen;
         if (len + styleLen > docLen)
@@ -531,8 +578,56 @@ static void AppendToOutput(const char* prefix, const char* text, int style)
         }
     }
 
+done:
     SendMessage(s_hwndOutput, SCI_SETREADONLY, TRUE, 0);
     SendMessage(s_hwndOutput, SCI_SCROLLTOEND, 0, 0);
+}
+
+//=============================================================================
+// Internal: Custom drawing helpers
+//=============================================================================
+
+static void FillRoundRect(HDC hdc, RECT* prc, int radius, COLORREF fill)
+{
+    HBRUSH hBr = CreateSolidBrush(fill);
+    HPEN hPen = CreatePen(PS_SOLID, 1, fill);
+    HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hBr);
+    HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+    RoundRect(hdc, prc->left, prc->top, prc->right, prc->bottom, radius, radius);
+    SelectObject(hdc, hOldBr);
+    SelectObject(hdc, hOldPen);
+    DeleteObject(hBr);
+    DeleteObject(hPen);
+}
+
+static void DrawSendButton(HDC hdc, RECT rc, BOOL bHover, BOOL bDark)
+{
+    COLORREF bgClr = bHover
+        ? (bDark ? CLR_DK_SEND_HOVER : CLR_LT_SEND_HOVER)
+        : (bDark ? CLR_DK_SEND_BG : CLR_LT_SEND_BG);
+
+    FillRoundRect(hdc, &rc, CHAT_SEND_SIZE, bgClr);
+
+    // Arrow icon
+    int cx = (rc.left + rc.right) / 2;
+    int cy = (rc.top + rc.bottom) / 2;
+    int sz = 5;
+
+    POINT pts[3] = {
+        { cx - sz + 1, cy - sz },
+        { cx + sz,     cy },
+        { cx - sz + 1, cy + sz }
+    };
+
+    HBRUSH hBr = CreateSolidBrush(RGB(255, 255, 255));
+    HPEN hPen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+    HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hBr);
+    HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+    Polygon(hdc, pts, 3);
+    SelectObject(hdc, hOldBr);
+    SelectObject(hdc, hOldPen);
+    DeleteObject(hBr);
+    DeleteObject(hPen);
 }
 
 //=============================================================================
@@ -547,22 +642,68 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
     {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-
         RECT rc;
         GetClientRect(hwnd, &rc);
+        BOOL bDark = DarkMode_IsEnabled();
 
-        // Fill entire panel background with dark/light surface color
-        HBRUSH hBgBrush = CreateSolidBrush(
-            DarkMode_IsEnabled() ? RGB(37, 37, 38) : RGB(243, 243, 243));
-        FillRect(hdc, &rc, hBgBrush);
-        DeleteObject(hBgBrush);
+        // Surface
+        HBRUSH hBg = CreateSolidBrush(bDark ? CLR_DK_SURFACE : CLR_LT_SURFACE);
+        FillRect(hdc, &rc, hBg);
+        DeleteObject(hBg);
 
-        // Draw vertical splitter handle at left edge
-        rc.right = CHAT_SPLITTER_WIDTH;
-        HBRUSH hSplitBrush = CreateSolidBrush(
-            DarkMode_IsEnabled() ? RGB(60, 60, 60) : RGB(200, 200, 200));
-        FillRect(hdc, &rc, hSplitBrush);
-        DeleteObject(hSplitBrush);
+        // Splitter
+        RECT rcSplit = rc;
+        rcSplit.right = CHAT_SPLITTER_WIDTH;
+        HBRUSH hSplit = CreateSolidBrush(bDark ? CLR_DK_SPLITTER : CLR_LT_SPLITTER);
+        FillRect(hdc, &rcSplit, hSplit);
+        DeleteObject(hSplit);
+
+        // Header
+        RECT rcHeader = rc;
+        rcHeader.left = CHAT_SPLITTER_WIDTH;
+        rcHeader.bottom = CHAT_HEADER_HEIGHT;
+        HBRUSH hHdr = CreateSolidBrush(bDark ? CLR_DK_HEADER : CLR_LT_HEADER);
+        FillRect(hdc, &rcHeader, hHdr);
+        DeleteObject(hHdr);
+
+        // Header bottom line
+        RECT rcLine = rcHeader;
+        rcLine.top = rcLine.bottom - 1;
+        HBRUSH hLine = CreateSolidBrush(bDark ? RGB(50, 50, 55) : RGB(230, 230, 235));
+        FillRect(hdc, &rcLine, hLine);
+        DeleteObject(hLine);
+
+        // Header text
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, bDark ? CLR_DK_TEXT : CLR_LT_TEXT);
+        if (s_hFontHeader) SelectObject(hdc, s_hFontHeader);
+        RECT rcTitle = rcHeader;
+        rcTitle.left += 14;
+        rcTitle.right -= 40;
+        DrawTextW(hdc, L"\x2728 Biko AI", -1, &rcTitle, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+
+        // Input area background
+        int outputBottom = CHAT_HEADER_HEIGHT;
+        if (s_hwndOutput)
+        {
+            RECT rcOut;
+            GetWindowRect(s_hwndOutput, &rcOut);
+            MapWindowPoints(NULL, hwnd, (POINT*)&rcOut, 2);
+            outputBottom = rcOut.bottom;
+        }
+        RECT rcInputArea = rc;
+        rcInputArea.top = outputBottom;
+        rcInputArea.left = CHAT_SPLITTER_WIDTH;
+        HBRUSH hInputBg = CreateSolidBrush(bDark ? CLR_DK_SURFACE2 : CLR_LT_SURFACE2);
+        FillRect(hdc, &rcInputArea, hInputBg);
+        DeleteObject(hInputBg);
+
+        // Input top border
+        RECT rcIBorder = rcInputArea;
+        rcIBorder.bottom = rcIBorder.top + 1;
+        HBRUSH hILine = CreateSolidBrush(bDark ? RGB(50, 50, 55) : RGB(230, 230, 235));
+        FillRect(hdc, &rcIBorder, hILine);
+        DeleteObject(hILine);
 
         EndPaint(hwnd, &ps);
         return 0;
@@ -573,20 +714,51 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         HDC hdc = (HDC)wParam;
         RECT rc;
         GetClientRect(hwnd, &rc);
-        HBRUSH hBrush = CreateSolidBrush(
-            DarkMode_IsEnabled() ? RGB(37, 37, 38) : RGB(243, 243, 243));
-        FillRect(hdc, &rc, hBrush);
-        DeleteObject(hBrush);
+        HBRUSH hBr = CreateSolidBrush(
+            DarkMode_IsEnabled() ? CLR_DK_SURFACE : CLR_LT_SURFACE);
+        FillRect(hdc, &rc, hBr);
+        DeleteObject(hBr);
         return 1;
     }
 
     case WM_CTLCOLOREDIT:
+    {
+        HDC hdcEdit = (HDC)wParam;
+        BOOL bDark = DarkMode_IsEnabled();
+        SetTextColor(hdcEdit, bDark ? CLR_DK_TEXT : CLR_LT_TEXT);
+        SetBkColor(hdcEdit, bDark ? CLR_DK_INPUT_BG : CLR_LT_INPUT_BG);
+        SetBkMode(hdcEdit, OPAQUE);
+        static HBRUSH s_hBrDarkEdit = NULL;
+        static HBRUSH s_hBrLightEdit = NULL;
+        if (bDark)
+        {
+            if (!s_hBrDarkEdit) s_hBrDarkEdit = CreateSolidBrush(CLR_DK_INPUT_BG);
+            return (LRESULT)s_hBrDarkEdit;
+        }
+        else
+        {
+            if (!s_hBrLightEdit) s_hBrLightEdit = CreateSolidBrush(CLR_LT_INPUT_BG);
+            return (LRESULT)s_hBrLightEdit;
+        }
+    }
+
     case WM_CTLCOLORSTATIC:
     {
         if (DarkMode_IsEnabled())
         {
             HBRUSH hBr = DarkMode_HandleCtlColor((HDC)wParam);
             if (hBr) return (LRESULT)hBr;
+        }
+        break;
+    }
+
+    case WM_DRAWITEM:
+    {
+        DRAWITEMSTRUCT* pDIS = (DRAWITEMSTRUCT*)lParam;
+        if (pDIS && pDIS->CtlID == IDC_CHAT_SEND)
+        {
+            DrawSendButton(pDIS->hDC, pDIS->rcItem, s_bSendHover, DarkMode_IsEnabled());
+            return TRUE;
         }
         break;
     }
@@ -628,12 +800,11 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             GetClientRect(hwndParent, &rcParent);
 
             int newWidth = rcParent.right - pt.x;
-            if (newWidth < 200) newWidth = 200;
+            if (newWidth < 280) newWidth = 280;
             if (newWidth > rcParent.right - 200) newWidth = rcParent.right - 200;
 
             s_iPanelWidth = newWidth;
 
-            // Force relayout
             SendMessage(hwndParent, WM_SIZE, SIZE_RESTORED,
                         MAKELPARAM(rcParent.right, rcParent.bottom));
         }
@@ -651,7 +822,6 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         break;
 
     default:
-        // Handle AI direct response from background thread
         if (msg == WM_AI_DIRECT_RESPONSE)
         {
             char* pszResponse = (char*)lParam;
@@ -662,7 +832,6 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             }
             return 0;
         }
-        // Handle agent status updates
         if (msg == WM_AI_AGENT_STATUS)
         {
             char* pszStatus = (char*)lParam;
@@ -673,7 +842,6 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
             }
             return 0;
         }
-        // Handle agent tool call display
         if (msg == WM_AI_AGENT_TOOL)
         {
             char* pszTool = (char*)lParam;
@@ -695,7 +863,8 @@ static LRESULT CALLBACK ChatInputSubclassProc(HWND hwnd, UINT msg, WPARAM wParam
     switch (msg)
     {
     case WM_KEYDOWN:
-        if (wParam == VK_RETURN)
+        // Enter sends; Shift+Enter inserts newline
+        if (wParam == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000))
         {
             ChatPanel_SendInput();
             return 0;
@@ -708,10 +877,38 @@ static LRESULT CALLBACK ChatInputSubclassProc(HWND hwnd, UINT msg, WPARAM wParam
         break;
 
     case WM_CHAR:
-        if (wParam == VK_RETURN)
-            return 0; // Suppress the beep
+        if (wParam == VK_RETURN && !(GetKeyState(VK_SHIFT) & 0x8000))
+            return 0;
         break;
     }
 
     return CallWindowProc(s_pfnOrigInputProc, hwnd, msg, wParam, lParam);
+}
+
+static LRESULT CALLBACK SendBtnProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+    case WM_MOUSEMOVE:
+    {
+        if (!s_bSendHover)
+        {
+            s_bSendHover = TRUE;
+            InvalidateRect(hwnd, NULL, FALSE);
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+            TrackMouseEvent(&tme);
+        }
+        break;
+    }
+    case WM_MOUSELEAVE:
+        s_bSendHover = FALSE;
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+
+    case WM_SETCURSOR:
+        SetCursor(LoadCursor(NULL, IDC_HAND));
+        return TRUE;
+    }
+
+    return CallWindowProc(s_pfnOrigSendProc, hwnd, msg, wParam, lParam);
 }

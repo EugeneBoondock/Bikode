@@ -669,7 +669,7 @@ static void BuildBodyMulti_Google(StrBuf* body, const AIProviderConfig* cfg,
         const char* gRole = strcmp(msgs[i].role, "assistant") == 0 ? "model" : "user";
         sb_appendf(body, "{\"role\":\"%s\",\"parts\":[{\"text\":", gRole);
         json_escape_append(body, msgs[i].content);
-        sb_append(body, "}]}", 1);
+        sb_append(body, "}]}", -1);
     }
     sb_append(body, "],", -1);
 
