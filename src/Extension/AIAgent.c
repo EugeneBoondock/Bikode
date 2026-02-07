@@ -101,6 +101,35 @@ static const char* json_find_value_a(const char* json, const char* key)
     return p;
 }
 
+static int hex_digit_a(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+    if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+    return -1;
+}
+
+static int decode_uescape(const char* p, char* out)
+{
+    int d0 = hex_digit_a(p[0]), d1 = hex_digit_a(p[1]);
+    int d2 = hex_digit_a(p[2]), d3 = hex_digit_a(p[3]);
+    if (d0 < 0 || d1 < 0 || d2 < 0 || d3 < 0) return 0;
+    unsigned int cp = (d0 << 12) | (d1 << 8) | (d2 << 4) | d3;
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    } else if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    } else {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+}
+
 static char* json_extract_string_a(const char* json, const char* key)
 {
     const char* val = json_find_value_a(json, key);
@@ -118,9 +147,27 @@ static char* json_extract_string_a(const char* json, const char* key)
             {
             case '"':  sb_append(&sb, "\"", 1); break;
             case '\\': sb_append(&sb, "\\", 1); break;
+            case '/':  sb_append(&sb, "/", 1); break;
             case 'n':  sb_append(&sb, "\n", 1); break;
             case 'r':  sb_append(&sb, "\r", 1); break;
             case 't':  sb_append(&sb, "\t", 1); break;
+            case 'b':  sb_append(&sb, "\b", 1); break;
+            case 'f':  sb_append(&sb, "\f", 1); break;
+            case 'u': {
+                if (val[1] && val[2] && val[3] && val[4]) {
+                    char utf8[4];
+                    int n = decode_uescape(val + 1, utf8);
+                    if (n > 0) {
+                        sb_append(&sb, utf8, n);
+                        val += 4;
+                    } else {
+                        sb_append(&sb, val, 1);
+                    }
+                } else {
+                    sb_append(&sb, val, 1);
+                }
+                break;
+            }
             default:   sb_append(&sb, val, 1);  break;
             }
         }

@@ -121,6 +121,36 @@ static const char* json_find_value(const char* json, const char* key)
     return p;
 }
 
+static int hex_digit(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+    if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+    return -1;
+}
+
+static int decode_unicode_escape(const char* p, char* out)
+{
+    // Parse 4 hex digits: \uXXXX
+    int d0 = hex_digit(p[0]), d1 = hex_digit(p[1]);
+    int d2 = hex_digit(p[2]), d3 = hex_digit(p[3]);
+    if (d0 < 0 || d1 < 0 || d2 < 0 || d3 < 0) return 0;
+    unsigned int cp = (d0 << 12) | (d1 << 8) | (d2 << 4) | d3;
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    } else if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    } else {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+}
+
 static char* json_extract_string(const char* json, const char* key)
 {
     const char* val = json_find_value(json, key);
@@ -138,9 +168,27 @@ static char* json_extract_string(const char* json, const char* key)
             {
             case '"':  sb_append(&sb, "\"", 1); break;
             case '\\': sb_append(&sb, "\\", 1); break;
+            case '/':  sb_append(&sb, "/", 1); break;
             case 'n':  sb_append(&sb, "\n", 1); break;
             case 'r':  sb_append(&sb, "\r", 1); break;
             case 't':  sb_append(&sb, "\t", 1); break;
+            case 'b':  sb_append(&sb, "\b", 1); break;
+            case 'f':  sb_append(&sb, "\f", 1); break;
+            case 'u': {
+                if (val[1] && val[2] && val[3] && val[4]) {
+                    char utf8[4];
+                    int n = decode_unicode_escape(val + 1, utf8);
+                    if (n > 0) {
+                        sb_append(&sb, utf8, n);
+                        val += 4; // skip the 4 hex digits
+                    } else {
+                        sb_append(&sb, val, 1);
+                    }
+                } else {
+                    sb_append(&sb, val, 1);
+                }
+                break;
+            }
             default:   sb_append(&sb, val, 1);  break;
             }
         }
@@ -173,7 +221,7 @@ static void BuildBody_OpenAI(StrBuf* body, const AIProviderConfig* cfg,
     sb_appendf(body, "\"model\":\"%s\",", model);
     sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
     if (cfg->iMaxTokens > 0)
-        sb_appendf(body, "\"max_tokens\":%d,", cfg->iMaxTokens);
+        sb_appendf(body, "\"max_completion_tokens\":%d,", cfg->iMaxTokens);
     sb_append(body, "\"messages\":[", -1);
     sb_append(body, "{\"role\":\"system\",\"content\":", -1);
     json_escape_append(body, systemPrompt);
@@ -586,7 +634,7 @@ static void BuildBodyMulti_OpenAI(StrBuf* body, const AIProviderConfig* cfg,
     sb_appendf(body, "\"model\":\"%s\",", model);
     sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
     if (cfg->iMaxTokens > 0)
-        sb_appendf(body, "\"max_tokens\":%d,", cfg->iMaxTokens);
+        sb_appendf(body, "\"max_completion_tokens\":%d,", cfg->iMaxTokens);
     sb_append(body, "\"messages\":[", -1);
     for (int i = 0; i < count; i++)
     {

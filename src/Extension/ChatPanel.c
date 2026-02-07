@@ -34,37 +34,37 @@
 #define CHAT_SPLITTER_WIDTH     3
 #define CHAT_SEND_SIZE          28
 
-// Colors - Dark mode
-#define CLR_DK_SURFACE       RGB(25, 25, 25)
-#define CLR_DK_SURFACE2      RGB(30, 30, 30)
-#define CLR_DK_HEADER        RGB(20, 20, 20)
-#define CLR_DK_INPUT_BG      RGB(40, 40, 42)
-#define CLR_DK_INPUT_BORDER  RGB(60, 60, 65)
-#define CLR_DK_TEXT          RGB(220, 220, 220)
-#define CLR_DK_TEXT_DIM      RGB(140, 140, 145)
-#define CLR_DK_ACCENT        RGB(99, 102, 241)
-#define CLR_DK_USER_TEXT     RGB(165, 180, 252)
-#define CLR_DK_AI_TEXT       RGB(167, 243, 208)
-#define CLR_DK_SYSTEM_TEXT   RGB(100, 100, 110)
-#define CLR_DK_SPLITTER      RGB(45, 45, 50)
-#define CLR_DK_SEND_BG      RGB(99, 102, 241)
-#define CLR_DK_SEND_HOVER   RGB(129, 140, 248)
+// Colors - Dark mode (monochrome black & white)
+#define CLR_DK_SURFACE       RGB(13, 13, 13)
+#define CLR_DK_SURFACE2      RGB(20, 20, 20)
+#define CLR_DK_HEADER        RGB(18, 18, 18)
+#define CLR_DK_INPUT_BG      RGB(28, 28, 28)
+#define CLR_DK_INPUT_BORDER  RGB(55, 55, 55)
+#define CLR_DK_TEXT          RGB(230, 230, 230)
+#define CLR_DK_TEXT_DIM      RGB(110, 110, 110)
+#define CLR_DK_ACCENT        RGB(255, 255, 255)
+#define CLR_DK_USER_TEXT     RGB(255, 255, 255)
+#define CLR_DK_AI_TEXT       RGB(200, 200, 200)
+#define CLR_DK_SYSTEM_TEXT   RGB(80, 80, 80)
+#define CLR_DK_SPLITTER      RGB(40, 40, 40)
+#define CLR_DK_SEND_BG      RGB(230, 230, 230)
+#define CLR_DK_SEND_HOVER   RGB(255, 255, 255)
 
-// Colors - Light mode
+// Colors - Light mode (monochrome black & white)
 #define CLR_LT_SURFACE       RGB(255, 255, 255)
-#define CLR_LT_SURFACE2      RGB(249, 250, 251)
-#define CLR_LT_HEADER        RGB(248, 248, 252)
-#define CLR_LT_INPUT_BG      RGB(243, 244, 246)
-#define CLR_LT_INPUT_BORDER  RGB(209, 213, 219)
-#define CLR_LT_TEXT          RGB(17, 24, 39)
-#define CLR_LT_TEXT_DIM      RGB(107, 114, 128)
-#define CLR_LT_ACCENT        RGB(79, 70, 229)
-#define CLR_LT_USER_TEXT     RGB(67, 56, 202)
-#define CLR_LT_AI_TEXT       RGB(5, 150, 105)
-#define CLR_LT_SYSTEM_TEXT   RGB(156, 163, 175)
-#define CLR_LT_SPLITTER      RGB(229, 231, 235)
-#define CLR_LT_SEND_BG      RGB(79, 70, 229)
-#define CLR_LT_SEND_HOVER   RGB(99, 102, 241)
+#define CLR_LT_SURFACE2      RGB(248, 248, 248)
+#define CLR_LT_HEADER        RGB(250, 250, 250)
+#define CLR_LT_INPUT_BG      RGB(242, 242, 242)
+#define CLR_LT_INPUT_BORDER  RGB(200, 200, 200)
+#define CLR_LT_TEXT          RGB(15, 15, 15)
+#define CLR_LT_TEXT_DIM      RGB(120, 120, 120)
+#define CLR_LT_ACCENT        RGB(0, 0, 0)
+#define CLR_LT_USER_TEXT     RGB(0, 0, 0)
+#define CLR_LT_AI_TEXT       RGB(50, 50, 50)
+#define CLR_LT_SYSTEM_TEXT   RGB(160, 160, 160)
+#define CLR_LT_SPLITTER      RGB(220, 220, 220)
+#define CLR_LT_SEND_BG      RGB(20, 20, 20)
+#define CLR_LT_SEND_HOVER   RGB(0, 0, 0)
 
 //=============================================================================
 // Internal state
@@ -336,12 +336,12 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop, int editor
 
 void ChatPanel_AppendUserMessage(const char* pszMessage)
 {
-    AppendToOutput("\xE2\x96\xB6 You", pszMessage, 20);
+    AppendToOutput("You", pszMessage, 20);
 }
 
 void ChatPanel_AppendResponse(const char* pszResponse)
 {
-    AppendToOutput("\xE2\x9C\xA8 Biko", pszResponse, 21);
+    AppendToOutput("Biko", pszResponse, 21);
 }
 
 void ChatPanel_AppendSystem(const char* pszMessage)
@@ -608,7 +608,7 @@ static void DrawSendButton(HDC hdc, RECT rc, BOOL bHover, BOOL bDark)
 
     FillRoundRect(hdc, &rc, CHAT_SEND_SIZE, bgClr);
 
-    // Arrow icon
+    // Arrow icon - contrast against button bg
     int cx = (rc.left + rc.right) / 2;
     int cy = (rc.top + rc.bottom) / 2;
     int sz = 5;
@@ -619,8 +619,9 @@ static void DrawSendButton(HDC hdc, RECT rc, BOOL bHover, BOOL bDark)
         { cx - sz + 1, cy + sz }
     };
 
-    HBRUSH hBr = CreateSolidBrush(RGB(255, 255, 255));
-    HPEN hPen = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+    COLORREF arrowClr = bDark ? RGB(13, 13, 13) : RGB(255, 255, 255);
+    HBRUSH hBr = CreateSolidBrush(arrowClr);
+    HPEN hPen = CreatePen(PS_SOLID, 1, arrowClr);
     HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hBr);
     HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
     Polygon(hdc, pts, 3);
@@ -669,7 +670,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         // Header bottom line
         RECT rcLine = rcHeader;
         rcLine.top = rcLine.bottom - 1;
-        HBRUSH hLine = CreateSolidBrush(bDark ? RGB(50, 50, 55) : RGB(230, 230, 235));
+        HBRUSH hLine = CreateSolidBrush(bDark ? RGB(40, 40, 40) : RGB(220, 220, 220));
         FillRect(hdc, &rcLine, hLine);
         DeleteObject(hLine);
 
@@ -680,7 +681,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         RECT rcTitle = rcHeader;
         rcTitle.left += 14;
         rcTitle.right -= 40;
-        DrawTextW(hdc, L"\x2728 Biko AI", -1, &rcTitle, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+        DrawTextW(hdc, L"BIKO", -1, &rcTitle, DT_SINGLELINE | DT_VCENTER | DT_LEFT);
 
         // Input area background
         int outputBottom = CHAT_HEADER_HEIGHT;
@@ -701,7 +702,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
         // Input top border
         RECT rcIBorder = rcInputArea;
         rcIBorder.bottom = rcIBorder.top + 1;
-        HBRUSH hILine = CreateSolidBrush(bDark ? RGB(50, 50, 55) : RGB(230, 230, 235));
+        HBRUSH hILine = CreateSolidBrush(bDark ? RGB(40, 40, 40) : RGB(220, 220, 220));
         FillRect(hdc, &rcIBorder, hILine);
         DeleteObject(hILine);
 
