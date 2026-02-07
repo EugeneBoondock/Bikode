@@ -4,56 +4,268 @@
 * Biko
 *
 * WelcomeScreen.c
-*   Welcome Screen implementation.
-*   Draws a styled welcome page over the editor when empty.
+*   Premium welcome screen with logo, tagline, and action buttons.
+*   Fully owner-drawn for pixel-perfect rendering in dark and light modes.
 *
 ******************************************************************************/
 
 #include <windows.h>
 #include <commctrl.h>
-#include <uxtheme.h>
+#include <stdio.h>
 #include "WelcomeScreen.h"
 #include "DarkMode.h"
 #include "CommonUtils.h"
 #include "Terminal.h"
+#include "ChatPanel.h"
 #include "resource.h"
 
 // External references
 extern HWND hwndMain;
-extern WCHAR szCurFile[MAX_PATH + 40];
-void FileLoad(BOOL, BOOL, BOOL, BOOL, LPCWSTR);
 
-#ifndef BS_COMMANDLINK
-#define BS_COMMANDLINK      0x0000000E
-#define BS_DEFCOMMANDLINK   0x0000000F
-#endif
+//=============================================================================
+// Color palette
+//=============================================================================
 
-// Messages
-#define IDC_CMD_NEW     1001
-#define IDC_CMD_OPEN    1002
-#define IDC_CMD_CLONE   1003
+// Dark mode
+#define DK_BG           RGB(24, 24, 24)
+#define DK_SURFACE      RGB(36, 36, 36)
+#define DK_SURFACE_HOV  RGB(48, 50, 54)
+#define DK_BORDER       RGB(55, 55, 55)
+#define DK_BORDER_HOV   RGB(80, 120, 200)
+#define DK_TEXT1         RGB(230, 230, 230)
+#define DK_TEXT2         RGB(150, 150, 150)
+#define DK_MUTED        RGB(80, 80, 80)
+#define DK_ACCENT       RGB(75, 139, 245)
+#define DK_ACCENT_HOV   RGB(100, 160, 255)
+#define DK_BADGE_BG     RGB(42, 42, 42)
+#define DK_BADGE_BD     RGB(60, 60, 60)
+#define DK_DIVIDER      RGB(50, 50, 50)
+
+// Light mode
+#define LT_BG           RGB(248, 249, 251)
+#define LT_SURFACE      RGB(255, 255, 255)
+#define LT_SURFACE_HOV  RGB(237, 242, 252)
+#define LT_BORDER       RGB(215, 215, 215)
+#define LT_BORDER_HOV   RGB(70, 120, 210)
+#define LT_TEXT1         RGB(28, 28, 28)
+#define LT_TEXT2         RGB(100, 100, 100)
+#define LT_MUTED        RGB(165, 165, 165)
+#define LT_ACCENT       RGB(50, 110, 215)
+#define LT_ACCENT_HOV   RGB(30, 90, 195)
+#define LT_BADGE_BG     RGB(238, 238, 238)
+#define LT_BADGE_BD     RGB(210, 210, 210)
+#define LT_DIVIDER      RGB(228, 228, 228)
+
+//=============================================================================
+// Button definitions
+//=============================================================================
+
+#define IDC_BTN_NEW         2001
+#define IDC_BTN_OPEN        2002
+#define IDC_BTN_TERMINAL    2003
+#define IDC_BTN_CHAT        2004
+#define NUM_BUTTONS         4
+
+typedef struct {
+    int         id;
+    const WCHAR* label;
+    const WCHAR* description;
+    const WCHAR* shortcut;
+    RECT        rcBtn;
+    BOOL        bHover;
+} WelcomeButton;
+
+static WelcomeButton s_buttons[NUM_BUTTONS] = {
+    { IDC_BTN_NEW,      L"New File",           L"Create a new empty document",       L"Ctrl+N"  },
+    { IDC_BTN_OPEN,     L"Open File",          L"Open an existing file from disk",   L"Ctrl+O"  },
+    { IDC_BTN_TERMINAL, L"Terminal",            L"Open the integrated terminal",      L"Ctrl+`"  },
+    { IDC_BTN_CHAT,     L"Biko AI",            L"Chat with the AI assistant",        L""        },
+};
+
+//=============================================================================
+// State
+//=============================================================================
 
 static HWND     s_hwndWelcome = NULL;
-static HFONT    s_hFontLogo = NULL;
-static HFONT    s_hFontQuote = NULL;
-static HWND     s_hwndBtnNew = NULL;
-static HWND     s_hwndBtnOpen = NULL;
-static HWND     s_hwndBtnClone = NULL;
+static HICON    s_hLogo = NULL;
+static HFONT    s_hFontTitle = NULL;
+static HFONT    s_hFontTagline = NULL;
+static HFONT    s_hFontBtnLabel = NULL;
+static HFONT    s_hFontBtnDesc = NULL;
+static HFONT    s_hFontShortcut = NULL;
+static HFONT    s_hFontFooter = NULL;
+static int      s_iHoverBtn = -1;
+static BOOL     s_bClassRegistered = FALSE;
+
+//=============================================================================
+// Color helpers
+//=============================================================================
+
+#define C(dk, lt) (DarkMode_IsEnabled() ? (dk) : (lt))
+
+//=============================================================================
+// Fonts
+//=============================================================================
+
+static void EnsureFonts(void)
+{
+    if (s_hFontTitle) return;
+
+    s_hFontTitle = CreateFontW(-44, 0, 0, 0, FW_LIGHT, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI Light");
+    if (!s_hFontTitle)
+        s_hFontTitle = CreateFontW(-44, 0, 0, 0, FW_THIN, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+
+    s_hFontTagline = CreateFontW(-15, 0, 0, 0, FW_NORMAL, TRUE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+
+    s_hFontBtnLabel = CreateFontW(-14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI Semibold");
+    if (!s_hFontBtnLabel)
+        s_hFontBtnLabel = CreateFontW(-14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+
+    s_hFontBtnDesc = CreateFontW(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+
+    s_hFontShortcut = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Consolas");
+
+    s_hFontFooter = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+}
+
+static void DestroyFonts(void)
+{
+    if (s_hFontTitle)    { DeleteObject(s_hFontTitle);    s_hFontTitle = NULL; }
+    if (s_hFontTagline)  { DeleteObject(s_hFontTagline);  s_hFontTagline = NULL; }
+    if (s_hFontBtnLabel) { DeleteObject(s_hFontBtnLabel); s_hFontBtnLabel = NULL; }
+    if (s_hFontBtnDesc)  { DeleteObject(s_hFontBtnDesc);  s_hFontBtnDesc = NULL; }
+    if (s_hFontShortcut) { DeleteObject(s_hFontShortcut); s_hFontShortcut = NULL; }
+    if (s_hFontFooter)   { DeleteObject(s_hFontFooter);   s_hFontFooter = NULL; }
+}
+
+//=============================================================================
+// Drawing helpers
+//=============================================================================
+
+static void FillRoundRect(HDC hdc, const RECT* rc, int r, COLORREF fill, COLORREF border)
+{
+    HBRUSH hBr = CreateSolidBrush(fill);
+    HPEN   hPn = CreatePen(PS_SOLID, 1, border);
+    HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hBr);
+    HPEN   hOldPn = (HPEN)SelectObject(hdc, hPn);
+    RoundRect(hdc, rc->left, rc->top, rc->right, rc->bottom, r, r);
+    SelectObject(hdc, hOldBr);
+    SelectObject(hdc, hOldPn);
+    DeleteObject(hBr);
+    DeleteObject(hPn);
+}
+
+static void DrawButtonCard(HDC hdc, WelcomeButton* btn)
+{
+    BOOL h = btn->bHover;
+    COLORREF bg = h ? C(DK_SURFACE_HOV, LT_SURFACE_HOV) : C(DK_SURFACE, LT_SURFACE);
+    COLORREF bd = h ? C(DK_BORDER_HOV, LT_BORDER_HOV) : C(DK_BORDER, LT_BORDER);
+
+    // Card
+    FillRoundRect(hdc, &btn->rcBtn, 8, bg, bd);
+
+    // Left accent stripe on hover
+    if (h)
+    {
+        HBRUSH hAcc = CreateSolidBrush(C(DK_ACCENT, LT_ACCENT));
+        RECT rcStripe = { btn->rcBtn.left + 1, btn->rcBtn.top + 10,
+                          btn->rcBtn.left + 4, btn->rcBtn.bottom - 10 };
+        FillRect(hdc, &rcStripe, hAcc);
+        DeleteObject(hAcc);
+    }
+
+    int pad = 18;
+
+    // Label
+    HFONT hOld = (HFONT)SelectObject(hdc, s_hFontBtnLabel);
+    SetTextColor(hdc, h ? C(DK_ACCENT_HOV, LT_ACCENT_HOV) : C(DK_TEXT1, LT_TEXT1));
+    RECT rcL = { btn->rcBtn.left + pad, btn->rcBtn.top + 10,
+                 btn->rcBtn.right - 90, btn->rcBtn.top + 28 };
+    DrawTextW(hdc, btn->label, -1, &rcL, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    // Description
+    SelectObject(hdc, s_hFontBtnDesc);
+    SetTextColor(hdc, C(DK_TEXT2, LT_TEXT2));
+    RECT rcD = { btn->rcBtn.left + pad, btn->rcBtn.top + 30,
+                 btn->rcBtn.right - 90, btn->rcBtn.bottom - 6 };
+    DrawTextW(hdc, btn->description, -1, &rcD, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    // Shortcut badge
+    if (btn->shortcut[0])
+    {
+        SelectObject(hdc, s_hFontShortcut);
+        SIZE sz;
+        GetTextExtentPoint32W(hdc, btn->shortcut, (int)wcslen(btn->shortcut), &sz);
+        int bw = sz.cx + 14;
+        int bh = sz.cy + 6;
+        int bx = btn->rcBtn.right - bw - 14;
+        int by = btn->rcBtn.top + (btn->rcBtn.bottom - btn->rcBtn.top - bh) / 2;
+        RECT rcBadge = { bx, by, bx + bw, by + bh };
+        FillRoundRect(hdc, &rcBadge, 4, C(DK_BADGE_BG, LT_BADGE_BG), C(DK_BADGE_BD, LT_BADGE_BD));
+        SetTextColor(hdc, C(DK_MUTED, LT_MUTED));
+        DrawTextW(hdc, btn->shortcut, -1, &rcBadge, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+    }
+
+    SelectObject(hdc, hOld);
+}
+
+//=============================================================================
+// Layout
+//=============================================================================
+
+static void CalcLayout(int cx, int cy)
+{
+    int btnW = 360;
+    int btnH = 52;
+    int btnGap = 6;
+    if (btnW > cx - 60) btnW = cx - 60;
+
+    int logoH = 190;   // icon + title + tagline + divider
+    int cardsH = NUM_BUTTONS * (btnH + btnGap) - btnGap;
+    int gapBetween = 28;
+    int totalH = logoH + gapBetween + cardsH;
+
+    int startY = (cy - totalH) / 2;
+    if (startY < 30) startY = 30;
+
+    int cardsTop = startY + logoH + gapBetween;
+    int bx = (cx - btnW) / 2;
+
+    for (int i = 0; i < NUM_BUTTONS; i++)
+    {
+        s_buttons[i].rcBtn.left   = bx;
+        s_buttons[i].rcBtn.top    = cardsTop + i * (btnH + btnGap);
+        s_buttons[i].rcBtn.right  = bx + btnW;
+        s_buttons[i].rcBtn.bottom = s_buttons[i].rcBtn.top + btnH;
+    }
+}
+
+//=============================================================================
+// Window procedure
+//=============================================================================
 
 static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
     {
     case WM_ERASEBKGND:
-    {
-        HDC hdc = (HDC)wParam;
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-        HBRUSH hBr = CreateSolidBrush(DarkMode_IsEnabled() ? RGB(30,30,30) : RGB(255,255,255));
-        FillRect(hdc, &rc, hBr);
-        DeleteObject(hBr);
         return 1;
-    }
 
     case WM_PAINT:
     {
@@ -61,147 +273,192 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
+        int cx = rc.right, cy = rc.bottom;
 
-        // Fill background
-        HBRUSH hBr = DarkMode_IsEnabled() ? 
-            CreateSolidBrush(RGB(30,30,30)) : 
-            CreateSolidBrush(RGB(255,255,255));
-        FillRect(hdc, &rc, hBr);
-        DeleteObject(hBr);
+        // Double-buffer
+        HDC hm = CreateCompatibleDC(hdc);
+        HBITMAP hBmp = CreateCompatibleBitmap(hdc, cx, cy);
+        HBITMAP hOld = (HBITMAP)SelectObject(hm, hBmp);
 
-        // Draw Logo Text "Biko"
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, DarkMode_IsEnabled() ? RGB(220,220,220) : RGB(30,30,30));
-        
-        if (!s_hFontLogo) {
-            s_hFontLogo = CreateFontW(48, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, 
-                ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, 
-                CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        }
-        SelectObject(hdc, s_hFontLogo);
+        EnsureFonts();
 
-        RECT rcText = rc;
-        rcText.top = rc.top + 80;
-        rcText.bottom = rcText.top + 60;
-        DrawTextW(hdc, L"Biko", -1, &rcText, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+        // Background
+        HBRUSH hBg = CreateSolidBrush(C(DK_BG, LT_BG));
+        FillRect(hm, &rc, hBg);
+        DeleteObject(hBg);
 
-        // Draw Quote
-        SetTextColor(hdc, DarkMode_IsEnabled() ? RGB(160,160,160) : RGB(100,100,100));
-        if (!s_hFontQuote) {
-            s_hFontQuote = CreateFontW(20, 0, 0, 0, FW_NORMAL, TRUE, FALSE, FALSE, 
-                ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, 
-                CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        }
-        SelectObject(hdc, s_hFontQuote);
-        
-        rcText.top = rcText.bottom + 10;
-        rcText.bottom = rcText.top + 30;
-        DrawTextW(hdc, L"\"I write what I like\"", -1, &rcText, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+        SetBkMode(hm, TRANSPARENT);
 
-        EndPaint(hwnd, &ps);
-        return 0;
-    }
+        // Layout metrics
+        int btnW = 360;
+        if (btnW > cx - 60) btnW = cx - 60;
+        int logoH = 190;
+        int cardsH = NUM_BUTTONS * (52 + 6) - 6;
+        int totalH = logoH + 28 + cardsH;
+        int startY = (cy - totalH) / 2;
+        if (startY < 30) startY = 30;
+        int centerX = cx / 2;
 
-    case WM_COMMAND:
-    {
-        int id = LOWORD(wParam);
-        switch (id)
+        // --- Logo icon ---
+        if (s_hLogo)
         {
-        case IDC_CMD_NEW:
-            // Trigger "New File" logic (usually just clear editor)
-            // SendMessage(hwndMain, WM_COMMAND, IDT_FILE_NEW, 0); 
-            // Or just check if FileLoad is accessible
-            // We'll simulate IDT_FILE_NEW
-            PostMessage(hwndMain, WM_COMMAND, 40100 /* IDT_FILE_NEW from resource.h? Check! */, 0); 
-            // Actually, resource.h might have different ID. Let's use string command or find ID.
-            // IDT_FILE_NEW is usually 40100 -> check Notepade2.c commands.
-            // Safest: Hide welcome screen immediately
-            WelcomeScreen_Hide();
-            PostMessage(hwndMain, WM_COMMAND, 40100, 0); // Hope 40100 is correct, will check
-            break;
-
-        case IDC_CMD_OPEN:
-            WelcomeScreen_Hide(); // Hide first to reveal dialog
-            PostMessage(hwndMain, WM_COMMAND, 40101 /* IDT_FILE_OPEN */, 0);
-            break;
-
-        case IDC_CMD_CLONE:
-            // Open Terminal and run git clone
-            WelcomeScreen_Hide();
-            // Show terminal
-            // We need to trigger "View Terminal" command or call API
-            // Let's assume IDT_VIEW_TERMINAL exists or call Terminal_Toggle
-            // For now, post specific message?
-            // Or use Terminal_RunCommand directly if exposed?
-            // Terminal_Show(hwndMain); 
-            // We don't have Terminal_Show exposed directly here, let's try direct call if we include header
-            // But Terminal_RunCommand needs HWND.
-            // Let's postpone action until Terminal logic is verified.
-            MessageBoxW(hwnd, L"Git Clone: Please use the Terminal (Ctrl+`) to run git clone.", L"Biko", MB_OK);
-            break;
+            int iconSz = 72;
+            DrawIconEx(hm, centerX - iconSz / 2, startY + 16, s_hLogo,
+                       iconSz, iconSz, 0, NULL, DI_NORMAL);
         }
+
+        // --- Title ---
+        SelectObject(hm, s_hFontTitle);
+        SetTextColor(hm, C(DK_TEXT1, LT_TEXT1));
+        RECT rcT = { 0, startY + 96, cx, startY + 146 };
+        DrawTextW(hm, L"Biko", -1, &rcT, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+        // --- Tagline ---
+        SelectObject(hm, s_hFontTagline);
+        SetTextColor(hm, C(DK_TEXT2, LT_TEXT2));
+        RECT rcQ = { 0, startY + 148, cx, startY + 170 };
+        DrawTextW(hm, L"\x201C" L"I write what I like\x201D", -1, &rcQ,
+                  DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+        // --- Subtle divider ---
+        {
+            int dw = 50;
+            RECT rcDiv = { centerX - dw, startY + logoH - 6,
+                           centerX + dw, startY + logoH - 5 };
+            HBRUSH hDiv = CreateSolidBrush(C(DK_DIVIDER, LT_DIVIDER));
+            FillRect(hm, &rcDiv, hDiv);
+            DeleteObject(hDiv);
+        }
+
+        // --- Button cards ---
+        for (int i = 0; i < NUM_BUTTONS; i++)
+            DrawButtonCard(hm, &s_buttons[i]);
+
+        // --- Footer ---
+        SelectObject(hm, s_hFontFooter);
+        SetTextColor(hm, C(DK_MUTED, LT_MUTED));
+        RECT rcF = { 0, cy - 32, cx, cy - 12 };
+        DrawTextW(hm, L"Biko  \x2022  A text editor for those who write what they like",
+                  -1, &rcF, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+        // Blit
+        BitBlt(hdc, 0, 0, cx, cy, hm, 0, 0, SRCCOPY);
+        SelectObject(hm, hOld);
+        DeleteObject(hBmp);
+        DeleteDC(hm);
+        EndPaint(hwnd, &ps);
         return 0;
     }
 
     case WM_SIZE:
     {
-        int cx = LOWORD(lParam);
-        int cy = HIWORD(lParam);
-        
-        // Center buttons
-        int btnW = 250;
-        int btnH = 45;
-        int spacing = 10;
-        int totalH = (btnH * 3) + (spacing * 2);
-        int startY = cy / 2; // Start below logo
-        int startX = (cx - btnW) / 2;
-
-        if (s_hwndBtnNew)
-            MoveWindow(s_hwndBtnNew, startX, startY, btnW, btnH, TRUE);
-        
-        if (s_hwndBtnOpen)
-            MoveWindow(s_hwndBtnOpen, startX, startY + btnH + spacing, btnW, btnH, TRUE);
-
-        if (s_hwndBtnClone)
-            MoveWindow(s_hwndBtnClone, startX, startY + (btnH + spacing) * 2, btnW, btnH, TRUE);
-
+        CalcLayout(LOWORD(lParam), HIWORD(lParam));
+        InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     }
 
-    case WM_CTLCOLORBTN:
-    case WM_CTLCOLORSTATIC:
+    case WM_MOUSEMOVE:
     {
-        // Handle transparency for buttons?
-        // CommandLinks might handle themselves but let's see.
-        HDC hdc = (HDC)wParam;
-        SetBkMode(hdc, TRANSPARENT);
-        if (DarkMode_IsEnabled()) {
-            SetTextColor(hdc, RGB(220,220,220));
-            SetBkColor(hdc, RGB(30,30,30));
-            return (LRESULT)DarkMode_GetBackgroundBrush();
+        POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        int hit = -1;
+        for (int i = 0; i < NUM_BUTTONS; i++)
+        {
+            if (PtInRect(&s_buttons[i].rcBtn, pt)) { hit = i; break; }
         }
-        return (LRESULT)GetStockObject(WHITE_BRUSH);
+
+        if (hit != s_iHoverBtn)
+        {
+            if (s_iHoverBtn >= 0)
+            {
+                s_buttons[s_iHoverBtn].bHover = FALSE;
+                InvalidateRect(hwnd, &s_buttons[s_iHoverBtn].rcBtn, FALSE);
+            }
+            s_iHoverBtn = hit;
+            if (s_iHoverBtn >= 0)
+            {
+                s_buttons[s_iHoverBtn].bHover = TRUE;
+                InvalidateRect(hwnd, &s_buttons[s_iHoverBtn].rcBtn, FALSE);
+            }
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+            TrackMouseEvent(&tme);
+        }
+        return 0;
+    }
+
+    case WM_MOUSELEAVE:
+        if (s_iHoverBtn >= 0)
+        {
+            s_buttons[s_iHoverBtn].bHover = FALSE;
+            InvalidateRect(hwnd, &s_buttons[s_iHoverBtn].rcBtn, FALSE);
+            s_iHoverBtn = -1;
+        }
+        return 0;
+
+    case WM_SETCURSOR:
+        if (LOWORD(lParam) == HTCLIENT)
+        {
+            SetCursor(LoadCursor(NULL, s_iHoverBtn >= 0 ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+        break;
+
+    case WM_LBUTTONDOWN:
+    {
+        POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        for (int i = 0; i < NUM_BUTTONS; i++)
+        {
+            if (!PtInRect(&s_buttons[i].rcBtn, pt)) continue;
+            switch (s_buttons[i].id)
+            {
+            case IDC_BTN_NEW:
+                WelcomeScreen_Hide();
+                PostMessage(hwndMain, WM_COMMAND, IDM_FILE_NEW, 0);
+                break;
+            case IDC_BTN_OPEN:
+                WelcomeScreen_Hide();
+                PostMessage(hwndMain, WM_COMMAND, IDM_FILE_OPEN, 0);
+                break;
+            case IDC_BTN_TERMINAL:
+                WelcomeScreen_Hide();
+                Terminal_Toggle(hwndMain);
+                break;
+            case IDC_BTN_CHAT:
+                WelcomeScreen_Hide();
+                ChatPanel_Toggle(hwndMain);
+                break;
+            }
+            return 0;
+        }
+        return 0;
     }
 
     case WM_DESTROY:
-        if (s_hFontLogo) DeleteObject(s_hFontLogo);
-        if (s_hFontQuote) DeleteObject(s_hFontQuote);
-        s_hFontLogo = NULL;
-        s_hFontQuote = NULL;
+        DestroyFonts();
+        if (s_hLogo) { DestroyIcon(s_hLogo); s_hLogo = NULL; }
         break;
     }
+
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
+//=============================================================================
+// Public API
+//=============================================================================
+
 BOOL WelcomeScreen_Init(HWND hwndParent)
 {
-    WNDCLASSEX wc = {0};
+    (void)hwndParent;
+    if (s_bClassRegistered) return TRUE;
+
+    WNDCLASSEXW wc = { 0 };
     wc.cbSize = sizeof(wc);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WelcomeWndProc;
     wc.hInstance = GetModuleHandle(NULL);
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = L"BikoWelcomeScreen";
-    RegisterClassEx(&wc);
+    RegisterClassExW(&wc);
+    s_bClassRegistered = TRUE;
     return TRUE;
 }
 
@@ -210,48 +467,37 @@ void WelcomeScreen_Show(HWND hwndParent)
     if (s_hwndWelcome)
     {
         ShowWindow(s_hwndWelcome, SW_SHOW);
-        BringWindowToTop(s_hwndWelcome);
+        SetWindowPos(s_hwndWelcome, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        InvalidateRect(s_hwndWelcome, NULL, FALSE);
         return;
     }
+
+    // Load logo icon (white for dark mode, black for light mode)
+    HINSTANCE hInst = GetModuleHandle(NULL);
+    int logoRes = DarkMode_IsEnabled() ? IDR_MAINWND : IDI_BIKO_LIGHT;
+    s_hLogo = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(logoRes),
+                                IMAGE_ICON, 128, 128, LR_DEFAULTCOLOR);
 
     RECT rc;
     GetClientRect(hwndParent, &rc);
 
-    s_hwndWelcome = CreateWindowEx(
+    s_hwndWelcome = CreateWindowExW(
         0, L"BikoWelcomeScreen", L"",
         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
         0, 0, rc.right, rc.bottom,
-        hwndParent, NULL, GetModuleHandle(NULL), NULL);
+        hwndParent, NULL, hInst, NULL);
 
-    // Create Command Link Buttons
-    // Need ComCtl6 manifest for this style to work perfectly, but we'll try.
-    // Fallback to BS_PUSHBUTTON if needed, but BS_COMMANDLINK is cleaner.
-    
-    DWORD btnStyle = WS_CHILD | WS_VISIBLE | BS_COMMANDLINK;
-
-    s_hwndBtnNew = CreateWindowW(L"BUTTON", L"New File", btnStyle, 
-        0, 0, 0, 0, s_hwndWelcome, (HMENU)IDC_CMD_NEW, GetModuleHandle(NULL), NULL);
-    SendMessageW(s_hwndBtnNew, BCM_SETNOTE, 0, (LPARAM)L"Start a fresh file/project");
-
-    s_hwndBtnOpen = CreateWindowW(L"BUTTON", L"Open Folder...", btnStyle, 
-        0, 0, 0, 0, s_hwndWelcome, (HMENU)IDC_CMD_OPEN, GetModuleHandle(NULL), NULL);
-    SendMessageW(s_hwndBtnOpen, BCM_SETNOTE, 0, (LPARAM)L"Open an existing workspace");
-    
-    s_hwndBtnClone = CreateWindowW(L"BUTTON", L"Git Clone...", btnStyle, 
-        0, 0, 0, 0, s_hwndWelcome, (HMENU)IDC_CMD_CLONE, GetModuleHandle(NULL), NULL);
-    SendMessageW(s_hwndBtnClone, BCM_SETNOTE, 0, (LPARAM)L"Clone a repository from URL");
-
-    // Initial resize and bring to front (MsgSize will reposition editor frame on top of us)
-    SendMessage(s_hwndWelcome, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
-    SetWindowPos(s_hwndWelcome, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    if (s_hwndWelcome)
+    {
+        CalcLayout(rc.right, rc.bottom);
+        SetWindowPos(s_hwndWelcome, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+    }
 }
 
 void WelcomeScreen_Hide(void)
 {
     if (s_hwndWelcome)
-    {
         ShowWindow(s_hwndWelcome, SW_HIDE);
-    }
 }
 
 BOOL WelcomeScreen_IsVisible(void)
@@ -259,12 +505,20 @@ BOOL WelcomeScreen_IsVisible(void)
     return (s_hwndWelcome && IsWindowVisible(s_hwndWelcome));
 }
 
-
 void WelcomeScreen_OnResize(HWND hwndParent, int cx, int cy)
 {
+    (void)hwndParent;
     if (s_hwndWelcome && IsWindowVisible(s_hwndWelcome))
-    {
-        // Keep the welcome screen on top of the editor and covering the full client area
         SetWindowPos(s_hwndWelcome, HWND_TOP, 0, 0, cx, cy, 0);
+}
+
+void WelcomeScreen_Shutdown(void)
+{
+    if (s_hwndWelcome)
+    {
+        DestroyWindow(s_hwndWelcome);
+        s_hwndWelcome = NULL;
     }
+    DestroyFonts();
+    if (s_hLogo) { DestroyIcon(s_hLogo); s_hLogo = NULL; }
 }
