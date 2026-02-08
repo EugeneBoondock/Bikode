@@ -27,6 +27,12 @@ extern "C" {
 // Tool call display (lParam = heap-allocated char* tool info, receiver must free)
 #define WM_AI_AGENT_TOOL    (WM_USER + 0x702)
 
+// Open a file in the editor (lParam = heap-allocated WCHAR* file path, receiver must free)
+#define WM_AI_OPEN_FILE     (WM_USER + 0x703)
+
+// Insert text into the editor (lParam = heap-allocated char* UTF-8 text, receiver must free)
+#define WM_AI_INSERT_TEXT   (WM_USER + 0x704)
+
 //=============================================================================
 // Public API
 //=============================================================================
@@ -43,7 +49,8 @@ void AIAgent_Shutdown(void);
 // Returns FALSE if a request is already in progress.
 BOOL AIAgent_ChatAsync(const AIProviderConfig* pCfg,
                        const char* szUserMessage,
-                       HWND hwndTarget);
+                       HWND hwndTarget,
+                       HWND hwndMainWnd);
 
 // Clear conversation history (start fresh context).
 void AIAgent_ClearHistory(void);

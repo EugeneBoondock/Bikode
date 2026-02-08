@@ -55,6 +55,7 @@
 #include "Extension/ViewHelper.h"
 #include "Extension/AICommands.h"
 #include "Extension/AIBridge.h"
+#include "Extension/AIAgent.h"
 #include "Extension/ChatPanel.h"
 #include "Extension/DarkMode.h"
 #include "Extension/Terminal.h"
@@ -1611,6 +1612,32 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
     case WM_AI_DISCONNECTED:
     case WM_AI_CHUNK:
       return AICommands_HandleMessage(hwnd, umsg, wParam, lParam);
+
+    // [biko]: AI agent file/editor tool messages
+    case WM_AI_OPEN_FILE:
+      {
+        LPCWSTR wszFile = (LPCWSTR)lParam;
+        if (wszFile) {
+          FileLoad(TRUE, FALSE, FALSE, FALSE, wszFile);
+          free((void*)wszFile);
+        }
+      }
+      return 0;
+
+    case WM_AI_INSERT_TEXT:
+      {
+        char* pszText = (char*)lParam;
+        if (pszText) {
+          SendMessage(hwndEdit, SCI_BEGINUNDOACTION, 0, 0);
+          int pos = (int)SendMessage(hwndEdit, SCI_GETCURRENTPOS, 0, 0);
+          SendMessage(hwndEdit, SCI_INSERTTEXT, pos, (LPARAM)pszText);
+          int newPos = pos + (int)strlen(pszText);
+          SendMessage(hwndEdit, SCI_GOTOPOS, newPos, 0);
+          SendMessage(hwndEdit, SCI_ENDUNDOACTION, 0, 0);
+          free(pszText);
+        }
+      }
+      return 0;
 
     case WM_USER + 0x600:
       // Deferred init — all windows are now ready

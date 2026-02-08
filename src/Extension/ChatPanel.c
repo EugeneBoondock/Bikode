@@ -907,7 +907,8 @@ void ChatPanel_SendInput(void)
         const AIProviderConfig* pCfg = AIBridge_GetProviderConfig();
         if (pCfg && pCfg->szApiKey[0]) {
             ChatPanel_AppendSystem("Thinking\xe2\x80\xa6");
-            if (!AIAgent_ChatAsync(pCfg, utf8, s_hwndPanel))
+            HWND hwndMainWnd = GetParent(s_hwndPanel);
+            if (!AIAgent_ChatAsync(pCfg, utf8, s_hwndPanel, hwndMainWnd))
                 ChatPanel_AppendSystem("AI is busy. Please wait.");
         } else {
             ChatPanel_AppendSystem("No API key. Use Biko \xe2\x86\x92 AI Settings.");

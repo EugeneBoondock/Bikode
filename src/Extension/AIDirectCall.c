@@ -112,13 +112,27 @@ static const char* json_find_value(const char* json, const char* key)
 {
     char needle[256];
     snprintf(needle, sizeof(needle), "\"%s\"", key);
-    const char* p = strstr(json, needle);
-    if (!p) return NULL;
-    p += strlen(needle);
-    while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-    if (*p == ':') p++;
-    while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-    return p;
+    int needleLen = (int)strlen(needle);
+
+    const char* p = json;
+    while ((p = strstr(p, needle)) != NULL)
+    {
+        const char* afterKey = p + needleLen;
+        // Skip whitespace
+        while (*afterKey && (*afterKey == ' ' || *afterKey == '\t' ||
+               *afterKey == '\n' || *afterKey == '\r')) afterKey++;
+        // A JSON key MUST be followed by ':'
+        if (*afterKey == ':')
+        {
+            afterKey++; // skip ':'
+            while (*afterKey && (*afterKey == ' ' || *afterKey == '\t' ||
+                   *afterKey == '\n' || *afterKey == '\r')) afterKey++;
+            return afterKey;
+        }
+        // Not a key (it's a value) — keep searching
+        p += needleLen;
+    }
+    return NULL;
 }
 
 static int hex_digit(char c)
@@ -154,7 +168,30 @@ static int decode_unicode_escape(const char* p, char* out)
 static char* json_extract_string(const char* json, const char* key)
 {
     const char* val = json_find_value(json, key);
-    if (!val || *val != '"') return NULL;
+    if (!val) return NULL;
+
+    // Handle null value: return NULL to signal "key found but no string"
+    if (strncmp(val, "null", 4) == 0) return NULL;
+
+    // Handle array value: search inside for a "text" or string element
+    if (*val == '[')
+    {
+        // Try to find a string inside the array (first element if it's a string)
+        const char* p = val + 1;
+        while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
+        if (*p == '"')
+        {
+            // Array of strings - extract first element
+            val = p;
+            // fall through to string extraction below
+        }
+        else
+        {
+            return NULL; // array of non-strings, let caller handle
+        }
+    }
+
+    if (*val != '"') return NULL;
     val++;
 
     StrBuf sb;
@@ -369,23 +406,102 @@ static void BuildAuthHeaders(HINTERNET hRequest, const AIProviderConfig* cfg,
 
 static char* ParseResponse_OpenAI(const char* respJson)
 {
+    // Try: choices[0].message.content
     char* content = json_extract_nested_content(respJson, "choices", "content");
     if (content && content[0]) return content;
     if (content) free(content);
+
+    // Try: choices[0].message via nested lookup with explicit path
+    const char* choices = json_find_value(respJson, "choices");
+    if (choices)
+    {
+        const char* message = json_find_value(choices, "message");
+        if (message)
+        {
+            content = json_extract_string(message, "content");
+            if (content && content[0]) return content;
+            if (content) free(content);
+
+            // If content is null, check for "refusal" field
+            content = json_extract_string(message, "refusal");
+            if (content && content[0])
+            {
+                char* full = (char*)malloc(strlen(content) + 32);
+                if (full)
+                {
+                    sprintf(full, "Model refused: %s", content);
+                    free(content);
+                    return full;
+                }
+                return content;
+            }
+            if (content) free(content);
+        }
+
+        // Try direct content from choices array
+        content = json_extract_string(choices, "content");
+        if (content && content[0]) return content;
+        if (content) free(content);
+
+        // Try text field (some OpenAI-compatible providers)
+        content = json_extract_string(choices, "text");
+        if (content && content[0]) return content;
+        if (content) free(content);
+    }
+
+    // Fallback: any "content" field at top level
     content = json_extract_string(respJson, "content");
     if (content && content[0]) return content;
     if (content) free(content);
+
+    // Fallback: "result" field (some proxy APIs)
+    content = json_extract_string(respJson, "result");
+    if (content && content[0]) return content;
+    if (content) free(content);
+
     return NULL;
 }
 
 static char* ParseResponse_Anthropic(const char* respJson)
 {
+    // Anthropic format: {"content":[{"type":"text","text":"response"}], ...}
+    // The content field is an ARRAY of content blocks
+
+    const char* contentVal = json_find_value(respJson, "content");
+    if (contentVal)
+    {
+        // If content is an array, look inside for text blocks
+        if (*contentVal == '[')
+        {
+            // Search for "text" key within the array (not "type":"text" value)
+            char* text = json_extract_string(contentVal, "text");
+            if (text && text[0]) return text;
+            if (text) free(text);
+        }
+        // If content is a string directly (some compatible APIs)
+        else if (*contentVal == '"')
+        {
+            char* text = json_extract_string(respJson, "content");
+            if (text && text[0]) return text;
+            if (text) free(text);
+        }
+    }
+
+    // Fallback: nested lookup
     char* text = json_extract_nested_content(respJson, "content", "text");
     if (text && text[0]) return text;
     if (text) free(text);
+
+    // Fallback: direct "text" field
     text = json_extract_string(respJson, "text");
     if (text && text[0]) return text;
     if (text) free(text);
+
+    // Fallback: "completion" field (older Anthropic API)
+    text = json_extract_string(respJson, "completion");
+    if (text && text[0]) return text;
+    if (text) free(text);
+
     return NULL;
 }
 
@@ -429,6 +545,9 @@ static char* ParseResponse_Cohere(const char* respJson)
 
 static char* ParseLLMResponse(const char* respJson, EAIRequestFormat fmt)
 {
+    if (!respJson || !respJson[0])
+        return _strdup("Error: Empty response body from API");
+
     char* result = NULL;
     switch (fmt)
     {
@@ -441,6 +560,20 @@ static char* ParseLLMResponse(const char* respJson, EAIRequestFormat fmt)
 
     if (result) return result;
 
+    // Universal fallback: try all common response field names
+    result = json_extract_string(respJson, "content");
+    if (result && result[0]) return result;
+    if (result) free(result);
+    result = json_extract_string(respJson, "text");
+    if (result && result[0]) return result;
+    if (result) free(result);
+    result = json_extract_string(respJson, "response");
+    if (result && result[0]) return result;
+    if (result) free(result);
+    result = json_extract_string(respJson, "output");
+    if (result && result[0]) return result;
+    if (result) free(result);
+
     // Check for error in response
     char* errMsg = json_extract_string(respJson, "message");
     if (!errMsg) errMsg = json_extract_string(respJson, "error");
@@ -450,6 +583,37 @@ static char* ParseLLMResponse(const char* respJson, EAIRequestFormat fmt)
         if (full) sprintf(full, "API Error: %s", errMsg);
         free(errMsg);
         return full ? full : _strdup("Error: API returned an error");
+    }
+
+    // Dump raw response to temp file for debugging
+    {
+        char tmpPath[MAX_PATH];
+        if (GetTempPathA(MAX_PATH, tmpPath))
+        {
+            strcat(tmpPath, "biko_api_debug.json");
+            HANDLE hDbg = CreateFileA(tmpPath, GENERIC_WRITE, 0, NULL,
+                                       CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (hDbg != INVALID_HANDLE_VALUE)
+            {
+                DWORD written;
+                WriteFile(hDbg, respJson, (DWORD)strlen(respJson), &written, NULL);
+                CloseHandle(hDbg);
+            }
+        }
+    }
+
+    // Include a snippet of the raw response in the error message
+    int respLen = (int)strlen(respJson);
+    int snippetLen = respLen < 300 ? respLen : 300;
+    char* errBuf = (char*)malloc(snippetLen + 128);
+    if (errBuf)
+    {
+        snprintf(errBuf, snippetLen + 128,
+                 "Error: Could not parse API response (fmt=%d, len=%d). "
+                 "Raw: %.300s%s",
+                 (int)fmt, respLen, respJson,
+                 respLen > 300 ? "..." : "");
+        return errBuf;
     }
 
     return _strdup("Error: Could not parse API response");

@@ -92,13 +92,27 @@ static const char* json_find_value_a(const char* json, const char* key)
 {
     char needle[256];
     snprintf(needle, sizeof(needle), "\"%s\"", key);
-    const char* p = strstr(json, needle);
-    if (!p) return NULL;
-    p += strlen(needle);
-    while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-    if (*p == ':') p++;
-    while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) p++;
-    return p;
+    int needleLen = (int)strlen(needle);
+
+    const char* p = json;
+    while ((p = strstr(p, needle)) != NULL)
+    {
+        const char* afterKey = p + needleLen;
+        // Skip whitespace
+        while (*afterKey && (*afterKey == ' ' || *afterKey == '\t' ||
+               *afterKey == '\n' || *afterKey == '\r')) afterKey++;
+        // A JSON key MUST be followed by ':'
+        if (*afterKey == ':')
+        {
+            afterKey++;
+            while (*afterKey && (*afterKey == ' ' || *afterKey == '\t' ||
+                   *afterKey == '\n' || *afterKey == '\r')) afterKey++;
+            return afterKey;
+        }
+        // Not a key (it's a value) — keep searching
+        p += needleLen;
+    }
+    return NULL;
 }
 
 static int hex_digit_a(char c)
@@ -255,6 +269,12 @@ static char* BuildSystemPrompt(void)
         "Parameters: name, path, old_text, new_text\n"
         "Example: {\"name\": \"replace_in_file\", \"path\": \"main.c\", "
         "\"old_text\": \"return 0;\", \"new_text\": \"return EXIT_SUCCESS;\"}\n\n"
+        "### insert_in_editor\n"
+        "Insert or replace text in the currently open editor buffer. "
+        "This modifies the active document the user has open.\n"
+        "Parameters: name, content\n"
+        "Example: {\"name\": \"insert_in_editor\", "
+        "\"content\": \"Hello World\"}\n\n"
         "### run_command\n"
         "Execute a shell command and return its output.\n"
         "Parameters: name, command\n"
@@ -266,6 +286,9 @@ static char* BuildSystemPrompt(void)
         "## Guidelines\n"
         "- Read files before modifying them to understand their current content.\n"
         "- Use replace_in_file for targeted edits; use write_file for creating new files.\n"
+        "- When creating files, always use write_file with the full content. "
+        "After writing, the file will automatically be opened in the editor.\n"
+        "- Use insert_in_editor to put content directly into the user's active editor.\n"
         "- Include enough context in old_text to uniquely identify the replacement location.\n"
         "- All JSON strings must use proper escaping (\\n for newlines, \\\" for quotes, \\\\ for backslash).\n"
         "- When your answer is complete (no more tools needed), respond with plain text only.\n", -1);
@@ -396,6 +419,9 @@ static void EnsureParentDirExists(const char* filePath)
 // Tool execution
 //=============================================================================
 
+// Main window HWND for tools that need UI interaction (set per agent run)
+static HWND s_hwndMainForTools = NULL;
+
 static char* Tool_ReadFile(const char* path)
 {
     if (!path || !path[0])
@@ -474,6 +500,18 @@ static char* Tool_WriteFile(const char* path, const char* content)
     DWORD written;
     WriteFile(hFile, content, len, &written, NULL);
     CloseHandle(hFile);
+
+    // Open the file in the editor (on UI thread)
+    if (s_hwndMainForTools)
+    {
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
+        WCHAR* wszPath = (WCHAR*)malloc(wlen * sizeof(WCHAR));
+        if (wszPath)
+        {
+            MultiByteToWideChar(CP_UTF8, 0, path, -1, wszPath, wlen);
+            PostMessage(s_hwndMainForTools, WM_AI_OPEN_FILE, 0, (LPARAM)wszPath);
+        }
+    }
 
     char msg[512];
     snprintf(msg, sizeof(msg), "Successfully wrote %lu bytes to '%s'", written, path);
@@ -711,6 +749,25 @@ static char* Tool_ListDir(const char* path)
     return sb.data;
 }
 
+static char* Tool_InsertInEditor(const char* content)
+{
+    if (!content || !content[0])
+        return _strdup("Error: No content specified");
+
+    if (!s_hwndMainForTools)
+        return _strdup("Error: No main window available");
+
+    // Post the text to the UI thread for insertion into the active editor
+    char* textCopy = _strdup(content);
+    if (textCopy)
+        PostMessage(s_hwndMainForTools, WM_AI_INSERT_TEXT, 0, (LPARAM)textCopy);
+
+    int len = (int)strlen(content);
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Successfully inserted %d bytes into the editor", len);
+    return _strdup(msg);
+}
+
 // Dispatch a single tool call
 static char* ExecuteTool(const ToolCall* tc)
 {
@@ -720,6 +777,8 @@ static char* ExecuteTool(const ToolCall* tc)
         return Tool_WriteFile(tc->path, tc->content);
     if (strcmp(tc->name, "replace_in_file") == 0)
         return Tool_ReplaceInFile(tc->path, tc->oldText, tc->newText);
+    if (strcmp(tc->name, "insert_in_editor") == 0)
+        return Tool_InsertInEditor(tc->content);
     if (strcmp(tc->name, "run_command") == 0)
         return Tool_RunCommand(tc->command);
     if (strcmp(tc->name, "list_dir") == 0)
@@ -768,11 +827,15 @@ typedef struct {
     AIProviderConfig cfg;
     char*   szUserMessage;
     HWND    hwndTarget;
+    HWND    hwndMainWnd;
 } AgentParams;
 
 static unsigned __stdcall AgentThreadProc(void* pArg)
 {
     AgentParams* p = (AgentParams*)pArg;
+
+    // Set main window handle for tools that need UI interaction
+    s_hwndMainForTools = p->hwndMainWnd;
 
     // Build system prompt
     char* systemPrompt = BuildSystemPrompt();
@@ -967,7 +1030,8 @@ void AIAgent_Shutdown(void)
 
 BOOL AIAgent_ChatAsync(const AIProviderConfig* pCfg,
                        const char* szUserMessage,
-                       HWND hwndTarget)
+                       HWND hwndTarget,
+                       HWND hwndMainWnd)
 {
     if (!s_bInitialized) AIAgent_Init();
 
@@ -981,6 +1045,7 @@ BOOL AIAgent_ChatAsync(const AIProviderConfig* pCfg,
     memcpy(&p->cfg, pCfg, sizeof(AIProviderConfig));
     p->szUserMessage = _strdup(szUserMessage ? szUserMessage : "");
     p->hwndTarget = hwndTarget;
+    p->hwndMainWnd = hwndMainWnd;
 
     HANDLE hThread = (HANDLE)_beginthreadex(NULL, 0, AgentThreadProc, p, 0, NULL);
     if (!hThread)
