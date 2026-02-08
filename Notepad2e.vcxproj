@@ -483,6 +483,7 @@
     <ClCompile Include="src\Extension\PatchUndo.c" />
     <ClCompile Include="src\Extension\ChatPanel.c" />
     <ClCompile Include="src\Extension\BikoToolbar.c" />
+    <ClCompile Include="src\Extension\BikoMenuBar.c" />
     <ClCompile Include="src\Extension\DarkMode.c" />
     <ClCompile Include="src\Extension\GitUI.c" />
     <ClCompile Include="src\Extension\Terminal.c" />
@@ -637,6 +638,7 @@
     <ClInclude Include="src\Extension\PatchUndo.h" />
     <ClInclude Include="src\Extension\ChatPanel.h" />
     <ClInclude Include="src\Extension\BikoToolbar.h" />
+    <ClInclude Include="src\Extension\BikoMenuBar.h" />
     <ClInclude Include="src\Extension\DarkMode.h" />
     <ClInclude Include="src\Extension\GitUI.h" />
     <ClInclude Include="src\Extension\Terminal.h" />

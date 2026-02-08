@@ -61,6 +61,7 @@
 #include "Extension/MarkdownPreview.h"
 #include "Extension/WelcomeScreen.h"
 #include "Extension/BikoToolbar.h"
+#include "Extension/BikoMenuBar.h"
 
 
 
@@ -918,6 +919,9 @@ void ExitInstance(HINSTANCE hInstance)
 }
 // [/2e]
 
+// Forward declarations for MsgXXX handlers used before their definition
+void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam);
+
 //=============================================================================
 //
 //  MainWndProc()
@@ -1081,7 +1085,8 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
         // call SaveSettings() when hwndToolbar is still valid
         SaveSettings(FALSE);
 
-        // [biko]: Shutdown AI subsystem
+        // [biko]: Shutdown AI subsystem and custom menu bar
+        BikoMenuBar_Destroy();
         AICommands_Shutdown();
         // [/biko]
 
@@ -1459,8 +1464,14 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
           }
 
         // [2e]: Prevent Alt keypress from leaving the text area #399
+    // [biko]: Route SC_KEYMENU through custom menu bar
         case SC_KEYMENU:
+        {
+            LRESULT lr = 0;
+            if (BikoMenuBar_HandleParentMessage(hwnd, WM_SYSCOMMAND, wParam, lParam, &lr))
+              return lr;
             return (0);
+        }
 
         // [2e]: Edit Mode hint not hidden on window resize/move #349
         case SC_MOVE:
@@ -1599,7 +1610,21 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
       return AICommands_HandleMessage(hwnd, umsg, wParam, lParam);
 
     case WM_USER + 0x600:
-      // Deferred dark mode init — all windows are now ready
+      // Deferred init — all windows are now ready
+      // [biko]: Create custom menu bar (must be deferred; SetMenu(NULL) during
+      //         WM_CREATE triggers premature size recalculation)
+      {
+        HMENU hm = GetMenu(hwnd);
+        if (hm) {
+          BikoMenuBar_Create(hwnd, g_hInstance, hm);
+          // Force layout recalculation now that menu bar exists
+          RECT rc;
+          GetClientRect(hwnd, &rc);
+          MsgSize(hwnd, SIZE_RESTORED,
+                  MAKELPARAM(rc.right, rc.bottom));
+        }
+      }
+      // [/biko]
       if (DarkMode_IsEnabled())
       {
           DarkMode_ApplyAll(hwnd, _hwndEdit, hwndToolbar, hwndStatus, hwndReBar);
@@ -1637,6 +1662,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
 
           // Refresh custom toolbar
           BikoToolbar_ApplyDarkMode();
+          BikoMenuBar_ApplyDarkMode();
       }
       return 0;
     // [/biko]
@@ -1872,7 +1898,7 @@ LRESULT MsgCreate(HWND hwnd, WPARAM wParam, LPARAM lParam)
   // [biko]: Initialize AI subsystem
   AICommands_Init(hwnd, _hwndEdit);
   AICommands_CreateMenu(GetMenu(hwnd));
-  // Defer dark mode application to after WM_CREATE completes
+  // Defer dark mode + menu bar creation to after WM_CREATE completes
   PostMessage(hwnd, WM_USER + 0x600, 0, 0);
   // [/biko]
 
@@ -2156,14 +2182,26 @@ void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam)
   cx = LOWORD(lParam);
   cy = HIWORD(lParam);
 
+  // [biko]: Layout custom menu bar
+  {
+    int mbH = BikoMenuBar_GetHeight();
+    if (BikoMenuBar_GetHwnd())
+    {
+      SetWindowPos(BikoMenuBar_GetHwnd(), NULL, 0, y, cx, mbH, SWP_NOZORDER);
+      y += mbH;
+      cy -= mbH;
+    }
+  }
+  // [/biko]
+
   if (bShowToolbar)
   {
     // [biko]: Use custom toolbar instead of rebar
     int tbH = BikoToolbar_GetHeight();
     if (BikoToolbar_GetHwnd())
     {
-      SetWindowPos(BikoToolbar_GetHwnd(), NULL, 0, 0, cx, tbH, SWP_NOZORDER);
-      y = tbH;
+      SetWindowPos(BikoToolbar_GetHwnd(), NULL, 0, y, cx, tbH, SWP_NOZORDER);
+      y += tbH;
       cy -= tbH;
     }
     else
