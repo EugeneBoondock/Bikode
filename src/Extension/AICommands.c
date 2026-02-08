@@ -258,73 +258,88 @@ BOOL AICommands_HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
 void AICommands_CreateMenu(HMENU hMainMenu)
 {
-    s_hAIMenu = CreatePopupMenu();
+    if (!hMainMenu) return;
 
-    AppendMenuW(s_hAIMenu, MF_STRING, IDM_AI_TRANSFORM,
-                L"Transform...\tCtrl+Shift+T");
-    AppendMenuW(s_hAIMenu, MF_STRING, IDM_AI_REFACTOR,
-                L"Refactor\tCtrl+Shift+R");
-    AppendMenuW(s_hAIMenu, MF_STRING, IDM_AI_EXPLAIN,
-                L"Explain\tCtrl+Shift+E");
-    AppendMenuW(s_hAIMenu, MF_STRING, IDM_AI_FIX,
-                L"Fix\tCtrl+Shift+F");
-    AppendMenuW(s_hAIMenu, MF_SEPARATOR, 0, NULL);
-
-    AppendMenuW(s_hAIMenu, MF_STRING, IDM_AI_TOGGLE_CHAT,
-                L"Toggle Chat Panel\tCtrl+Shift+C");
-    AppendMenuW(s_hAIMenu, MF_SEPARATOR, 0, NULL);
-
-    // View submenu items
-    AppendMenuW(s_hAIMenu, MF_STRING, IDM_VIEW_DARKMODE,
-                L"Dark Mode\tCtrl+Shift+D");
-    AppendMenuW(s_hAIMenu, MF_STRING, IDM_TERMINAL_TOGGLE,
-                L"Toggle Terminal\tCtrl+`");
-    AppendMenuW(s_hAIMenu, MF_STRING, IDM_MARKDOWN_PREVIEW,
-                L"Markdown Preview\tCtrl+Shift+M");
-    AppendMenuW(s_hAIMenu, MF_SEPARATOR, 0, NULL);
-
-    // Git submenu
-    HMENU hGitMenu = CreatePopupMenu();
-    AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_STATUS, L"Status");
-    AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_DIFF, L"Diff");
-    AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_COMMIT, L"Commit...");
-    AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_LOG, L"Log");
-    AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_TOGGLE_PANEL, L"Toggle Git Panel");
-    AppendMenuW(s_hAIMenu, MF_POPUP, (UINT_PTR)hGitMenu, L"Git");
-    AppendMenuW(s_hAIMenu, MF_SEPARATOR, 0, NULL);
-
-    AppendMenuW(s_hAIMenu, MF_STRING, IDM_AI_SETTINGS, L"AI Settings...");
-    AppendMenuW(s_hAIMenu, MF_STRING, IDM_AI_RESTART_ENGINE, L"Restart AI Engine");
-
-    // Insert before Help menu (usually last)
+    // ── Get existing top-level submenus by position ──
+    // File=0, Edit=1, View=2, Settings=3, ?=4
     int menuCount = GetMenuItemCount(hMainMenu);
-    InsertMenuW(hMainMenu, menuCount - 1, MF_BYPOSITION | MF_POPUP,
-                (UINT_PTR)s_hAIMenu, L"&Biko");
+    HMENU hEdit     = (menuCount > 1) ? GetSubMenu(hMainMenu, 1) : NULL;
+    HMENU hView     = (menuCount > 2) ? GetSubMenu(hMainMenu, 2) : NULL;
+    HMENU hSettings = (menuCount > 3) ? GetSubMenu(hMainMenu, 3) : NULL;
+
+    // ── Edit menu: AI actions on selection ──
+    if (hEdit)
+    {
+        AppendMenuW(hEdit, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hEdit, MF_STRING, IDM_AI_TRANSFORM,
+                    L"AI Transform...\tCtrl+Shift+T");
+        AppendMenuW(hEdit, MF_STRING, IDM_AI_REFACTOR,
+                    L"AI Refactor\tCtrl+Shift+R");
+        AppendMenuW(hEdit, MF_STRING, IDM_AI_EXPLAIN,
+                    L"AI Explain\tCtrl+Shift+E");
+        AppendMenuW(hEdit, MF_STRING, IDM_AI_FIX,
+                    L"AI Fix\tCtrl+Shift+F");
+    }
+
+    // ── View menu: panels & visual toggles ──
+    if (hView)
+    {
+        AppendMenuW(hView, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hView, MF_STRING, IDM_AI_TOGGLE_CHAT,
+                    L"Chat Panel\tCtrl+Shift+C");
+        AppendMenuW(hView, MF_STRING, IDM_TERMINAL_TOGGLE,
+                    L"Terminal\tCtrl+`");
+        AppendMenuW(hView, MF_STRING, IDM_MARKDOWN_PREVIEW,
+                    L"Markdown Preview\tCtrl+Shift+M");
+        AppendMenuW(hView, MF_STRING, IDM_VIEW_DARKMODE,
+                    L"Dark Mode\tCtrl+Shift+D");
+
+        // Git submenu under View
+        HMENU hGitMenu = CreatePopupMenu();
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_STATUS, L"Status");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_DIFF, L"Diff");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_COMMIT, L"Commit...");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_LOG, L"Log");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_TOGGLE_PANEL, L"Toggle Git Panel");
+        AppendMenuW(hView, MF_POPUP, (UINT_PTR)hGitMenu, L"Git");
+    }
+
+    // ── Settings menu: AI configuration ──
+    if (hSettings)
+    {
+        AppendMenuW(hSettings, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hSettings, MF_STRING, IDM_AI_SETTINGS, L"AI Settings...");
+        AppendMenuW(hSettings, MF_STRING, IDM_AI_RESTART_ENGINE, L"Restart AI Engine");
+    }
+
+    // Keep a reference for UpdateMenu (use the View menu for dark mode checkmark)
+    s_hAIMenu = hView;
 
     DrawMenuBar(s_hwndMain);
 }
 
 void AICommands_UpdateMenu(HMENU hMainMenu)
 {
-    UNREFERENCED_PARAMETER(hMainMenu);
-    if (!s_hAIMenu) return;
+    if (!hMainMenu) return;
 
     BOOL bConnected = AIBridge_IsConnected();
     BOOL bPreviewing = DiffPreview_IsActive();
 
     UINT aiState = bConnected ? MF_ENABLED : MF_GRAYED;
-    EnableMenuItem(s_hAIMenu, IDM_AI_TRANSFORM, aiState);
-    EnableMenuItem(s_hAIMenu, IDM_AI_REFACTOR, aiState);
-    EnableMenuItem(s_hAIMenu, IDM_AI_EXPLAIN, aiState);
-    EnableMenuItem(s_hAIMenu, IDM_AI_FIX, aiState);
+
+    // AI actions live in Edit menu now — use EnableMenuItem on the main menu
+    EnableMenuItem(hMainMenu, IDM_AI_TRANSFORM, MF_BYCOMMAND | aiState);
+    EnableMenuItem(hMainMenu, IDM_AI_REFACTOR, MF_BYCOMMAND | aiState);
+    EnableMenuItem(hMainMenu, IDM_AI_EXPLAIN, MF_BYCOMMAND | aiState);
+    EnableMenuItem(hMainMenu, IDM_AI_FIX, MF_BYCOMMAND | aiState);
 
     UINT patchState = bPreviewing ? MF_ENABLED : MF_GRAYED;
-    EnableMenuItem(s_hAIMenu, IDM_AI_APPLY_PATCH, patchState);
-    EnableMenuItem(s_hAIMenu, IDM_AI_REJECT_PATCH, patchState);
+    EnableMenuItem(hMainMenu, IDM_AI_APPLY_PATCH, MF_BYCOMMAND | patchState);
+    EnableMenuItem(hMainMenu, IDM_AI_REJECT_PATCH, MF_BYCOMMAND | patchState);
 
-    // Dark mode checkmark
-    CheckMenuItem(s_hAIMenu, IDM_VIEW_DARKMODE,
-                  DarkMode_IsEnabled() ? MF_CHECKED : MF_UNCHECKED);
+    // Dark mode checkmark (lives in View menu)
+    CheckMenuItem(hMainMenu, IDM_VIEW_DARKMODE,
+                  MF_BYCOMMAND | (DarkMode_IsEnabled() ? MF_CHECKED : MF_UNCHECKED));
 }
 
 //=============================================================================
