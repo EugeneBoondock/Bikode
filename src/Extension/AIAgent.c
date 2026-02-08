@@ -311,15 +311,143 @@ typedef struct {
     char*   command;
 } ToolCall;
 
+// Tag variants that LLMs commonly use for tool calls
+static const char* s_openTags[] = {
+    "<tool_call>", "<tool_code>", "<function_call>", "<tool_use>", NULL
+};
+static const char* s_closeTags[] = {
+    "</tool_call>", "</tool_code>", "</function_call>", "</tool_use>", NULL
+};
+static const int s_openTagLens[] = { 11, 11, 15, 10 };
+static const int s_closeTagLens[] = { 12, 12, 16, 11 };
+
+// Find the next tool call open tag in the text. Sets *tagIndex and returns pointer.
+static const char* FindNextOpenTag(const char* p, int* tagIndex)
+{
+    const char* best = NULL;
+    *tagIndex = -1;
+    for (int i = 0; s_openTags[i]; i++)
+    {
+        const char* found = strstr(p, s_openTags[i]);
+        if (found && (!best || found < best))
+        {
+            best = found;
+            *tagIndex = i;
+        }
+    }
+    return best;
+}
+
+// Also try to find raw JSON tool calls: {"name":"write_file",...} outside any tags
+static const char* FindRawJsonToolCall(const char* p)
+{
+    // Look for {"name": or {"name":
+    const char* s = p;
+    while ((s = strstr(s, "{\"name\"")) != NULL)
+    {
+        // Check this looks like a tool call by extracting the name
+        const char* nameStart = s;
+        char* name = json_extract_string_a(nameStart, "name");
+        if (name)
+        {
+            // Check if it's one of our known tools
+            if (strcmp(name, "read_file") == 0 || strcmp(name, "write_file") == 0 ||
+                strcmp(name, "replace_in_file") == 0 || strcmp(name, "run_command") == 0 ||
+                strcmp(name, "list_dir") == 0 || strcmp(name, "insert_in_editor") == 0)
+            {
+                free(name);
+                return s;
+            }
+            free(name);
+        }
+        s += 7;
+    }
+    return NULL;
+}
+
+// Find the matching close brace for a JSON object starting at '{'
+static const char* FindJsonObjectEnd(const char* json)
+{
+    if (*json != '{') return NULL;
+    int depth = 0;
+    BOOL inString = FALSE;
+    const char* p = json;
+    while (*p)
+    {
+        if (inString)
+        {
+            if (*p == '\\' && *(p + 1)) { p += 2; continue; }
+            if (*p == '"') inString = FALSE;
+        }
+        else
+        {
+            if (*p == '"') inString = TRUE;
+            else if (*p == '{') depth++;
+            else if (*p == '}') { depth--; if (depth == 0) return p + 1; }
+        }
+        p++;
+    }
+    return NULL;
+}
+
+static int ParseOneToolCall(const char* json, int jsonLen, ToolCall* tc)
+{
+    char* buf = (char*)malloc(jsonLen + 1);
+    if (!buf) return 0;
+    memcpy(buf, json, jsonLen);
+    buf[jsonLen] = '\0';
+
+    char* name = json_extract_string_a(buf, "name");
+    if (name)
+    {
+        strncpy(tc->name, name, sizeof(tc->name) - 1);
+        free(name);
+    }
+
+    tc->path    = json_extract_string_a(buf, "path");
+    tc->content = json_extract_string_a(buf, "content");
+    tc->oldText = json_extract_string_a(buf, "old_text");
+    tc->newText = json_extract_string_a(buf, "new_text");
+    tc->command = json_extract_string_a(buf, "command");
+
+    free(buf);
+    return (tc->name[0] != '\0') ? 1 : 0;
+}
+
 static int ParseToolCalls(const char* response, ToolCall** ppCalls)
 {
-    // Count <tool_call> occurrences
+    // First pass: count tool calls (tagged + raw JSON)
     int count = 0;
     const char* p = response;
-    while ((p = strstr(p, "<tool_call>")) != NULL)
+    while (p && *p)
     {
+        int tagIdx;
+        const char* tagged = FindNextOpenTag(p, &tagIdx);
+        const char* rawJson = FindRawJsonToolCall(p);
+
+        const char* nearest = NULL;
+        if (tagged && rawJson)
+            nearest = (tagged < rawJson) ? tagged : rawJson;
+        else if (tagged)
+            nearest = tagged;
+        else if (rawJson)
+            nearest = rawJson;
+        else
+            break;
+
         count++;
-        p += 11;
+
+        if (nearest == tagged && tagged)
+        {
+            const char* end = strstr(tagged + s_openTagLens[tagIdx],
+                                     s_closeTags[tagIdx]);
+            p = end ? (end + s_closeTagLens[tagIdx]) : (tagged + s_openTagLens[tagIdx]);
+        }
+        else
+        {
+            const char* end = FindJsonObjectEnd(rawJson);
+            p = end ? end : (rawJson + 7);
+        }
     }
 
     if (count == 0) { *ppCalls = NULL; return 0; }
@@ -328,44 +456,49 @@ static int ParseToolCalls(const char* response, ToolCall** ppCalls)
     if (!calls) { *ppCalls = NULL; return 0; }
     *ppCalls = calls;
 
+    // Second pass: extract tool calls
     p = response;
     int actual = 0;
-    for (int i = 0; i < count; i++)
+    while (p && *p && actual < count)
     {
-        p = strstr(p, "<tool_call>");
-        if (!p) break;
-        p += 11;
+        int tagIdx;
+        const char* tagged = FindNextOpenTag(p, &tagIdx);
+        const char* rawJson = FindRawJsonToolCall(p);
 
-        // Skip whitespace
-        while (*p && (*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t')) p++;
+        if (!tagged && !rawJson) break;
 
-        const char* end = strstr(p, "</tool_call>");
-        if (!end) break;
+        BOOL useTagged = FALSE;
+        if (tagged && rawJson)
+            useTagged = (tagged <= rawJson);
+        else if (tagged)
+            useTagged = TRUE;
 
-        int jsonLen = (int)(end - p);
-        char* json = (char*)malloc(jsonLen + 1);
-        if (!json) break;
-        memcpy(json, p, jsonLen);
-        json[jsonLen] = '\0';
-
-        // Extract tool name
-        char* name = json_extract_string_a(json, "name");
-        if (name)
+        if (useTagged)
         {
-            strncpy(calls[actual].name, name, sizeof(calls[actual].name) - 1);
-            free(name);
+            const char* jsonStart = tagged + s_openTagLens[tagIdx];
+            while (*jsonStart && (*jsonStart == ' ' || *jsonStart == '\n' ||
+                   *jsonStart == '\r' || *jsonStart == '\t')) jsonStart++;
+
+            const char* end = strstr(jsonStart, s_closeTags[tagIdx]);
+            if (!end) break;
+
+            int jsonLen = (int)(end - jsonStart);
+            if (ParseOneToolCall(jsonStart, jsonLen, &calls[actual]))
+                actual++;
+
+            p = end + s_closeTagLens[tagIdx];
         }
+        else
+        {
+            const char* end = FindJsonObjectEnd(rawJson);
+            if (!end) break;
 
-        // Extract parameters
-        calls[actual].path    = json_extract_string_a(json, "path");
-        calls[actual].content = json_extract_string_a(json, "content");
-        calls[actual].oldText = json_extract_string_a(json, "old_text");
-        calls[actual].newText = json_extract_string_a(json, "new_text");
-        calls[actual].command = json_extract_string_a(json, "command");
+            int jsonLen = (int)(end - rawJson);
+            if (ParseOneToolCall(rawJson, jsonLen, &calls[actual]))
+                actual++;
 
-        free(json);
-        actual++;
-        p = end + 12;
+            p = end;
+        }
     }
 
     return actual;
@@ -819,6 +952,66 @@ static void PostToolInfoToUI(HWND hwnd, const char* toolName, const char* detail
         PostMessage(hwnd, WM_AI_AGENT_TOOL, 0, (LPARAM)msg);
 }
 
+// Strip any residual tool call XML tags from text shown to user
+static char* StripToolCallTags(const char* text)
+{
+    if (!text || !text[0]) return _strdup("");
+
+    StrBuf sb;
+    sb_init(&sb, (int)strlen(text) + 1);
+    const char* p = text;
+
+    while (*p)
+    {
+        // Check for any open tag variant
+        BOOL found = FALSE;
+        for (int i = 0; s_openTags[i]; i++)
+        {
+            int openLen = s_openTagLens[i];
+            if (strncmp(p, s_openTags[i], openLen) == 0)
+            {
+                // Find matching close tag
+                const char* end = strstr(p + openLen, s_closeTags[i]);
+                if (end)
+                {
+                    p = end + s_closeTagLens[i];
+                    // Skip trailing whitespace/newlines
+                    while (*p == '\n' || *p == '\r') p++;
+                }
+                else
+                {
+                    p += openLen; // malformed, skip open tag
+                }
+                found = TRUE;
+                break;
+            }
+        }
+        if (!found)
+        {
+            sb_append(&sb, p, 1);
+            p++;
+        }
+    }
+
+    // Trim leading/trailing whitespace
+    if (sb.data)
+    {
+        char* start = sb.data;
+        while (*start == ' ' || *start == '\n' || *start == '\r' || *start == '\t') start++;
+        char* end = sb.data + sb.len - 1;
+        while (end > start && (*end == ' ' || *end == '\n' || *end == '\r' || *end == '\t'))
+            *end-- = '\0';
+        if (start != sb.data)
+        {
+            char* trimmed = _strdup(start);
+            sb_free(&sb);
+            return trimmed;
+        }
+    }
+
+    return sb.data;
+}
+
 //=============================================================================
 // Agent thread
 //=============================================================================
@@ -988,8 +1181,16 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     AddToHistory("user", p->szUserMessage);
     AddToHistory("assistant", finalResponse);
 
+    // Strip any residual tool call XML from the displayed response
+    char* cleanResponse = StripToolCallTags(finalResponse);
+    if (!cleanResponse || !cleanResponse[0])
+    {
+        if (cleanResponse) free(cleanResponse);
+        cleanResponse = _strdup("Done.");
+    }
+
     // Post final response to UI
-    PostMessage(p->hwndTarget, WM_AI_DIRECT_RESPONSE, 0, (LPARAM)_strdup(finalResponse));
+    PostMessage(p->hwndTarget, WM_AI_DIRECT_RESPONSE, 0, (LPARAM)cleanResponse);
 
     // Cleanup
     free(finalResponse);
