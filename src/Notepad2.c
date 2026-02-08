@@ -62,6 +62,7 @@
 #include "Extension/WelcomeScreen.h"
 #include "Extension/BikoToolbar.h"
 #include "Extension/BikoMenuBar.h"
+#include "Extension/BikoStatusBar.h"
 
 
 
@@ -1085,8 +1086,9 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
         // call SaveSettings() when hwndToolbar is still valid
         SaveSettings(FALSE);
 
-        // [biko]: Shutdown AI subsystem and custom menu bar
+        // [biko]: Shutdown AI subsystem and custom bars
         BikoMenuBar_Destroy();
+        BikoStatusBar_Destroy();
         AICommands_Shutdown();
         // [/biko]
 
@@ -1663,6 +1665,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
           // Refresh custom toolbar
           BikoToolbar_ApplyDarkMode();
           BikoMenuBar_ApplyDarkMode();
+          BikoStatusBar_ApplyDarkMode();
       }
       return 0;
     // [/biko]
@@ -2059,6 +2062,13 @@ void CreateBars(HWND hwnd, HINSTANCE hInstance)
   hwndStatus = CreateStatusWindow(dwStatusbarStyle, NULL, hwnd, IDC_STATUSBAR);
   n2e_CreateProgressBarInStatusBar();
 
+  // [biko]: Create custom owner-drawn status bar (replaces native for dark mode)
+  BikoStatusBar_Create(hwnd, hInstance);
+  BikoStatusBar_Show(bShowStatusbar);
+  // Hide the native status bar — we keep it for compatibility but don't show it
+  ShowWindow(hwndStatus, SW_HIDE);
+  // [/biko]
+
   // Create ReBar and add Toolbar
   hwndReBar = CreateWindowEx(WS_EX_TOOLWINDOW, REBARCLASSNAME, NULL, dwReBarStyle,
                              0, 0, 0, 0, hwnd, (HMENU)IDC_REBAR, hInstance, NULL);
@@ -2136,6 +2146,9 @@ void MsgThemeChanged(HWND hwnd, WPARAM wParam, LPARAM lParam)
   DestroyWindow(hwndReBar);
   DestroyWindow(hwndStatus);
   n2e_DestroyProgressBarInStatusBar();
+  // [biko]: Destroy custom status bar so it can be recreated
+  BikoStatusBar_Destroy();
+  // [/biko]
   CreateBars(hwnd, hInstance);
   UpdateToolbar();
 
@@ -2150,14 +2163,17 @@ int aWidth[6];
 // [2e]: Resize statusbar groups #304
 void UpdateStatusbarWidth(const int cx)
 {
-  aWidth[0] = max(cx / 3, StatusCalcPaneWidth(hwndStatus, tchDocPos));
-  aWidth[1] = aWidth[0] + max(StatusCalcPaneWidth(hwndStatus, arrwchExpressionValue), StatusCalcPaneWidth(hwndStatus, L"9'999'999 Bytes"));
-  aWidth[2] = aWidth[1] + StatusCalcPaneWidth(hwndStatus, L"Unicode BE BOM");
-  aWidth[3] = aWidth[2] + StatusCalcPaneWidth(hwndStatus, L"CR+LF");
-  aWidth[4] = aWidth[3] + StatusCalcPaneWidth(hwndStatus, L"OVR");
+  // [biko]: Route part widths to custom status bar
+  aWidth[0] = max(cx / 3, BikoStatusBar_CalcPaneWidth(tchDocPos));
+  aWidth[1] = aWidth[0] + max(BikoStatusBar_CalcPaneWidth(arrwchExpressionValue), BikoStatusBar_CalcPaneWidth(L"9'999'999 Bytes"));
+  aWidth[2] = aWidth[1] + BikoStatusBar_CalcPaneWidth(L"Unicode BE BOM");
+  aWidth[3] = aWidth[2] + BikoStatusBar_CalcPaneWidth(L"CR+LF");
+  aWidth[4] = aWidth[3] + BikoStatusBar_CalcPaneWidth(L"OVR");
   aWidth[5] = -1;
 
+  BikoStatusBar_SetParts(COUNTOF(aWidth), aWidth);
   SendMessage(hwndStatus, SB_SETPARTS, COUNTOF(aWidth), (LPARAM)aWidth);
+  // [/biko]
 }
 // [/2e]
 
@@ -2215,9 +2231,20 @@ void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam)
 
   if (bShowStatusbar)
   {
-    SendMessage(hwndStatus, WM_SIZE, 0, 0);
-    GetWindowRect(hwndStatus, &rc);
-    cy -= (rc.bottom - rc.top);
+    // [biko]: Use custom status bar for layout
+    int sbH = BikoStatusBar_GetHeight();
+    if (BikoStatusBar_GetHwnd())
+    {
+      cy -= sbH;
+      SetWindowPos(BikoStatusBar_GetHwnd(), NULL, 0, y + cy, cx, sbH, SWP_NOZORDER);
+    }
+    else
+    {
+      SendMessage(hwndStatus, WM_SIZE, 0, 0);
+      GetWindowRect(hwndStatus, &rc);
+      cy -= (rc.bottom - rc.top);
+    }
+    // [/biko]
   }
 
   // [biko]: Reserve space for panels
@@ -4448,12 +4475,14 @@ LRESULT MsgCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
       {
         bShowStatusbar = 0;
         ShowWindow(hwndStatus, SW_HIDE);
+        BikoStatusBar_Show(FALSE);
       }
       else
       {
         bShowStatusbar = 1;
         UpdateStatusbar();
         ShowWindow(hwndStatus, SW_SHOW);
+        BikoStatusBar_Show(TRUE);
       }
       SendWMSize(hwnd);
       break;
@@ -6089,6 +6118,7 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
       }
       break;
     case IDC_STATUSBAR:
+    case 0xFB30:  // [biko]: BikoStatusBar control ID
       switch (pnmh->code)
       {
         // [biko]: Dark mode custom draw for status bar
@@ -7632,6 +7662,15 @@ void UpdateStatusbar()
   StatusSetText(hwndStatus, STATUS_EOLMODE, tchEOLMode);
   StatusSetText(hwndStatus, STATUS_OVRMODE, tchOvrMode);
   StatusSetText(hwndStatus, STATUS_LEXER, bShowProgressBar ? tchProgressBarTaskName : tchLexerName);
+
+  // [biko]: Mirror text to custom status bar
+  BikoStatusBar_SetText(STATUS_DOCPOS, tchDocPos);
+  BikoStatusBar_SetText(STATUS_DOCSIZE, tchDocSize);
+  BikoStatusBar_SetText(STATUS_CODEPAGE, mEncoding[iEncoding].wchLabel);
+  BikoStatusBar_SetText(STATUS_EOLMODE, tchEOLMode);
+  BikoStatusBar_SetText(STATUS_OVRMODE, tchOvrMode);
+  BikoStatusBar_SetText(STATUS_LEXER, bShowProgressBar ? tchProgressBarTaskName : tchLexerName);
+  // [/biko]
 
   RECT rcMain = { 0 };
   GetWindowRect(hwndMain, &rcMain);
