@@ -217,12 +217,12 @@ void DarkMode_Init(HWND hwndMain)
     {
         ResolveUxThemeAPIs();
 
-        // Set app-level dark mode preference
+        // [biko]: Force dark mode always — no light mode
         if (s_pfnSetAppMode)
-            s_pfnSetAppMode(PAM_ALLOW_DARK);
+            s_pfnSetAppMode(PAM_FORCE_DARK);
     }
 
-    // Default: dark mode ON
+    // Dark mode is always on — light mode removed
     s_bEnabled = TRUE;
 
     UpdateBackgroundBrush();
@@ -256,12 +256,13 @@ void DarkMode_Shutdown(void)
 
 void DarkMode_Toggle(void)
 {
-    DarkMode_SetEnabled(!s_bEnabled);
+    // [biko]: No-op — dark mode is always on
 }
 
 BOOL DarkMode_IsEnabled(void)
 {
-    return s_bEnabled;
+    // [biko]: Always dark — light mode removed
+    return TRUE;
 }
 
 BOOL DarkMode_IsSupported(void)
@@ -271,7 +272,9 @@ BOOL DarkMode_IsSupported(void)
 
 void DarkMode_SetEnabled(BOOL bEnable)
 {
-    s_bEnabled = bEnable;
+    // [biko]: Always dark — ignore the parameter
+    UNREFERENCED_PARAMETER(bEnable);
+    s_bEnabled = TRUE;
     UpdateBackgroundBrush();
     DarkMode_UpdateIcon();
 
@@ -355,7 +358,21 @@ void DarkMode_ApplyToEditor(HWND hwndEdit)
 {
     if (!hwndEdit) return;
 
-    const DarkModeColors* pColors = s_bEnabled ? &s_darkColors : &s_lightColors;
+    const DarkModeColors* pColors = &s_darkColors;
+
+    // [biko]: Dark scrollbar — apply DarkMode_Explorer theme to Scintilla
+    if (s_bSupported)
+    {
+        if (s_pfnAllowDark)
+            s_pfnAllowDark(hwndEdit, TRUE);
+        SetWindowTheme(hwndEdit, L"DarkMode_Explorer", NULL);
+    }
+
+    // [biko]: Strip any remaining light-mode border
+    SetWindowLongPtr(hwndEdit, GWL_EXSTYLE,
+        GetWindowLongPtr(hwndEdit, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
+    SetWindowPos(hwndEdit, NULL, 0, 0, 0, 0,
+        SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
 
     // Default style colors
     SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_DEFAULT, pColors->clrBackground);

@@ -576,7 +576,8 @@ BOOL InitApplication(HINSTANCE hInstance)
   wc.hInstance     = hInstance;
   wc.hIcon         = LoadIcon(hInstance,MAKEINTRESOURCE(IDR_MAINWND));
   wc.hCursor       = LoadCursor(NULL,IDC_ARROW);
-  wc.hbrBackground = (HBRUSH)(COLOR_3DFACE+1);
+  // [biko]: Dark background — light mode removed
+  wc.hbrBackground = CreateSolidBrush(RGB(24, 24, 24));
   wc.lpszMenuName  = MAKEINTRESOURCE(IDR_MAINWND);
   wc.lpszClassName = wchWndClass;
 
@@ -1634,16 +1635,39 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
           // [biko]: Dark mode for edit frame (WC_LISTVIEW border container)
           if (hwndEditFrame)
           {
-              // Remove sunken 3D border that shows as white lines
+              // Remove ALL borders: WS_EX_CLIENTEDGE, WS_BORDER, themed edges
               SetWindowLongPtr(hwndEditFrame, GWL_EXSTYLE,
                   GetWindowLongPtr(hwndEditFrame, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
+              SetWindowLongPtr(hwndEditFrame, GWL_STYLE,
+                  GetWindowLongPtr(hwndEditFrame, GWL_STYLE) & ~WS_BORDER);
               SetWindowPos(hwndEditFrame, NULL, 0, 0, 0, 0,
                   SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+              // Disable visual styles completely to prevent themed 1px border
+              SetWindowTheme(hwndEditFrame, L"", L"");
               // Set dark background
               SendMessage(hwndEditFrame, LVM_SETBKCOLOR, 0, (LPARAM)RGB(24, 24, 24));
               SendMessage(hwndEditFrame, LVM_SETTEXTBKCOLOR, 0, (LPARAM)RGB(24, 24, 24));
-              SetWindowTheme(hwndEditFrame, L"DarkMode_Explorer", NULL);
               InvalidateRect(hwndEditFrame, NULL, TRUE);
+          }
+
+          // [biko]: Strip border from Scintilla edit control
+          if (hwndEditParent)
+          {
+              SetWindowLongPtr(hwndEditParent, GWL_EXSTYLE,
+                  GetWindowLongPtr(hwndEditParent, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
+              SetWindowLongPtr(hwndEditParent, GWL_STYLE,
+                  GetWindowLongPtr(hwndEditParent, GWL_STYLE) & ~WS_BORDER);
+              SetWindowPos(hwndEditParent, NULL, 0, 0, 0, 0,
+                  SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+          }
+          if (_hwndEdit && _hwndEdit != hwndEditParent)
+          {
+              SetWindowLongPtr(_hwndEdit, GWL_EXSTYLE,
+                  GetWindowLongPtr(_hwndEdit, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
+              SetWindowLongPtr(_hwndEdit, GWL_STYLE,
+                  GetWindowLongPtr(_hwndEdit, GWL_STYLE) & ~WS_BORDER);
+              SetWindowPos(_hwndEdit, NULL, 0, 0, 0, 0,
+                  SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
           }
 
           // Dark mode for status bar background
@@ -1803,7 +1827,7 @@ LRESULT MsgCreate(HWND hwnd, WPARAM wParam, LPARAM lParam)
   EditInit(_hwndEdit);
 
   hwndEditFrame = CreateWindowEx(
-    WS_EX_CLIENTEDGE,
+    0,  // [biko]: No border \u2014 dark mode only
     WC_LISTVIEW,
     NULL,
     WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
@@ -1812,31 +1836,14 @@ LRESULT MsgCreate(HWND hwnd, WPARAM wParam, LPARAM lParam)
     (HMENU)IDC_EDITFRAME,
     hInstance,
     NULL);
-  if (PrivateIsAppThemed())
+  // [biko]: Always dark mode \u2014 no borders, no edit frame offsets
   {
-    RECT rc, rc2;
-
     bIsAppThemed = TRUE;
 
-    SetWindowLongPtr(hwndEditParent, GWL_EXSTYLE, GetWindowLongPtr(hwndEditParent, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
-    SetWindowPos(hwndEditParent, NULL, 0, 0, 0, 0, SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
-
-    if (IsVista())
-    {
-      cxEditFrame = 0;
-      cyEditFrame = 0;
-    }
-    else
-    {
-      GetClientRect(hwndEditFrame, &rc);
-      GetWindowRect(hwndEditFrame, &rc2);
-      cxEditFrame = ((rc2.right - rc2.left) - (rc.right - rc.left)) / 2;
-      cyEditFrame = ((rc2.bottom - rc2.top) - (rc.bottom - rc.top)) / 2;
-    }
-  }
-  else
-  {
-    bIsAppThemed = FALSE;
+    SetWindowLongPtr(hwndEditParent, GWL_EXSTYLE,
+        GetWindowLongPtr(hwndEditParent, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
+    SetWindowPos(hwndEditParent, NULL, 0, 0, 0, 0,
+        SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
 
     cxEditFrame = 0;
     cyEditFrame = 0;
@@ -2105,39 +2112,17 @@ void CreateBars(HWND hwnd, HINSTANCE hInstance)
 //
 void MsgThemeChanged(HWND hwnd, WPARAM wParam, LPARAM lParam)
 {
-  RECT rc, rc2;
+  RECT rc;
   HINSTANCE hInstance = (HINSTANCE)(INT_PTR)GetWindowLongPtr(hwnd, GWLP_HINSTANCE);
-  // reinitialize edit frame
-  if (PrivateIsAppThemed())
-  {
-    bIsAppThemed = TRUE;
-    SetWindowLongPtr(hwndEditParent, GWL_EXSTYLE, GetWindowLongPtr(hwndEditParent, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
-    SetWindowPos(hwndEditParent, NULL, 0, 0, 0, 0, SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
-    if (IsVista())
-    {
-      cxEditFrame = 0;
-      cyEditFrame = 0;
-    }
-    else
-    {
-      SetWindowPos(hwndEditFrame, NULL, 0, 0, 0, 0, SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
-      GetClientRect(hwndEditFrame, &rc);
-      GetWindowRect(hwndEditFrame, &rc2);
 
-      cxEditFrame = ((rc2.right - rc2.left) - (rc.right - rc.left)) / 2;
-      cyEditFrame = ((rc2.bottom - rc2.top) - (rc.bottom - rc.top)) / 2;
-    }
-  }
-  else
-  {
-    bIsAppThemed = FALSE;
-
-    SetWindowLongPtr(hwndEditParent, GWL_EXSTYLE, WS_EX_CLIENTEDGE | GetWindowLongPtr(hwndEditParent, GWL_EXSTYLE));
-    SetWindowPos(hwndEditParent, NULL, 0, 0, 0, 0, SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
-
-    cxEditFrame = 0;
-    cyEditFrame = 0;
-  }
+  // [biko]: Always dark mode \u2014 strip borders, zero frame offsets
+  bIsAppThemed = TRUE;
+  SetWindowLongPtr(hwndEditParent, GWL_EXSTYLE,
+      GetWindowLongPtr(hwndEditParent, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
+  SetWindowPos(hwndEditParent, NULL, 0, 0, 0, 0,
+      SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
+  cxEditFrame = 0;
+  cyEditFrame = 0;
 
   // recreate toolbar and statusbar
   Toolbar_GetButtons(hwndToolbar, IDT_FILE_NEW, tchToolbarButtons, COUNTOF(tchToolbarButtons));

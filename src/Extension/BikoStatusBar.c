@@ -124,11 +124,8 @@ static void Paint(HWND hwnd, HDC hdc)
   FillRect(mem, &rc, bg);
   DeleteObject(bg);
 
-  // Top border line
   HPEN sepPen = CreatePen(PS_SOLID, 1, cSep);
   HPEN oPen = (HPEN)SelectObject(mem, sepPen);
-  MoveToEx(mem, 0, 0, NULL);
-  LineTo(mem, rc.right, 0);
 
   HFONT of = (HFONT)SelectObject(mem, s_hFont);
   SetBkMode(mem, TRANSPARENT);

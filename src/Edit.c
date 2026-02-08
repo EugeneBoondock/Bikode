@@ -176,7 +176,7 @@ HWND EditCreate(HWND hwndParent)
   HWND hwnd;
 
   hwnd = CreateWindowEx(
-    WS_EX_CLIENTEDGE,
+    0,  // [biko]: No WS_EX_CLIENTEDGE \u2014 dark mode has no borders
     L"Scintilla",
     NULL,
     WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
@@ -4086,7 +4086,7 @@ void EditWrapToColumn(HWND hwnd, int nColumn)
   cchConvW = 0;
   iLineLength = 0;
 
-#define ISDELIMITER(wc) StrChr(L",;.:-+%&¦|/*?!\"\'~´#=",wc)
+#define ISDELIMITER(wc) StrChr(L",;.:-+%&ï¿½|/*?!\"\'~ï¿½#=",wc)
 #define ISWHITE(wc) StrChr(L" \t",wc)
 #define ISWORDEND(wc) (StrChr(L" \t\r\n",wc))
 
