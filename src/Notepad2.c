@@ -60,6 +60,7 @@
 #include "Extension/Terminal.h"
 #include "Extension/MarkdownPreview.h"
 #include "Extension/WelcomeScreen.h"
+#include "Extension/BikoToolbar.h"
 
 
 
@@ -1633,6 +1634,9 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
                   SendMessage(hwndReBar, RB_SETBANDINFO, 0, (LPARAM)&rbbi);
               }
           }
+
+          // Refresh custom toolbar
+          BikoToolbar_ApplyDarkMode();
       }
       return 0;
     // [/biko]
@@ -1811,6 +1815,12 @@ LRESULT MsgCreate(HWND hwnd, WPARAM wParam, LPARAM lParam)
 
   // Create Toolbar and Statusbar
   CreateBars(hwnd, hInstance);
+
+  // [biko]: Create custom owner-drawn toolbar (replaces rebar for dark mode)
+  BikoToolbar_Create(hwnd, hInstance);
+  BikoToolbar_Show(bShowToolbar);
+  // Hide the old rebar — we keep it for compatibility but don't show it
+  ShowWindow(hwndReBar, SW_HIDE);
 
   // Window Initialization
 
@@ -2148,13 +2158,21 @@ void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam)
 
   if (bShowToolbar)
   {
-    SetWindowPos(hwndReBar, NULL, 0, 0, LOWORD(lParam), cyReBar, SWP_NOZORDER);
-    // the ReBar automatically sets the correct height
-    // calling SetWindowPos() with the height of one toolbar button
-    // causes the control not to temporarily use the whole client area
-    // and prevents flickering
-    y = cyReBar + cyReBarFrame;    // define
-    cy -= cyReBar + cyReBarFrame;  // border
+    // [biko]: Use custom toolbar instead of rebar
+    int tbH = BikoToolbar_GetHeight();
+    if (BikoToolbar_GetHwnd())
+    {
+      SetWindowPos(BikoToolbar_GetHwnd(), NULL, 0, 0, cx, tbH, SWP_NOZORDER);
+      y = tbH;
+      cy -= tbH;
+    }
+    else
+    {
+      SetWindowPos(hwndReBar, NULL, 0, 0, LOWORD(lParam), cyReBar, SWP_NOZORDER);
+      y = cyReBar + cyReBarFrame;
+      cy -= cyReBar + cyReBarFrame;
+    }
+    // [/biko]
   }
 
   if (bShowStatusbar)
@@ -4370,13 +4388,13 @@ LRESULT MsgCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
       if (bShowToolbar)
       {
         bShowToolbar = 0;
-        ShowWindow(hwndReBar, SW_HIDE);
+        BikoToolbar_Show(FALSE);
       }
       else
       {
         bShowToolbar = 1;
         UpdateToolbar();
-        ShowWindow(hwndReBar, SW_SHOW);
+        BikoToolbar_Show(TRUE);
       }
       SendWMSize(hwnd);
       break;
@@ -7403,10 +7421,16 @@ int CreateIniFileEx(LPCWSTR lpszIniFile)
 //  UpdateToolbar()
 //
 //
-#define EnableTool(id,b) SendMessage(hwndToolbar,TB_ENABLEBUTTON,id, \
-                                     MAKELONG(((b) ? 1 : 0), 0))
-#define CheckTool(id,b)  SendMessage(hwndToolbar,TB_CHECKBUTTON,id, \
-                                     MAKELONG(b,0))
+// [biko]: Route toolbar enable/check to custom toolbar
+#define EnableTool(id,b) do { \
+    SendMessage(hwndToolbar,TB_ENABLEBUTTON,id,MAKELONG(((b)?1:0),0)); \
+    BikoToolbar_EnableButton(id, (b) ? TRUE : FALSE); \
+} while(0)
+#define CheckTool(id,b)  do { \
+    SendMessage(hwndToolbar,TB_CHECKBUTTON,id,MAKELONG(b,0)); \
+    BikoToolbar_CheckButton(id, (b) ? TRUE : FALSE); \
+} while(0)
+// [/biko]
 void UpdateToolbar()
 {
   int i;
