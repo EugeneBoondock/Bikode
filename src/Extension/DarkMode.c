@@ -11,6 +11,7 @@
 
 #include "DarkMode.h"
 #include "ChatPanel.h"
+#include "Terminal.h"
 #include "CommonUtils.h"
 #include "Scintilla.h"
 #include <dwmapi.h>
@@ -304,6 +305,9 @@ void DarkMode_ApplyAll(HWND hwndMain, HWND hwndEdit,
 
     // Refresh Chat Panel dark mode
     ChatPanel_ApplyDarkMode();
+
+    // Refresh Terminal panel dark mode
+    Terminal_ApplyDarkMode();
 
     // Re-apply Scintilla styles after dark mode change so lexer knows
     if (hwndEdit)

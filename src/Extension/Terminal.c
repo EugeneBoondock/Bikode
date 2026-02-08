@@ -535,6 +535,18 @@ HWND Terminal_GetPanelHwnd(void)
     return s_hwndPanel;
 }
 
+void Terminal_ApplyDarkMode(void)
+{
+    if (s_pTerminal && s_pTerminal->hwndView)
+    {
+        SetupTerminalStyles(s_pTerminal->hwndView);
+    }
+    if (s_hwndPanel)
+    {
+        InvalidateRect(s_hwndPanel, NULL, TRUE);
+    }
+}
+
 void Terminal_RunCommand(HWND hwndParent, const char* pszCommand)
 {
     if (!s_pTerminal || !s_pTerminal->bAlive)
@@ -841,6 +853,21 @@ static void SetupTerminalStyles(HWND hwndView)
     // No margins - terminal is edge-to-edge
     SendMessage(hwndView, SCI_SETMARGINWIDTHN, 0, 6);
     SendMessage(hwndView, SCI_SETMARGINWIDTHN, 1, 0);
+    SendMessage(hwndView, SCI_SETMARGINWIDTHN, 2, 0);
+    SendMessage(hwndView, SCI_SETMARGINWIDTHN, 3, 0);
+    SendMessage(hwndView, SCI_SETMARGINWIDTHN, 4, 0);
+
+    // Margin backgrounds must match terminal BG to avoid white strips
+    SendMessage(hwndView, SCI_SETMARGINBACKN, 0, bg);
+    SendMessage(hwndView, SCI_SETMARGINBACKN, 1, bg);
+    SendMessage(hwndView, SCI_SETMARGINBACKN, 2, bg);
+    SendMessage(hwndView, SCI_STYLESETBACK, STYLE_LINENUMBER, bg);
+    SendMessage(hwndView, SCI_STYLESETFORE, STYLE_LINENUMBER, bg);
+
+    // Fold margin colors
+    SendMessage(hwndView, SCI_SETFOLDMARGINCOLOUR, TRUE, bg);
+    SendMessage(hwndView, SCI_SETFOLDMARGINHICOLOUR, TRUE, bg);
+
     SendMessage(hwndView, SCI_SETWRAPMODE, SC_WRAP_CHAR, 0);
     SendMessage(hwndView, SCI_SETREADONLY, FALSE, 0);
     SendMessage(hwndView, SCI_SETCARETFORE, fg, 0);

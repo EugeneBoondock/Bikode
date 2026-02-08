@@ -72,6 +72,9 @@ void    Terminal_Focus(void);
 // Returns the terminal panel HWND (or NULL if not created).
 HWND    Terminal_GetPanelHwnd(void);
 
+// Re-apply dark/light mode styles to terminal Scintilla view and panel.
+void    Terminal_ApplyDarkMode(void);
+
 //=============================================================================
 // Run command
 //=============================================================================

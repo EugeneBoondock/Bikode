@@ -1600,7 +1600,40 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
     case WM_USER + 0x600:
       // Deferred dark mode init — all windows are now ready
       if (DarkMode_IsEnabled())
+      {
           DarkMode_ApplyAll(hwnd, _hwndEdit, hwndToolbar, hwndStatus, hwndReBar);
+
+          // [biko]: Dark mode for edit frame (WC_LISTVIEW border container)
+          if (hwndEditFrame)
+          {
+              // Remove sunken 3D border that shows as white lines
+              SetWindowLongPtr(hwndEditFrame, GWL_EXSTYLE,
+                  GetWindowLongPtr(hwndEditFrame, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
+              SetWindowPos(hwndEditFrame, NULL, 0, 0, 0, 0,
+                  SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+              // Set dark background
+              SendMessage(hwndEditFrame, LVM_SETBKCOLOR, 0, (LPARAM)RGB(24, 24, 24));
+              SendMessage(hwndEditFrame, LVM_SETTEXTBKCOLOR, 0, (LPARAM)RGB(24, 24, 24));
+              SetWindowTheme(hwndEditFrame, L"DarkMode_Explorer", NULL);
+              InvalidateRect(hwndEditFrame, NULL, TRUE);
+          }
+
+          // Dark mode for status bar background
+          SendMessage(hwndStatus, SB_SETBKCOLOR, 0, (LPARAM)RGB(24, 24, 24));
+
+          // Remove rebar band child edge that shows as light line
+          {
+              REBARBANDINFO rbbi;
+              ZeroMemory(&rbbi, sizeof(rbbi));
+              rbbi.cbSize = sizeof(REBARBANDINFO);
+              rbbi.fMask = RBBIM_STYLE;
+              if (SendMessage(hwndReBar, RB_GETBANDINFO, 0, (LPARAM)&rbbi))
+              {
+                  rbbi.fStyle &= ~RBBS_CHILDEDGE;
+                  SendMessage(hwndReBar, RB_SETBANDINFO, 0, (LPARAM)&rbbi);
+              }
+          }
+      }
       return 0;
     // [/biko]
 
@@ -6095,13 +6128,25 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
       if (pnmh->code == NM_CUSTOMDRAW && DarkMode_IsEnabled())
       {
         LPNMCUSTOMDRAW lpcd = (LPNMCUSTOMDRAW)lParam;
-        if (lpcd->dwDrawStage == CDDS_PREPAINT)
+        switch (lpcd->dwDrawStage)
         {
-          COLORREF clrBg = RGB(24, 24, 24);
-          HBRUSH hBr = CreateSolidBrush(clrBg);
-          FillRect(lpcd->hdc, &lpcd->rc, hBr);
-          DeleteObject(hBr);
-          return CDRF_NOTIFYITEMDRAW;
+          case CDDS_PREPAINT:
+          {
+            COLORREF clrBg = RGB(24, 24, 24);
+            HBRUSH hBr = CreateSolidBrush(clrBg);
+            FillRect(lpcd->hdc, &lpcd->rc, hBr);
+            DeleteObject(hBr);
+            return CDRF_NOTIFYITEMDRAW;
+          }
+          case CDDS_ITEMPREPAINT:
+          {
+            COLORREF clrBg = RGB(24, 24, 24);
+            SetBkColor(lpcd->hdc, clrBg);
+            HBRUSH hBr = CreateSolidBrush(clrBg);
+            FillRect(lpcd->hdc, &lpcd->rc, hBr);
+            DeleteObject(hBr);
+            return CDRF_SKIPDEFAULT;
+          }
         }
       }
       // [/biko]
