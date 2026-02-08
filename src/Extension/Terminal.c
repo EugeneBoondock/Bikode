@@ -1147,17 +1147,6 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_CHAR: {
         WCHAR wch = (WCHAR)wParam;
 
-        /* DEBUG: flash title bar to prove WM_CHAR arrived */
-        if (g_hwndMain) {
-            WCHAR dbg[128];
-            swprintf_s(dbg, 128, L"[v5] WM_CHAR=0x%04X '%c' pipe=%s alive=%s",
-                (unsigned)wch,
-                (wch >= 0x20 && wch < 0x7F) ? (char)wch : '?',
-                (g_term && g_term->hPipeWr) ? L"OK" : L"NULL",
-                (g_term && InterlockedCompareExchange(&g_term->alive,0,0)) ? L"YES" : L"NO");
-            SetWindowTextW(g_hwndMain, dbg);
-        }
-
         /* Ctrl+C — copy selection or send interrupt */
         if (wch == 0x03) {
             if (g_hasSel) CopySel(hwnd);
@@ -1256,9 +1245,6 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_SETFOCUS:
         g_wantFocus = TRUE;
         g_caretOn = TRUE;
-        /* DEBUG */
-        if (g_hwndMain)
-            SetWindowTextW(g_hwndMain, L"[v5] VIEW HAS FOCUS — type to test");
         if (g_term && g_term->hwndView)
             InvalidateRect(g_term->hwndView, NULL, FALSE);
         return 0;

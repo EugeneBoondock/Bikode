@@ -48,6 +48,11 @@ extern "C" {
 #define IDM_GIT_COMMIT          41052
 #define IDM_GIT_LOG             41053
 #define IDM_GIT_TOGGLE_PANEL    41054
+#define IDM_GIT_PULL            41055
+#define IDM_GIT_PUSH            41056
+#define IDM_GIT_BLAME           41057
+#define IDM_GIT_BRANCHES        41058
+#define IDM_GIT_STASH           41059
 
 // Terminal
 #define IDM_TERMINAL_TOGGLE     41060
@@ -55,6 +60,10 @@ extern "C" {
 
 // Markdown
 #define IDM_MARKDOWN_PREVIEW    41070
+
+// File Manager
+#define IDM_FILEMGR_TOGGLE      41080
+#define IDM_FILEMGR_OPENFOLDER  41081
 
 //=============================================================================
 // Initialization

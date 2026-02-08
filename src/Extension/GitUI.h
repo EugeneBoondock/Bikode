@@ -75,7 +75,26 @@ BOOL    GitUI_IsPanelVisible(void);
 void    GitUI_UpdateStatusBar(HWND hwndStatus, int iPart);
 
 //=============================================================================
-// Git operations (lower−level)
+// Extra UI dialogs
+//=============================================================================
+
+// Show git blame for the current file.
+void    GitUI_ShowBlame(HWND hwndParent);
+
+// Show all branches.
+void    GitUI_ShowBranches(HWND hwndParent);
+
+// Show stash list.
+void    GitUI_ShowStash(HWND hwndParent);
+
+// Pull with output dialog.
+void    GitUI_PullWithUI(HWND hwndParent);
+
+// Push with output dialog.
+void    GitUI_PushWithUI(HWND hwndParent);
+
+//=============================================================================
+// Git operations (lower-level)
 //=============================================================================
 
 // Stage the current file.
@@ -86,6 +105,12 @@ BOOL    GitUI_UnstageFile(const WCHAR* pszFile);
 
 // Commit with a message.
 BOOL    GitUI_Commit(const char* pszMessage);
+
+// Pull from remote.
+BOOL    GitUI_Pull(void);
+
+// Push to remote.
+BOOL    GitUI_Push(void);
 
 // Run arbitrary git command and capture output.
 // Caller must free *ppszOutput via n2e_Free.

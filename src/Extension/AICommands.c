@@ -19,6 +19,7 @@
 #include "GitUI.h"
 #include "Terminal.h"
 #include "MarkdownPreview.h"
+#include "FileManager.h"
 #include "CommonUtils.h"
 #include "SciCall.h"
 #include <string.h>
@@ -80,6 +81,7 @@ void AICommands_Init(HWND hwnd, HWND hwndEd)
     DarkMode_Init(hwnd);
     GitUI_Init(hwnd);
     Terminal_Init(hwnd);
+    FileManager_Init(hwnd);
 }
 
 void AICommands_Shutdown(void)
@@ -92,6 +94,7 @@ void AICommands_Shutdown(void)
         s_iCurrentPatchCount = 0;
     }
 
+    FileManager_Shutdown();
     Terminal_Shutdown();
     GitUI_Shutdown();
     DarkMode_Shutdown();
@@ -196,6 +199,26 @@ BOOL AICommands_HandleCommand(HWND hwnd, UINT cmd)
         GitUI_TogglePanel(hwnd);
         return TRUE;
 
+    case IDM_GIT_PULL:
+        GitUI_PullWithUI(hwnd);
+        return TRUE;
+
+    case IDM_GIT_PUSH:
+        GitUI_PushWithUI(hwnd);
+        return TRUE;
+
+    case IDM_GIT_BLAME:
+        GitUI_ShowBlame(hwnd);
+        return TRUE;
+
+    case IDM_GIT_BRANCHES:
+        GitUI_ShowBranches(hwnd);
+        return TRUE;
+
+    case IDM_GIT_STASH:
+        GitUI_ShowStash(hwnd);
+        return TRUE;
+
     // Terminal
     case IDM_TERMINAL_TOGGLE:
         Terminal_Toggle(hwnd);
@@ -208,6 +231,15 @@ BOOL AICommands_HandleCommand(HWND hwnd, UINT cmd)
     // Markdown preview
     case IDM_MARKDOWN_PREVIEW:
         MarkdownPreview_Toggle(hwnd);
+        return TRUE;
+
+    // File manager
+    case IDM_FILEMGR_TOGGLE:
+        FileManager_Toggle(hwnd);
+        return TRUE;
+
+    case IDM_FILEMGR_OPENFOLDER:
+        FileManager_BrowseForFolder(hwnd);
         return TRUE;
 
     default:
@@ -286,6 +318,10 @@ void AICommands_CreateMenu(HMENU hMainMenu)
     if (hView)
     {
         AppendMenuW(hView, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hView, MF_STRING, IDM_FILEMGR_TOGGLE,
+                    L"File Explorer\tCtrl+\\");
+        AppendMenuW(hView, MF_STRING, IDM_FILEMGR_OPENFOLDER,
+                    L"Open Folder...");
         AppendMenuW(hView, MF_STRING, IDM_AI_TOGGLE_CHAT,
                     L"Chat Panel\tCtrl+Shift+C");
         AppendMenuW(hView, MF_STRING, IDM_TERMINAL_TOGGLE,
@@ -297,10 +333,17 @@ void AICommands_CreateMenu(HMENU hMainMenu)
 
         // Git submenu under View
         HMENU hGitMenu = CreatePopupMenu();
-        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_STATUS, L"Status");
-        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_DIFF, L"Diff");
-        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_COMMIT, L"Commit...");
-        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_LOG, L"Log");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_STATUS,  L"Status");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_DIFF,    L"Diff Current File");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_LOG,     L"Log");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_BLAME,   L"Blame Current File");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_BRANCHES, L"Branches");
+        AppendMenuW(hGitMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_COMMIT,  L"Commit...");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_PULL,    L"Pull");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_PUSH,    L"Push");
+        AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_STASH,   L"Stash List");
+        AppendMenuW(hGitMenu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_TOGGLE_PANEL, L"Toggle Git Panel");
         AppendMenuW(hView, MF_POPUP, (UINT_PTR)hGitMenu, L"Git");
     }

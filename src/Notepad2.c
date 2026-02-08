@@ -59,6 +59,8 @@
 #include "Extension/ChatPanel.h"
 #include "Extension/DarkMode.h"
 #include "Extension/Terminal.h"
+#include "Extension/FileManager.h"
+#include "Extension/GitUI.h"
 #include "Extension/MarkdownPreview.h"
 #include "Extension/WelcomeScreen.h"
 #include "Extension/BikoToolbar.h"
@@ -2178,7 +2180,7 @@ void MsgThemeChanged(HWND hwnd, WPARAM wParam, LPARAM lParam)
 }
 
 // Statusbar
-int aWidth[6];
+int aWidth[7];
 
 // [2e]: Resize statusbar groups #304
 void UpdateStatusbarWidth(const int cx)
@@ -2189,7 +2191,10 @@ void UpdateStatusbarWidth(const int cx)
   aWidth[2] = aWidth[1] + BikoStatusBar_CalcPaneWidth(L"Unicode BE BOM");
   aWidth[3] = aWidth[2] + BikoStatusBar_CalcPaneWidth(L"CR+LF");
   aWidth[4] = aWidth[3] + BikoStatusBar_CalcPaneWidth(L"OVR");
-  aWidth[5] = -1;
+  aWidth[5] = aWidth[4] + BikoStatusBar_CalcPaneWidth(L"Lexer Name");
+
+  // [biko]: Git branch pane — fills remaining space
+  aWidth[6] = -1;
 
   BikoStatusBar_SetParts(COUNTOF(aWidth), aWidth);
   SendMessage(hwndStatus, SB_SETPARTS, COUNTOF(aWidth), (LPARAM)aWidth);
@@ -2273,6 +2278,8 @@ void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam)
     // Terminal stays at the bottom
     panelH = Terminal_Layout(hwnd, cx, y + cy);
     cy -= panelH;
+    // File explorer takes width from the left
+    FileManager_Layout(hwnd, &x, &cx, y, cy);
     // Chat panel is a right sidebar
     int chatW = ChatPanel_Layout(hwnd, cx, y, cy);
     cx -= chatW;
@@ -7690,6 +7697,24 @@ void UpdateStatusbar()
   BikoStatusBar_SetText(STATUS_EOLMODE, tchEOLMode);
   BikoStatusBar_SetText(STATUS_OVRMODE, tchOvrMode);
   BikoStatusBar_SetText(STATUS_LEXER, bShowProgressBar ? tchProgressBarTaskName : tchLexerName);
+
+  // [biko]: Git branch in status bar
+  if (GitUI_IsInRepo()) {
+    WCHAR wszGit[256];
+    const WCHAR *branch = GitUI_GetBranch();
+    const WCHAR *summary = GitUI_GetStatusSummary();
+    if (branch && branch[0]) {
+      if (summary && summary[0])
+        _snwprintf_s(wszGit, _countof(wszGit), _TRUNCATE, L"\xE0A0 %s  %s", branch, summary);
+      else
+        _snwprintf_s(wszGit, _countof(wszGit), _TRUNCATE, L"\xE0A0 %s", branch);
+      BikoStatusBar_SetText(STATUS_GIT, wszGit);
+    } else {
+      BikoStatusBar_SetText(STATUS_GIT, L"");
+    }
+  } else {
+    BikoStatusBar_SetText(STATUS_GIT, L"");
+  }
   // [/biko]
 
   RECT rcMain = { 0 };
@@ -8264,6 +8289,12 @@ BOOL FileSave(BOOL bSaveAlways, BOOL bAsk, BOOL bSaveAs, enum ESaveCopyMode save
     n2e_CleanupDraftFile();
   }
   // [/2e]
+  // Refresh git status after save
+  if (res)
+  {
+    GitUI_Refresh();
+    UpdateStatusbar();
+  }
   return res;
 }
 

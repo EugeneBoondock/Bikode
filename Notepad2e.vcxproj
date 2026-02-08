@@ -488,6 +488,7 @@
     <ClCompile Include="src\Extension\DarkMode.c" />
     <ClCompile Include="src\Extension\GitUI.c" />
     <ClCompile Include="src\Extension\Terminal.c" />
+    <ClCompile Include="src\Extension\FileManager.c" />
     <ClCompile Include="src\Extension\MarkdownPreview.c" />
     <ClCompile Include="src\Extension\WelcomeScreen.c" />
     <ClCompile Include="src\Helpers.c" />
@@ -644,6 +645,7 @@
     <ClInclude Include="src\Extension\DarkMode.h" />
     <ClInclude Include="src\Extension\GitUI.h" />
     <ClInclude Include="src\Extension\Terminal.h" />
+    <ClInclude Include="src\Extension\FileManager.h" />
     <ClInclude Include="src\Extension\MarkdownPreview.h" />
     <ClInclude Include="src\Helpers.h" />
     <ClInclude Include="src\Notepad2.h" />
