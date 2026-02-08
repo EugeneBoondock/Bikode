@@ -36,6 +36,7 @@
 #include "Extension/SciCall.h"
 #include "Extension/SplitterWnd.h"
 #include "Extension/Utils.h"
+#include "Extension/DarkMode.h"
 
 
 COLORREF crCustom[16];
@@ -423,10 +424,11 @@ void _Style_SetLexer(HWND hwnd, PEDITLEXER pLexNew)
   Style_SetStyles(hwnd, lexDefault.iLexer, MULTI_STYLE_STYLE1(lexDefault.Styles[0 + iIdx].i64Style), lexDefault.Styles[0 + iIdx].szValue); // default
   Style_StrGetSize(lexDefault.Styles[0 + iIdx].szValue, &iBaseFontSize);                  // base size
 
+  // [biko]: Always use dark mode default colors
   if (!Style_StrGetColor(TRUE, lexDefault.Styles[0 + iIdx].szValue, &iValue))
-    SendMessage(hwnd, SCI_STYLESETFORE, STYLE_DEFAULT, (LPARAM)GetSysColor(COLOR_WINDOWTEXT));    // default text color
+    SendMessage(hwnd, SCI_STYLESETFORE, STYLE_DEFAULT, (LPARAM)RGB(212, 212, 212));    // dark mode text
   if (!Style_StrGetColor(FALSE, lexDefault.Styles[0 + iIdx].szValue, &iValue))
-    SendMessage(hwnd, SCI_STYLESETBACK, STYLE_DEFAULT, (LPARAM)GetSysColor(COLOR_WINDOW));    // default window color
+    SendMessage(hwnd, SCI_STYLESETBACK, STYLE_DEFAULT, (LPARAM)RGB(30, 30, 30));      // dark mode background
 
   if (pLexNew->iLexer != SCLEX_NULL)
     Style_SetStyles(hwnd, pLexNew->iLexer, MULTI_STYLE_STYLE1(pLexNew->Styles[0].i64Style), pLexNew->Styles[0].szValue);    // lexer default
@@ -569,7 +571,7 @@ void _Style_SetLexer(HWND hwnd, PEDITLEXER pLexNew)
   // caret fore
   if (!Style_StrGetColor(TRUE, lexDefault.Styles[DLO_CARET_COLOR + iIdx].szValue, &rgb))
   {
-    rgb = GetSysColor(COLOR_WINDOWTEXT);
+    rgb = RGB(212, 212, 212);  // [biko]: dark mode caret
   }
   else
   {
@@ -594,14 +596,14 @@ void _Style_SetLexer(HWND hwnd, PEDITLEXER pLexNew)
     if (Style_StrGetColor(TRUE, lexDefault.Styles[DLO_LONG_LINE_MARKER + iIdx].szValue, &rgb)) // edge fore
       SendMessage(hwnd, SCI_SETEDGECOLOUR, rgb, 0);
     else
-      SendMessage(hwnd, SCI_SETEDGECOLOUR, GetSysColor(COLOR_3DLIGHT), 0);
+      SendMessage(hwnd, SCI_SETEDGECOLOUR, RGB(60, 60, 60), 0);  // [biko]: dark mode edge
   }
   else
   {
     if (Style_StrGetColor(FALSE, lexDefault.Styles[DLO_LONG_LINE_MARKER + iIdx].szValue, &rgb)) // edge back
       SendMessage(hwnd, SCI_SETEDGECOLOUR, rgb, 0);
     else
-      SendMessage(hwnd, SCI_SETEDGECOLOUR, GetSysColor(COLOR_3DLIGHT), 0);
+      SendMessage(hwnd, SCI_SETEDGECOLOUR, RGB(60, 60, 60), 0);  // [biko]: dark mode edge
   }
 
   // [2e]: Find first/last match indication #388
@@ -750,6 +752,23 @@ void _Style_SetLexer(HWND hwnd, PEDITLEXER pLexNew)
 
   SendMessage(hwnd, SCI_COLOURISE, 0, (LPARAM)-1);
 
+  // [biko]: Re-apply dark mode colors after style/lexer setup
+  //  Style_SetLexer is called when opening files and can override
+  //  the dark background with system colors. Re-apply ensures dark.
+  {
+    const DarkModeColors* pColors = DarkMode_GetColors();
+    if (pColors)
+    {
+      // Ensure line number margin is dark
+      SendMessage(hwnd, SCI_STYLESETFORE, STYLE_LINENUMBER, pColors->clrLineNumber);
+      SendMessage(hwnd, SCI_STYLESETBACK, STYLE_LINENUMBER, pColors->clrSurface);
+      // Fold margin
+      SendMessage(hwnd, SCI_SETFOLDMARGINCOLOUR, TRUE, pColors->clrSurface);
+      SendMessage(hwnd, SCI_SETFOLDMARGINHICOLOUR, TRUE, pColors->clrSurface);
+    }
+  }
+  // [/biko]
+
   // Save current lexer
   pLexCurrent = pLexNew;
 }
@@ -770,14 +789,14 @@ void Style_SetLongLineColors(HWND hwnd)
     if (Style_StrGetColor(TRUE, lexDefault.Styles[DLO_LONG_LINE_MARKER + iIdx].szValue, &rgb)) // edge fore
       SendMessage(hwnd, SCI_SETEDGECOLOUR, rgb, 0);
     else
-      SendMessage(hwnd, SCI_SETEDGECOLOUR, GetSysColor(COLOR_3DLIGHT), 0);
+      SendMessage(hwnd, SCI_SETEDGECOLOUR, RGB(60, 60, 60), 0);  // [biko]: dark mode edge
   }
   else
   {
     if (Style_StrGetColor(FALSE, lexDefault.Styles[DLO_LONG_LINE_MARKER + iIdx].szValue, &rgb)) // edge back
       SendMessage(hwnd, SCI_SETEDGECOLOUR, rgb, 0);
     else
-      SendMessage(hwnd, SCI_SETEDGECOLOUR, GetSysColor(COLOR_3DLIGHT), 0);
+      SendMessage(hwnd, SCI_SETEDGECOLOUR, RGB(60, 60, 60), 0);  // [biko]: dark mode edge
   }
 }
 
