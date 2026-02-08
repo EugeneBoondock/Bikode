@@ -23,6 +23,7 @@
 #include "DarkMode.h"
 #include <string.h>
 #include <stdio.h>
+#include "resource.h"
 
 //=============================================================================
 // Color palette
@@ -32,9 +33,9 @@
 #define CP_BG              RGB(24, 24, 24)
 #define CP_HEADER          RGB(24, 24, 24)
 
-// User bubble (right side)
-#define CP_USER_BG         RGB(55, 95, 190)
-#define CP_USER_TEXT       RGB(255, 255, 255)
+// User bubble (right side) — neutral grey
+#define CP_USER_BG         RGB(55, 55, 60)
+#define CP_USER_TEXT       RGB(230, 230, 235)
 
 // AI bubble (left side)
 #define CP_AI_BG           RGB(44, 44, 48)
@@ -46,15 +47,15 @@
 // Input area
 #define CP_INPUT_BG        RGB(36, 36, 40)
 #define CP_INPUT_BD        RGB(60, 60, 65)
-#define CP_INPUT_FOCUS_BD  RGB(75, 135, 240)
+#define CP_INPUT_FOCUS_BD  RGB(80, 80, 86)
 #define CP_INPUT_TEXT      RGB(220, 220, 225)
 
-// Accents
-#define CP_ACCENT          RGB(75, 139, 245)
+// Accents — no blue, neutral tones
+#define CP_ACCENT          RGB(200, 200, 205)
 #define CP_TEXT_PRIMARY    RGB(230, 230, 235)
 #define CP_TEXT_SECONDARY  RGB(140, 140, 150)
 #define CP_CLOSE_HOV       RGB(50, 50, 56)
-#define CP_SEND_HOV        RGB(55, 95, 190)
+#define CP_SEND_HOV        RGB(65, 65, 70)
 #define CP_SEND_BG         RGB(44, 44, 48)
 #define CP_SCROLLBAR_BG    RGB(30, 30, 34)
 #define CP_SCROLLBAR_TH    RGB(60, 60, 68)
@@ -125,6 +126,9 @@ static HFONT    s_hFontInput   = NULL;
 static HFONT    s_hFontStatus  = NULL;
 static HFONT    s_hFontLabel   = NULL;
 static HFONT    s_hFontBubble  = NULL;
+
+// Logo icon
+static HICON    s_hIconLogo    = NULL;
 
 // Message store
 static ChatMsg  s_msgs[MAX_MSGS];
@@ -681,6 +685,10 @@ BOOL ChatPanel_Create(HWND hwndParent)
             s_hwndSend, GWLP_WNDPROC, (LONG_PTR)SendBtnProc);
     }
 
+    // Load white Biko logo icon for header
+    s_hIconLogo = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDR_MAINWND),
+                                    IMAGE_ICON, 18, 18, LR_DEFAULTCOLOR);
+
     AddMessage(MSG_SYSTEM, "Biko AI \xe2\x80\xa2 Ready");
     return TRUE;
 }
@@ -705,6 +713,7 @@ void ChatPanel_Destroy(void)
     s_iHistoryCount = 0;
     s_bVisible = FALSE;
 
+    if (s_hIconLogo) { DestroyIcon(s_hIconLogo); s_hIconLogo = NULL; }
     DestroyFonts();
 }
 
@@ -980,15 +989,17 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             DeleteObject(hBg);
         }
 
-        // Header
+        // Header — Biko logo icon + title
         {
-            int dotX = 16;
-            int dotY = CHAT_HEADER_HEIGHT / 2;
-            DrawStatusDot(hm, dotX, dotY, CHAT_STATUS_DOT_R, CP_ACCENT);
+            int iconX = 10;
+            int iconY = (CHAT_HEADER_HEIGHT - 18) / 2;
+            if (s_hIconLogo)
+                DrawIconEx(hm, iconX, iconY, s_hIconLogo,
+                           18, 18, 0, NULL, DI_NORMAL);
 
             if (s_hFontHeader) SelectObject(hm, s_hFontHeader);
             SetTextColor(hm, CP_TEXT_PRIMARY);
-            RECT rcTitle = { dotX + CHAT_STATUS_DOT_R + 8, 0,
+            RECT rcTitle = { iconX + 18 + 6, 0,
                              s_rcCloseBtn.left - 8, CHAT_HEADER_HEIGHT };
             DrawTextW(hm, L"Biko AI", -1, &rcTitle,
                       DT_SINGLELINE | DT_VCENTER | DT_LEFT);
