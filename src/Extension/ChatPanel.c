@@ -621,17 +621,20 @@ static void SetupOutputStyles(HWND hwndOutput)
     BOOL bDark = DarkMode_IsEnabled();
     COLORREF bgClr = bDark ? DK_BG : LT_BG;
 
-    // Default style - body text
+    // User message bubble background (subtle tint)
+    COLORREF userBubbleBg = bDark ? RGB(30, 35, 48) : RGB(232, 240, 255);
+
+    // Default style - body text (AI response text)
     SendMessage(hwndOutput, SCI_STYLESETFONT, STYLE_DEFAULT, (LPARAM)"Segoe UI");
-    SendMessage(hwndOutput, SCI_STYLESETSIZE, STYLE_DEFAULT, 9);
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, STYLE_DEFAULT, 10);
     SendMessage(hwndOutput, SCI_STYLESETBACK, STYLE_DEFAULT, bgClr);
     SendMessage(hwndOutput, SCI_STYLESETFORE, STYLE_DEFAULT,
                 bDark ? DK_TEXT1 : LT_TEXT1);
     SendMessage(hwndOutput, SCI_STYLECLEARALL, 0, 0);
 
-    // Caret
-    SendMessage(hwndOutput, SCI_SETCARETFORE,
-                bDark ? DK_TEXT1 : LT_TEXT1, 0);
+    // Hide caret - read only control
+    SendMessage(hwndOutput, SCI_SETCARETFORE, bgClr, 0);
+    SendMessage(hwndOutput, SCI_SETCARETSTYLE, CARETSTYLE_INVISIBLE, 0);
 
     // Selection
     SendMessage(hwndOutput, SCI_SETSELBACK, TRUE,
@@ -642,7 +645,7 @@ static void SetupOutputStyles(HWND hwndOutput)
     // Markdown base styles
     MarkdownPreview_SetupStyles(hwndOutput);
 
-    // Style 20: User label (accent, semibold, smaller)
+    // Style 20: User label "You" (accent color, semibold)
     SendMessage(hwndOutput, SCI_STYLESETFONT, 20, (LPARAM)"Segoe UI Semibold");
     SendMessage(hwndOutput, SCI_STYLESETSIZE, 20, 9);
     SendMessage(hwndOutput, SCI_STYLESETFORE, 20,
@@ -650,7 +653,7 @@ static void SetupOutputStyles(HWND hwndOutput)
     SendMessage(hwndOutput, SCI_STYLESETBOLD, 20, FALSE);
     SendMessage(hwndOutput, SCI_STYLESETBACK, 20, bgClr);
 
-    // Style 21: AI label (primary text, semibold, smaller)
+    // Style 21: AI label "Biko" (primary text, semibold)
     SendMessage(hwndOutput, SCI_STYLESETFONT, 21, (LPARAM)"Segoe UI Semibold");
     SendMessage(hwndOutput, SCI_STYLESETSIZE, 21, 9);
     SendMessage(hwndOutput, SCI_STYLESETFORE, 21,
@@ -658,13 +661,29 @@ static void SetupOutputStyles(HWND hwndOutput)
     SendMessage(hwndOutput, SCI_STYLESETBOLD, 21, FALSE);
     SendMessage(hwndOutput, SCI_STYLESETBACK, 21, bgClr);
 
-    // Style 22: System (muted, smaller)
+    // Style 22: System messages (muted, small)
     SendMessage(hwndOutput, SCI_STYLESETFONT, 22, (LPARAM)"Segoe UI");
     SendMessage(hwndOutput, SCI_STYLESETSIZE, 22, 8);
     SendMessage(hwndOutput, SCI_STYLESETFORE, 22,
                 bDark ? DK_TEXT2 : LT_TEXT2);
-    SendMessage(hwndOutput, SCI_STYLESETITALIC, 22, FALSE);
+    SendMessage(hwndOutput, SCI_STYLESETITALIC, 22, TRUE);
     SendMessage(hwndOutput, SCI_STYLESETBACK, 22, bgClr);
+
+    // Style 23: User message body (bubble background)
+    SendMessage(hwndOutput, SCI_STYLESETFONT, 23, (LPARAM)"Segoe UI");
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, 23, 10);
+    SendMessage(hwndOutput, SCI_STYLESETFORE, 23,
+                bDark ? DK_TEXT1 : LT_TEXT1);
+    SendMessage(hwndOutput, SCI_STYLESETBACK, 23, userBubbleBg);
+    SendMessage(hwndOutput, SCI_STYLESETEOLFILLED, 23, TRUE);
+
+    // Style 24: User label with bubble background
+    SendMessage(hwndOutput, SCI_STYLESETFONT, 24, (LPARAM)"Segoe UI Semibold");
+    SendMessage(hwndOutput, SCI_STYLESETSIZE, 24, 9);
+    SendMessage(hwndOutput, SCI_STYLESETFORE, 24,
+                bDark ? DK_ACCENT : LT_ACCENT);
+    SendMessage(hwndOutput, SCI_STYLESETBACK, 24, userBubbleBg);
+    SendMessage(hwndOutput, SCI_STYLESETEOLFILLED, 24, TRUE);
 
     // Left margin
     SendMessage(hwndOutput, SCI_SETMARGINWIDTHN, 0, 12);
@@ -709,12 +728,15 @@ static void AppendToOutput(const char* prefix, const char* text, int style)
 
     int len = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
 
-    // Single blank line separator (not double)
+    // Blank line separator between messages
     if (len > 0)
     {
-        SendMessage(s_hwndOutput, SCI_APPENDTEXT, 1, (LPARAM)"\n");
-        len += 1;
+        SendMessage(s_hwndOutput, SCI_APPENDTEXT, 2, (LPARAM)"\n\n");
+        len += 2;
     }
+
+    BOOL isUser = (style == 20);
+    BOOL isAI   = (style == 21);
 
     // Prefix label on its own line
     if (prefix && prefix[0])
@@ -722,7 +744,12 @@ static void AppendToOutput(const char* prefix, const char* text, int style)
         int prefixLen = (int)strlen(prefix);
         SendMessage(s_hwndOutput, SCI_APPENDTEXT, prefixLen, (LPARAM)prefix);
 
-        int prefixStyle = (style == 21) ? 21 : (style == 20 ? 20 : 22);
+        // User labels get bubble-background style (24), AI gets normal (21), system gets (22)
+        int prefixStyle;
+        if (isUser)       prefixStyle = 24;
+        else if (isAI)    prefixStyle = 21;
+        else              prefixStyle = 22;
+
         int docLen = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
         if (len + prefixLen <= docLen && prefixLen > 0)
         {
@@ -732,6 +759,14 @@ static void AppendToOutput(const char* prefix, const char* text, int style)
         len += prefixLen;
 
         SendMessage(s_hwndOutput, SCI_APPENDTEXT, 1, (LPARAM)"\n");
+
+        // Style the newline too so EOL fill extends for user bubbles
+        if (isUser)
+        {
+            int nlPos = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0) - 1;
+            SendMessage(s_hwndOutput, SCI_STARTSTYLING, nlPos, 0);
+            SendMessage(s_hwndOutput, SCI_SETSTYLING, 1, 24);
+        }
         len += 1;
     }
 
@@ -741,13 +776,27 @@ static void AppendToOutput(const char* prefix, const char* text, int style)
 
     SendMessage(s_hwndOutput, SCI_APPENDTEXT, textLen, (LPARAM)text);
 
-    if (style == 21 && textLen > 0)
+    if (isUser)
     {
+        // User messages get bubble background (style 23)
+        int docLen = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
+        int bodyLen = textLen;
+        if (len + bodyLen > docLen) bodyLen = docLen - len;
+        if (bodyLen > 0)
+        {
+            SendMessage(s_hwndOutput, SCI_STARTSTYLING, len, 0);
+            SendMessage(s_hwndOutput, SCI_SETSTYLING, bodyLen, 23);
+        }
+    }
+    else if (isAI && textLen > 0)
+    {
+        // AI responses get markdown styling
         SendMessage(s_hwndOutput, SCI_COLOURISE, 0, -1);
         MarkdownPreview_StyleRange(s_hwndOutput, len, textLen, text);
     }
     else if (textLen > 0)
     {
+        // System/other messages
         int docLen = (int)SendMessage(s_hwndOutput, SCI_GETLENGTH, 0, 0);
         int styleLen = textLen;
         if (len + styleLen > docLen)

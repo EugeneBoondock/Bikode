@@ -957,7 +957,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
           HDC hdc = (HDC)wParam;
           RECT rc;
           GetClientRect(hwnd, &rc);
-          HBRUSH hBrush = CreateSolidBrush(RGB(37, 37, 38));
+          HBRUSH hBrush = CreateSolidBrush(RGB(24, 24, 24));
           FillRect(hdc, &rc, hBrush);
           DeleteObject(hBrush);
           return 1;
@@ -970,7 +970,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
       {
           PAINTSTRUCT ps;
           HDC hdc = BeginPaint(hwnd, &ps);
-          HBRUSH hBrush = CreateSolidBrush(RGB(37, 37, 38));
+          HBRUSH hBrush = CreateSolidBrush(RGB(24, 24, 24));
           FillRect(hdc, &ps.rcPaint, hBrush);
           DeleteObject(hBrush);
           EndPaint(hwnd, &ps);
@@ -5946,6 +5946,30 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
 
       switch (pnmh->code)
       {
+        // [biko]: Dark mode custom draw for toolbar
+        case NM_CUSTOMDRAW:
+        {
+          if (DarkMode_IsEnabled())
+          {
+            LPNMTBCUSTOMDRAW lpcd = (LPNMTBCUSTOMDRAW)lParam;
+            switch (lpcd->nmcd.dwDrawStage)
+            {
+              case CDDS_PREPAINT:
+                return CDRF_NOTIFYITEMDRAW;
+              case CDDS_ITEMPREPAINT:
+              {
+                // Set dark background for toolbar button items
+                lpcd->clrHighlightHotTrack = RGB(55, 55, 55);
+                lpcd->clrBtnHighlight = RGB(55, 55, 55);
+                lpcd->clrBtnFace = RGB(24, 24, 24);
+                return 0x00010000; // TBCDRF_USECDCOLORS
+              }
+            }
+          }
+          break;
+        }
+        // [/biko]
+
         case TBN_ENDADJUST:
           UpdateToolbar();
           break;
@@ -5978,6 +6002,33 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
     case IDC_STATUSBAR:
       switch (pnmh->code)
       {
+        // [biko]: Dark mode custom draw for status bar
+        case NM_CUSTOMDRAW:
+        {
+          if (DarkMode_IsEnabled())
+          {
+            LPNMCUSTOMDRAW lpcd = (LPNMCUSTOMDRAW)lParam;
+            switch (lpcd->dwDrawStage)
+            {
+              case CDDS_PREPAINT:
+                return CDRF_NOTIFYITEMDRAW;
+              case CDDS_ITEMPREPAINT:
+              {
+                COLORREF clrBg = RGB(24, 24, 24);
+                COLORREF clrTxt = RGB(200, 200, 200);
+                SetBkColor(lpcd->hdc, clrBg);
+                SetTextColor(lpcd->hdc, clrTxt);
+                HBRUSH hBr = CreateSolidBrush(clrBg);
+                FillRect(lpcd->hdc, &lpcd->rc, hBr);
+                DeleteObject(hBr);
+                return CDRF_NEWFONT;
+              }
+            }
+          }
+          break;
+        }
+        // [/biko]
+
         case NM_CLICK: {
             LPNMMOUSE pnmm = (LPNMMOUSE)lParam;
             switch (pnmm->dwItemSpec)
@@ -6040,6 +6091,20 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
 
 
     default:
+      // [biko]: Dark mode custom draw for rebar and other controls
+      if (pnmh->code == NM_CUSTOMDRAW && DarkMode_IsEnabled())
+      {
+        LPNMCUSTOMDRAW lpcd = (LPNMCUSTOMDRAW)lParam;
+        if (lpcd->dwDrawStage == CDDS_PREPAINT)
+        {
+          COLORREF clrBg = RGB(24, 24, 24);
+          HBRUSH hBr = CreateSolidBrush(clrBg);
+          FillRect(lpcd->hdc, &lpcd->rc, hBr);
+          DeleteObject(hBr);
+          return CDRF_NOTIFYITEMDRAW;
+        }
+      }
+      // [/biko]
       switch (pnmh->code)
       {
         case TTN_NEEDTEXT: {
