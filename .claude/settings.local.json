@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd /c \"bin\\\\x64\\\\Debug\\\\Notepad2.exe --help\")",
+      "Bash(where:*)",
+      "Bash(\"/c/Program Files \\(x86\\)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe\" Notepad2e.vcxproj /t:Build /p:Configuration=Debug /p:Platform=x64 /p:PlatformToolset=v143 /m /nologo /v:minimal)",
+      "Bash(cmd /c:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(Select-Object -Last 50)",
+      "Bash(\"/c/Program Files \\(x86\\)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe\" Notepad2e.vcxproj //t:Rebuild //p:Configuration=Debug //p:Platform=x64 //p:PlatformToolset=v143 //m:4 //nologo //v:minimal)"
+    ]
+  }
+}

@@ -79,6 +79,7 @@ void AICommands_Init(HWND hwnd, HWND hwndEd)
     AIBridge_Init(hwnd, &s_aiConfig);
     DarkMode_Init(hwnd);
     GitUI_Init(hwnd);
+    Terminal_Init(hwnd);
 }
 
 void AICommands_Shutdown(void)

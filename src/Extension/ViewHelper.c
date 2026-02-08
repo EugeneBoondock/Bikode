@@ -268,6 +268,22 @@ void n2e_SaveActiveEdit()
 
 void n2e_RestoreActiveEdit(const BOOL forceUpdateUI)
 {
+  // [biko]: Redirect focus to terminal/chat if they claim ownership
+  if (Terminal_WantsFocus())
+  {
+    Terminal_Focus();
+    return;
+  }
+  {
+    // Also check if GetFocus is already inside a panel (defensive)
+    HWND hFocus = GetFocus();
+    HWND hTermPanel = Terminal_GetPanelHwnd();
+    HWND hChatPanel = ChatPanel_GetPanelHwnd();
+    if (hTermPanel && hFocus && (hFocus == hTermPanel || IsChild(hTermPanel, hFocus)))
+      return;
+    if (hChatPanel && hFocus && (hFocus == hChatPanel || IsChild(hChatPanel, hFocus)))
+      return;
+  }
   SetFocus(n2e_GetActiveEdit());
   if (forceUpdateUI)
   {

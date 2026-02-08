@@ -75,6 +75,13 @@ HWND    Terminal_GetPanelHwnd(void);
 // Re-apply dark/light mode styles to terminal Scintilla view and panel.
 void    Terminal_ApplyDarkMode(void);
 
+// Returns TRUE if the terminal believes it should hold keyboard focus.
+// Used by the main window to prevent focus-stealing from the terminal.
+BOOL    Terminal_WantsFocus(void);
+
+// Notify terminal that focus was explicitly given to another component.
+void    Terminal_RelinquishFocus(void);
+
 //=============================================================================
 // Run command
 //=============================================================================

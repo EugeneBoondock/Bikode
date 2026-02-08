@@ -1033,6 +1033,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
           iDraftSaveTimer = 0;
         }
         // [2e]: Split view #316
+        // [biko]: n2e_RestoreActiveEdit handles terminal/chat internally
         n2e_RestoreActiveEdit(FALSE);
       }
       break;
@@ -1158,18 +1159,25 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
 
     case WM_SETFOCUS:
     {
-      // Don't steal focus from terminal or chat panel
-      HWND hTermPanel = Terminal_GetPanelHwnd();
-      HWND hChatPanel = ChatPanel_GetPanelHwnd();
-      HWND hPrev = (HWND)wParam;  // Window that lost focus
-      BOOL bTermOrChat = FALSE;
-      if (hTermPanel && (hPrev == hTermPanel || IsChild(hTermPanel, hPrev)))
-        bTermOrChat = TRUE;
-      else if (hChatPanel && (hPrev == hChatPanel || IsChild(hChatPanel, hPrev)))
-        bTermOrChat = TRUE;
-
-      if (!bTermOrChat)
-        n2e_RestoreActiveEdit(FALSE);
+      // [biko]: Redirect to terminal/chat if they claim focus ownership
+      if (Terminal_WantsFocus())
+      {
+        Terminal_Focus();
+      }
+      else
+      {
+        // Check if current focus is already in a panel (defensive)
+        HWND hFocus = GetFocus();
+        HWND hTermPanel = Terminal_GetPanelHwnd();
+        HWND hChatPanel = ChatPanel_GetPanelHwnd();
+        BOOL bPanel = FALSE;
+        if (hTermPanel && hFocus && (hFocus == hTermPanel || IsChild(hTermPanel, hFocus)))
+          bPanel = TRUE;
+        else if (hChatPanel && hFocus && (hFocus == hChatPanel || IsChild(hChatPanel, hFocus)))
+          bPanel = TRUE;
+        if (!bPanel)
+          n2e_RestoreActiveEdit(FALSE);
+      }
       UpdateToolbar();
       UpdateStatusbar();
       break;

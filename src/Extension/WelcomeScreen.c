@@ -509,7 +509,7 @@ void WelcomeScreen_OnResize(HWND hwndParent, int cx, int cy)
 {
     (void)hwndParent;
     if (s_hwndWelcome && IsWindowVisible(s_hwndWelcome))
-        SetWindowPos(s_hwndWelcome, HWND_TOP, 0, 0, cx, cy, 0);
+        SetWindowPos(s_hwndWelcome, NULL, 0, 0, cx, cy, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void WelcomeScreen_Shutdown(void)

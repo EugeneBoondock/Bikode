@@ -1,11 +1,19 @@
 /******************************************************************************
 *
-* Biko
+* Biko — Embedded Terminal  (complete rewrite, Feb 2026)
 *
 * Terminal.c
-*   World-class embedded terminal with ConPTY and shell selector.
-*   Supports PowerShell, CMD, Git Bash, and WSL Bash.
-*   Uses a Scintilla control as the terminal viewport.
+*
+*   Architecture (simple and correct):
+*   ==================================
+*   Panel   — "BikoTermPanel" child of main window. Header bar + splitter.
+*   View    — "BikoTermView" child of panel. Custom-drawn char grid.
+*             Owns its WndProc. Keyboard goes WM_CHAR → UTF-8 → pipe → shell.
+*   ConPTY  — Win10 1809+ Pseudo Console. Falls back to raw pipes.
+*   Reader  — background thread reads shell stdout, posts to panel.
+*   VT      — minimal ANSI parser updates character grid.
+*
+* IMPORTANT BUILD MARKER: 2026-02-08-v5-CLEAN-REWRITE
 *
 ******************************************************************************/
 
@@ -14,1402 +22,1181 @@
 #include "CommonUtils.h"
 #include <uxtheme.h>
 #include <shlwapi.h>
-#include "SciCall.h"
-#include "Scintilla.h"
 #include <string.h>
 #include <stdio.h>
 
-//=============================================================================
-// ConPTY types (Windows 10 1809+)
-//=============================================================================
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "shlwapi.lib")
 
+/* ═══════════════════════════════════════════════════════════════════
+ * ConPTY function pointers (Win10 1809+)
+ * ═══════════════════════════════════════════════════════════════════ */
 typedef VOID* HPCON;
+typedef HRESULT(WINAPI* PFN_CreatePseudoConsole)(COORD, HANDLE, HANDLE, DWORD, HPCON*);
+typedef HRESULT(WINAPI* PFN_ResizePseudoConsole)(HPCON, COORD);
+typedef void   (WINAPI* PFN_ClosePseudoConsole)(HPCON);
 
-typedef HRESULT (WINAPI *pfnCreatePseudoConsole)(
-    COORD size, HANDLE hInput, HANDLE hOutput, DWORD dwFlags, HPCON* phPC);
-typedef HRESULT (WINAPI *pfnResizePseudoConsole)(HPCON hPC, COORD size);
-typedef void    (WINAPI *pfnClosePseudoConsole)(HPCON hPC);
+static PFN_CreatePseudoConsole pfnCreatePC  = NULL;
+static PFN_ResizePseudoConsole pfnResizePC  = NULL;
+static PFN_ClosePseudoConsole  pfnClosePC   = NULL;
+static BOOL g_havePTY = FALSE;
 
-static pfnCreatePseudoConsole    s_pfnCreatePC = NULL;
-static pfnResizePseudoConsole    s_pfnResizePC = NULL;
-static pfnClosePseudoConsole     s_pfnClosePC = NULL;
-static BOOL                      s_bConPTYAvailable = FALSE;
+/* ═══════════════════════════════════════════════════════════════════
+ * Constants
+ * ═══════════════════════════════════════════════════════════════════ */
+#define PANEL_HEIGHT_DEFAULT  220
+#define SPLITTER_H            3
+#define HEADER_H              32
+#define TIMER_HEALTH          1
+#define TIMER_BLINK           2
+#define WM_TERMDATA           (WM_USER + 200)
 
-//=============================================================================
-// Design constants
-//=============================================================================
+/* colours */
+#define C_DKBG     RGB(12,12,12)
+#define C_DKFG     RGB(204,204,204)
+#define C_DKHDR    RGB(25,25,28)
+#define C_DKSPLIT  RGB(45,45,50)
+#define C_DKTXT    RGB(204,204,204)
+#define C_DKDIM    RGB(120,120,128)
+#define C_DKBTN    RGB(50,50,56)
+#define C_DKBORD   RGB(50,50,55)
+#define C_DKDROP   RGB(40,40,44)
 
-#define TERMINAL_HEIGHT         220
-#define TERMINAL_SPLITTER       3
-#define TERMINAL_HEADER_HEIGHT  32
+#define C_LTBG     RGB(255,255,255)
+#define C_LTFG     RGB(17,24,39)
+#define C_LTHDR    RGB(243,244,246)
+#define C_LTSPLIT  RGB(229,231,235)
+#define C_LTTXT    RGB(17,24,39)
+#define C_LTDIM    RGB(107,114,128)
+#define C_LTBTN    RGB(229,231,235)
+#define C_LTBORD   RGB(209,213,219)
+#define C_LTDROP   RGB(255,255,255)
 
-// Dark mode colors (matching ChatPanel)
-#define TRM_DK_SURFACE      RGB(18, 18, 18)
-#define TRM_DK_HEADER       RGB(25, 25, 28)
-#define TRM_DK_SPLITTER     RGB(45, 45, 50)
-#define TRM_DK_TEXT         RGB(204, 204, 204)
-#define TRM_DK_TEXT_DIM     RGB(120, 120, 128)
-#define TRM_DK_ACCENT       RGB(99, 102, 241)
-#define TRM_DK_DROPDOWN_BG  RGB(40, 40, 44)
-#define TRM_DK_DROPDOWN_HL  RGB(55, 55, 62)
-#define TRM_DK_BORDER       RGB(50, 50, 55)
-#define TRM_DK_BTN_HOVER    RGB(50, 50, 56)
-#define TRM_DK_TERM_BG      RGB(12, 12, 12)
-
-// Light mode colors
-#define TRM_LT_SURFACE      RGB(249, 250, 251)
-#define TRM_LT_HEADER       RGB(243, 244, 246)
-#define TRM_LT_SPLITTER     RGB(229, 231, 235)
-#define TRM_LT_TEXT         RGB(17, 24, 39)
-#define TRM_LT_TEXT_DIM     RGB(107, 114, 128)
-#define TRM_LT_ACCENT       RGB(79, 70, 229)
-#define TRM_LT_DROPDOWN_BG  RGB(255, 255, 255)
-#define TRM_LT_DROPDOWN_HL  RGB(238, 242, 255)
-#define TRM_LT_BORDER       RGB(209, 213, 219)
-#define TRM_LT_BTN_HOVER    RGB(229, 231, 235)
-#define TRM_LT_TERM_BG      RGB(255, 255, 255)
-
-//=============================================================================
-// Shell definitions
-//=============================================================================
-
-typedef enum {
-    SHELL_POWERSHELL = 0,
-    SHELL_CMD,
-    SHELL_GIT_BASH,
-    SHELL_WSL_BASH,
-    SHELL_COUNT
-} ShellType;
-
-typedef struct {
-    const WCHAR*    wszLabel;       // Display name
-    const WCHAR*    wszIcon;        // Unicode icon
-    WCHAR           wszPath[MAX_PATH]; // Resolved path (empty = not found)
-    BOOL            bAvailable;
-} ShellInfo;
-
-static ShellInfo s_shells[SHELL_COUNT] = {
-    { L"PowerShell", L"\x26A1", { 0 }, FALSE },
-    { L"CMD",        L">_",     { 0 }, FALSE },
-    { L"Git Bash",   L"\xE0B0", { 0 }, FALSE },
-    { L"Bash (WSL)", L"\x00A7",  { 0 }, FALSE },
+/* ANSI 16-colour palette (dark theme) */
+static COLORREF g_ansi[16] = {
+    RGB(12,12,12),    RGB(197,15,31),   RGB(19,161,14),  RGB(193,156,0),
+    RGB(0,55,218),    RGB(136,23,152),  RGB(58,150,221), RGB(204,204,204),
+    RGB(118,118,118), RGB(231,72,86),   RGB(22,198,12),  RGB(249,241,165),
+    RGB(59,120,255),  RGB(180,0,158),   RGB(97,214,214), RGB(242,242,242)
 };
 
-static ShellType s_activeShell = SHELL_POWERSHELL;
+/* ═══════════════════════════════════════════════════════════════════
+ * Shell table
+ * ═══════════════════════════════════════════════════════════════════ */
+typedef enum { SH_PS=0, SH_CMD, SH_GIT, SH_WSL, SH_COUNT } ShellKind;
 
-//=============================================================================
-// Terminal state
-//=============================================================================
+static struct {
+    const WCHAR *label;
+    WCHAR path[MAX_PATH];
+    BOOL  found;
+} g_shells[SH_COUNT] = {
+    { L"PowerShell", {0}, FALSE },
+    { L"CMD",        {0}, FALSE },
+    { L"Git Bash",   {0}, FALSE },
+    { L"Bash (WSL)", {0}, FALSE },
+};
+static ShellKind g_curShell = SH_PS;
 
-typedef struct TerminalInstance {
-    HPCON           hPseudoConsole;
-    HANDLE          hProcess;
-    HANDLE          hThread;
-    HANDLE          hPipeIn;        // Write end -> shell stdin
-    HANDLE          hPipeOut;       // Read end <- shell stdout
-    HANDLE          hInputRead;
-    HANDLE          hOutputWrite;
-    HANDLE          hReadThread;
-    HWND            hwndView;       // Scintilla control
-    volatile BOOL   bAlive;
-    int             currentStyle;
-    ShellType       shellType;
-} TerminalInstance;
+/* ═══════════════════════════════════════════════════════════════════
+ * Character Grid
+ * ═══════════════════════════════════════════════════════════════════ */
+#define GRID_MAXLINES 4000
 
-static HWND                 s_hwndMain = NULL;
-static HWND                 s_hwndPanel = NULL;
-static TerminalInstance*    s_pTerminal = NULL;
-static BOOL                 s_bVisible = FALSE;
-static int                  s_iPanelHeight = TERMINAL_HEIGHT;
-static WNDPROC              s_pfnOrigViewProc = NULL;
-static HFONT                s_hFontHeader = NULL;
-static HFONT                s_hFontDropdown = NULL;
-static BOOL                 s_bCloseHover = FALSE;
-static BOOL                 s_bNewHover = FALSE;
+typedef struct {
+    WCHAR ch;
+    BYTE  fg, bg, attr;
+} Cell;
 
-static const WCHAR* TERMINAL_PANEL_CLASS = L"BikoTerminalPanel";
-static BOOL s_bClassRegistered = FALSE;
+typedef struct {
+    Cell *buf;
+    int   cols, rows;
+    int   maxLines;
+    int   used;          /* total lines allocated */
+    int   curR, curC;    /* cursor position (screen-relative) */
+    int   scrollOff;     /* scrollback offset (0=bottom) */
+    /* VT parser */
+    BOOL  inEsc;
+    char  escBuf[256];
+    int   escLen;
+    BYTE  fg, bg;
+    BOOL  bold;
+    int   savedR, savedC;
+} Grid;
 
-// Header button rects (calculated during paint)
-static RECT s_rcDropdown = { 0 };
-static RECT s_rcNewBtn = { 0 };
-static RECT s_rcCloseBtn = { 0 };
-
-//=============================================================================
-// Forward declarations
-//=============================================================================
-
-static LRESULT CALLBACK TermPanelWndProc(HWND, UINT, WPARAM, LPARAM);
-static LRESULT CALLBACK TermViewSubclassProc(HWND, UINT, WPARAM, LPARAM);
-static DWORD   WINAPI   TerminalReaderThread(LPVOID lpParam);
-static BOOL    InitConPTY(void);
-static BOOL    CreateTerminalProcess(TerminalInstance* pTerm, COORD size, ShellType shell);
-static void    DestroyTerminalInstance(TerminalInstance* pTerm);
-static void    SetupTerminalStyles(HWND hwndView);
-static void    AppendTerminalOutput(HWND hwndView, const char* data, int len);
-static void    DetectAvailableShells(void);
-static void    ShowShellMenu(HWND hwnd);
-static ShellType GetBestShell(void);
-
-//=============================================================================
-// Panel window class
-//=============================================================================
-
-static void RegisterTermPanelClass(HINSTANCE hInst)
-{
-    if (s_bClassRegistered) return;
-
-    WNDCLASSEXW wc;
-    ZeroMemory(&wc, sizeof(wc));
-    wc.cbSize = sizeof(wc);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = TermPanelWndProc;
-    wc.hInstance = hInst;
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = NULL;
-    wc.lpszClassName = TERMINAL_PANEL_CLASS;
-
-    RegisterClassExW(&wc);
-    s_bClassRegistered = TRUE;
+static int GridBase(Grid *g) {
+    int b = g->used - g->rows;
+    return b < 0 ? 0 : b;
 }
 
-static void CreateTermFonts(void)
-{
-    if (!s_hFontHeader)
-    {
-        s_hFontHeader = CreateFontW(
-            -13, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-    }
-    if (!s_hFontDropdown)
-    {
-        s_hFontDropdown = CreateFontW(
-            -12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+static Cell* GridCell(Grid *g, int screenRow, int col) {
+    int line = GridBase(g) + screenRow;
+    if (line < 0) line = 0;
+    if (line >= g->used) line = g->used - 1;
+    if (col < 0) col = 0;
+    if (col >= g->cols) col = g->cols - 1;
+    return &g->buf[line * g->cols + col];
+}
+
+static void Grid_ClampCursor(Grid *g) {
+    if (g->curR < 0) g->curR = 0;
+    if (g->curR >= g->rows) g->curR = g->rows - 1;
+    if (g->curC < 0) g->curC = 0;
+    if (g->curC >= g->cols) g->curC = g->cols - 1;
+}
+
+static void Grid_ClearRow(Grid *g, int screenRow) {
+    int line = GridBase(g) + screenRow;
+    if (line < 0 || line >= g->used) return;
+    Cell *r = &g->buf[line * g->cols];
+    for (int c = 0; c < g->cols; c++) {
+        r[c].ch = L' '; r[c].fg = 7; r[c].bg = 0; r[c].attr = 0;
     }
 }
 
-//=============================================================================
-// Shell detection
-//=============================================================================
+static void Grid_Compact(Grid *g) {
+    if (g->used < g->maxLines) return;
+    int drop = g->maxLines / 2;
+    memmove(g->buf, g->buf + drop * g->cols,
+            (size_t)(g->used - drop) * g->cols * sizeof(Cell));
+    g->used -= drop;
+    g->scrollOff -= drop;
+    if (g->scrollOff < 0) g->scrollOff = 0;
+}
 
-static void DetectAvailableShells(void)
-{
-    // PowerShell (prefer pwsh.exe over powershell.exe)
-    {
-        WCHAR wszPath[MAX_PATH];
-        // Try pwsh (PowerShell 7+) first
-        if (SearchPathW(NULL, L"pwsh.exe", NULL, MAX_PATH, wszPath, NULL))
-        {
-            wcscpy_s(s_shells[SHELL_POWERSHELL].wszPath, MAX_PATH, wszPath);
-            s_shells[SHELL_POWERSHELL].bAvailable = TRUE;
-        }
-        else if (SearchPathW(NULL, L"powershell.exe", NULL, MAX_PATH, wszPath, NULL))
-        {
-            wcscpy_s(s_shells[SHELL_POWERSHELL].wszPath, MAX_PATH, wszPath);
-            s_shells[SHELL_POWERSHELL].bAvailable = TRUE;
+static void Grid_ScrollUp(Grid *g) {
+    Grid_Compact(g);
+    if (g->used < g->maxLines) {
+        int nl = g->used++;
+        Cell *r = &g->buf[nl * g->cols];
+        for (int c = 0; c < g->cols; c++) {
+            r[c].ch = L' '; r[c].fg = g->fg; r[c].bg = g->bg; r[c].attr = 0;
         }
     }
+}
 
-    // CMD
-    {
-        WCHAR wszPath[MAX_PATH];
-        DWORD dwLen = GetEnvironmentVariableW(L"COMSPEC", wszPath, MAX_PATH);
-        if (dwLen > 0 && dwLen < MAX_PATH)
-        {
-            wcscpy_s(s_shells[SHELL_CMD].wszPath, MAX_PATH, wszPath);
-            s_shells[SHELL_CMD].bAvailable = TRUE;
-        }
-        else if (SearchPathW(NULL, L"cmd.exe", NULL, MAX_PATH, wszPath, NULL))
-        {
-            wcscpy_s(s_shells[SHELL_CMD].wszPath, MAX_PATH, wszPath);
-            s_shells[SHELL_CMD].bAvailable = TRUE;
+static Grid* Grid_Create(int cols, int rows) {
+    Grid *g = (Grid*)n2e_Alloc(sizeof(Grid));
+    if (!g) return NULL;
+    ZeroMemory(g, sizeof(Grid));
+    g->maxLines = GRID_MAXLINES;
+    g->cols = cols > 0 ? cols : 80;
+    g->rows = rows > 0 ? rows : 24;
+    g->buf = (Cell*)n2e_Alloc((size_t)g->maxLines * g->cols * sizeof(Cell));
+    if (!g->buf) { n2e_Free(g); return NULL; }
+    g->used = g->rows;
+    g->fg = 7; g->bg = 0;
+    for (int i = 0; i < g->used * g->cols; i++) {
+        g->buf[i].ch = L' '; g->buf[i].fg = 7; g->buf[i].bg = 0; g->buf[i].attr = 0;
+    }
+    return g;
+}
+
+static void Grid_Free(Grid *g) {
+    if (!g) return;
+    if (g->buf) n2e_Free(g->buf);
+    n2e_Free(g);
+}
+
+static void Grid_Resize(Grid *g, int newCols, int newRows) {
+    if (newCols <= 0 || newRows <= 0) return;
+    if (newCols > 500) newCols = 500;
+    if (newRows > 200) newRows = 200;
+    if (newCols == g->cols && newRows == g->rows) return;
+
+    Cell *nb = (Cell*)n2e_Alloc((size_t)g->maxLines * newCols * sizeof(Cell));
+    if (!nb) return;
+    for (int i = 0; i < g->maxLines * newCols; i++) {
+        nb[i].ch = L' '; nb[i].fg = 7; nb[i].bg = 0; nb[i].attr = 0;
+    }
+    int mc = g->cols < newCols ? g->cols : newCols;
+    int dl = 0;
+    for (int sl = 0; sl < g->used && dl < g->maxLines; sl++, dl++) {
+        for (int c = 0; c < mc; c++)
+            nb[dl * newCols + c] = g->buf[sl * g->cols + c];
+    }
+    n2e_Free(g->buf);
+    g->buf = nb;
+    g->cols = newCols;
+    g->rows = newRows;
+    g->used = dl < newRows ? newRows : dl;
+    Grid_ClampCursor(g);
+    g->scrollOff = 0;
+}
+
+static void Grid_PutChar(Grid *g, WCHAR ch) {
+    Cell *c = GridCell(g, g->curR, g->curC);
+    c->ch = ch; c->fg = g->fg; c->bg = g->bg;
+    c->attr = g->bold ? 1 : 0;
+    g->curC++;
+    if (g->curC >= g->cols) {
+        g->curC = 0;
+        if (g->curR >= g->rows - 1)
+            Grid_ScrollUp(g);
+        else
+            g->curR++;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * VT/ANSI Parser
+ * ═══════════════════════════════════════════════════════════════════ */
+
+static void ParseCSIParams(const char *s, int len, int *params, int *np, int maxP) {
+    *np = 0;
+    int cur = 0; BOOL got = FALSE;
+    for (int i = 0; i < len && *np < maxP; i++) {
+        if (s[i] >= '0' && s[i] <= '9') {
+            cur = cur * 10 + (s[i] - '0');
+            got = TRUE;
+        } else if (s[i] == ';') {
+            params[(*np)++] = got ? cur : 0;
+            cur = 0; got = FALSE;
         }
     }
+    if (got || *np > 0) params[(*np)++] = cur;
+}
 
-    // Git Bash
-    {
-        WCHAR wszPath[MAX_PATH];
-        // Check common locations
-        const WCHAR* gitBashPaths[] = {
-            L"C:\\Program Files\\Git\\bin\\bash.exe",
-            L"C:\\Program Files (x86)\\Git\\bin\\bash.exe",
-            NULL
-        };
+static void HandleCSI(Grid *g, char final, const char *body, int bodyLen) {
+    int p[16] = {0}; int np = 0;
+    ParseCSIParams(body, bodyLen, p, &np, 16);
 
-        BOOL found = FALSE;
-        // Try PATH first
-        if (SearchPathW(NULL, L"bash.exe", NULL, MAX_PATH, wszPath, NULL))
-        {
-            // Verify it's Git Bash (not WSL bash)
-            if (wcsstr(wszPath, L"Git") != NULL)
-            {
-                wcscpy_s(s_shells[SHELL_GIT_BASH].wszPath, MAX_PATH, wszPath);
-                s_shells[SHELL_GIT_BASH].bAvailable = TRUE;
-                found = TRUE;
+    switch (final) {
+    case 'm': /* SGR */
+        if (np == 0) { g->fg = 7; g->bg = 0; g->bold = FALSE; break; }
+        for (int i = 0; i < np; i++) {
+            int v = p[i];
+            if (v == 0) { g->fg = 7; g->bg = 0; g->bold = FALSE; }
+            else if (v == 1) g->bold = TRUE;
+            else if (v == 22) g->bold = FALSE;
+            else if (v >= 30 && v <= 37) g->fg = (BYTE)(v - 30);
+            else if (v == 39) g->fg = 7;
+            else if (v >= 40 && v <= 47) g->bg = (BYTE)(v - 40);
+            else if (v == 49) g->bg = 0;
+            else if (v >= 90 && v <= 97) g->fg = (BYTE)(v - 90 + 8);
+            else if (v >= 100 && v <= 107) g->bg = (BYTE)(v - 100 + 8);
+        }
+        break;
+
+    case 'A': g->curR -= np > 0 && p[0] > 0 ? p[0] : 1; Grid_ClampCursor(g); break;
+    case 'B': g->curR += np > 0 && p[0] > 0 ? p[0] : 1; Grid_ClampCursor(g); break;
+    case 'C': g->curC += np > 0 && p[0] > 0 ? p[0] : 1; Grid_ClampCursor(g); break;
+    case 'D': g->curC -= np > 0 && p[0] > 0 ? p[0] : 1; Grid_ClampCursor(g); break;
+    case 'H': case 'f':
+        g->curR = (np > 0 && p[0] > 0 ? p[0] : 1) - 1;
+        g->curC = (np > 1 && p[1] > 0 ? p[1] : 1) - 1;
+        Grid_ClampCursor(g); break;
+    case 'G':
+        g->curC = (np > 0 && p[0] > 0 ? p[0] : 1) - 1;
+        Grid_ClampCursor(g); break;
+    case 'd':
+        g->curR = (np > 0 && p[0] > 0 ? p[0] : 1) - 1;
+        Grid_ClampCursor(g); break;
+
+    case 'J': {
+        int mode = np > 0 ? p[0] : 0;
+        if (mode == 0) {
+            for (int c = g->curC; c < g->cols; c++) GridCell(g, g->curR, c)->ch = L' ';
+            for (int r = g->curR + 1; r < g->rows; r++) Grid_ClearRow(g, r);
+        } else if (mode == 1) {
+            for (int r = 0; r < g->curR; r++) Grid_ClearRow(g, r);
+            for (int c = 0; c <= g->curC; c++) GridCell(g, g->curR, c)->ch = L' ';
+        } else if (mode == 2 || mode == 3) {
+            for (int r = 0; r < g->rows; r++) Grid_ClearRow(g, r);
+            g->curR = 0; g->curC = 0;
+        }
+        break;
+    }
+
+    case 'K': {
+        int mode = np > 0 ? p[0] : 0;
+        int base = GridBase(g) + g->curR;
+        if (base < 0 || base >= g->used) break;
+        Cell *row = &g->buf[base * g->cols];
+        if (mode == 0) { for (int c = g->curC; c < g->cols; c++) row[c].ch = L' '; }
+        else if (mode == 1) { for (int c = 0; c <= g->curC; c++) row[c].ch = L' '; }
+        else if (mode == 2) { for (int c = 0; c < g->cols; c++) row[c].ch = L' '; }
+        break;
+    }
+
+    case 'S': { int n = np > 0 && p[0] > 0 ? p[0] : 1; for (int i = 0; i < n; i++) Grid_ScrollUp(g); break; }
+    case 'T': break; /* scroll down — ignore */
+
+    case 'L': { /* insert lines */
+        int n = np > 0 && p[0] > 0 ? p[0] : 1;
+        for (int i = 0; i < n && g->curR < g->rows; i++) Grid_ScrollUp(g);
+        break;
+    }
+    case 'M': break; /* delete lines — ignore */
+    case 'P': { /* delete chars */
+        int n = np > 0 && p[0] > 0 ? p[0] : 1;
+        int base = GridBase(g) + g->curR;
+        if (base < 0 || base >= g->used) break;
+        Cell *row = &g->buf[base * g->cols];
+        for (int c = g->curC; c < g->cols - n; c++) row[c] = row[c + n];
+        for (int c = g->cols - n; c < g->cols; c++) { row[c].ch = L' '; row[c].fg = g->fg; row[c].bg = g->bg; }
+        break;
+    }
+    case '@': { /* insert chars */
+        int n = np > 0 && p[0] > 0 ? p[0] : 1;
+        int base = GridBase(g) + g->curR;
+        if (base < 0 || base >= g->used) break;
+        Cell *row = &g->buf[base * g->cols];
+        for (int c = g->cols - 1; c >= g->curC + n; c--) row[c] = row[c - n];
+        for (int c = g->curC; c < g->curC + n && c < g->cols; c++) { row[c].ch = L' '; row[c].fg = g->fg; row[c].bg = g->bg; }
+        break;
+    }
+    case 'X': { /* erase chars */
+        int n = np > 0 && p[0] > 0 ? p[0] : 1;
+        for (int c = g->curC; c < g->curC + n && c < g->cols; c++) GridCell(g, g->curR, c)->ch = L' ';
+        break;
+    }
+
+    case 'n': /* device status report */
+        break; /* ignore for now */
+    case 's': g->savedR = g->curR; g->savedC = g->curC; break;
+    case 'u': g->curR = g->savedR; g->curC = g->savedC; Grid_ClampCursor(g); break;
+    case 'r': break; /* scroll region — ignore */
+    case 'h': case 'l': break; /* mode set/reset — ignore */
+    }
+}
+
+static void Grid_ProcessVT(Grid *g, const char *data, int len) {
+    for (int i = 0; i < len; i++) {
+        unsigned char ch = (unsigned char)data[i];
+
+        if (g->inEsc) {
+            g->escBuf[g->escLen++] = (char)ch;
+            if (g->escLen >= 255) { g->inEsc = FALSE; g->escLen = 0; continue; }
+
+            if (g->escLen == 1) {
+                if (ch == '[') continue;       /* CSI start */
+                if (ch == ']') continue;       /* OSC start */
+                if (ch == '(' || ch == ')' || ch == '*' || ch == '+') continue;
+                if (ch == '7') { g->savedR = g->curR; g->savedC = g->curC; }
+                if (ch == '8') { g->curR = g->savedR; g->curC = g->savedC; Grid_ClampCursor(g); }
+                if (ch == 'M') { if (g->curR > 0) g->curR--; }
+                g->inEsc = FALSE; g->escLen = 0;
+                continue;
             }
-        }
 
-        if (!found)
-        {
-            for (int i = 0; gitBashPaths[i]; i++)
-            {
-                if (GetFileAttributesW(gitBashPaths[i]) != INVALID_FILE_ATTRIBUTES)
-                {
-                    wcscpy_s(s_shells[SHELL_GIT_BASH].wszPath, MAX_PATH, gitBashPaths[i]);
-                    s_shells[SHELL_GIT_BASH].bAvailable = TRUE;
-                    break;
+            /* CSI sequence: first byte was '[' */
+            if (g->escBuf[0] == '[') {
+                if ((ch >= 0x40 && ch <= 0x7E) && ch != '[') {
+                    /* Final byte */
+                    if (ch == '?') continue; /* private mode prefix, keep going */
+                    HandleCSI(g, (char)ch, g->escBuf + 1, g->escLen - 1);
+                    g->inEsc = FALSE; g->escLen = 0;
                 }
+                continue;
+            }
+
+            /* OSC sequence: ends with BEL or ST */
+            if (g->escBuf[0] == ']') {
+                if (ch == 0x07 || (ch == '\\' && g->escLen >= 2 && g->escBuf[g->escLen-2] == 0x1B)) {
+                    g->inEsc = FALSE; g->escLen = 0;
+                }
+                continue;
+            }
+
+            /* Charset selection: consume one more byte */
+            if (g->escBuf[0] == '(' || g->escBuf[0] == ')') {
+                g->inEsc = FALSE; g->escLen = 0;
+                continue;
+            }
+
+            g->inEsc = FALSE; g->escLen = 0;
+            continue;
+        }
+
+        /* Not in escape */
+        if (ch == 0x1B) { g->inEsc = TRUE; g->escLen = 0; continue; }
+        if (ch == '\r')  { g->curC = 0; continue; }
+        if (ch == '\n')  {
+            if (g->curR >= g->rows - 1) Grid_ScrollUp(g);
+            else g->curR++;
+            continue;
+        }
+        if (ch == '\b')  { if (g->curC > 0) g->curC--; continue; }
+        if (ch == '\t')  { g->curC = (g->curC + 8) & ~7; if (g->curC >= g->cols) g->curC = g->cols - 1; continue; }
+        if (ch == '\a')  { continue; } /* bell */
+        if (ch < 0x20)  { continue; } /* other control chars */
+
+        /* Printable character — handle UTF-8 → wide */
+        WCHAR wch;
+        if (ch < 0x80) {
+            wch = (WCHAR)ch;
+        } else {
+            /* Simple UTF-8 decode */
+            char mb[4]; int mbLen = 0;
+            mb[mbLen++] = (char)ch;
+            if ((ch & 0xE0) == 0xC0) {
+                if (i + 1 < len) mb[mbLen++] = data[++i];
+            } else if ((ch & 0xF0) == 0xE0) {
+                if (i + 1 < len) mb[mbLen++] = data[++i];
+                if (i + 1 < len) mb[mbLen++] = data[++i];
+            } else if ((ch & 0xF8) == 0xF0) {
+                if (i + 1 < len) mb[mbLen++] = data[++i];
+                if (i + 1 < len) mb[mbLen++] = data[++i];
+                if (i + 1 < len) mb[mbLen++] = data[++i];
+            }
+            WCHAR wbuf[2] = {0};
+            int r = MultiByteToWideChar(CP_UTF8, 0, mb, mbLen, wbuf, 2);
+            wch = r > 0 ? wbuf[0] : L'?';
+        }
+        Grid_PutChar(g, wch);
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Per-terminal state
+ * ═══════════════════════════════════════════════════════════════════ */
+typedef struct {
+    HPCON          hPC;
+    HANDLE         hProc, hThread;
+    HANDLE         hPipeWr;     /* app writes here → shell stdin */
+    HANDLE         hPipeRd;     /* app reads here  ← shell stdout */
+    HANDLE         hReader;
+    HWND           hwndView;
+    volatile LONG  alive;
+    ShellKind      shell;
+    Grid          *grid;
+} Term;
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Global state
+ * ═══════════════════════════════════════════════════════════════════ */
+static HWND   g_hwndMain    = NULL;
+static HWND   g_hwndPanel   = NULL;
+static Term  *g_term        = NULL;
+static BOOL   g_visible     = FALSE;
+static BOOL   g_wantFocus   = FALSE;
+static int    g_panelH      = PANEL_HEIGHT_DEFAULT;
+static HFONT  g_fontHdr     = NULL;
+static HFONT  g_fontDrop    = NULL;
+static HFONT  g_fontGrid    = NULL;
+static BOOL   g_caretOn     = TRUE;
+static int    g_cellW       = 8;
+static int    g_cellH       = 16;
+
+static const WCHAR *CLS_PANEL = L"BikoTermPanel";
+static const WCHAR *CLS_VIEW  = L"BikoTermView";
+static BOOL g_regPanel = FALSE;
+static BOOL g_regView  = FALSE;
+
+/* Header button rects */
+static RECT g_rcDrop = {0}, g_rcNew = {0}, g_rcClose = {0};
+static BOOL g_hoverClose = FALSE, g_hoverNew = FALSE;
+
+/* Selection state */
+static BOOL g_selecting = FALSE, g_hasSel = FALSE;
+static int  g_selSR, g_selSC, g_selER, g_selEC;
+
+/* Forward declarations */
+static LRESULT CALLBACK PanelProc(HWND, UINT, WPARAM, LPARAM);
+static LRESULT CALLBACK ViewProc(HWND, UINT, WPARAM, LPARAM);
+static DWORD   WINAPI   ReaderThread(LPVOID);
+static BOOL    ShellCreate(Term*, COORD, ShellKind);
+static void    ShellKill(Term*);
+static void    ShellDetect(void);
+static void    ShowShellMenu(HWND);
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Window class registration
+ * ═══════════════════════════════════════════════════════════════════ */
+static void EnsureClasses(HINSTANCE hi) {
+    if (!g_regPanel) {
+        WNDCLASSEXW wc = { sizeof(wc) };
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        wc.lpfnWndProc = PanelProc;
+        wc.hInstance = hi;
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.lpszClassName = CLS_PANEL;
+        RegisterClassExW(&wc);
+        g_regPanel = TRUE;
+    }
+    if (!g_regView) {
+        WNDCLASSEXW wc = { sizeof(wc) };
+        wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
+        wc.lpfnWndProc = ViewProc;
+        wc.hInstance = hi;
+        wc.hCursor = LoadCursor(NULL, IDC_IBEAM);
+        wc.lpszClassName = CLS_VIEW;
+        RegisterClassExW(&wc);
+        g_regView = TRUE;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Font setup
+ * ═══════════════════════════════════════════════════════════════════ */
+static void EnsureFonts(void) {
+    if (!g_fontHdr)
+        g_fontHdr = CreateFontW(-13,0,0,0,FW_SEMIBOLD,0,0,0,
+            DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
+    if (!g_fontDrop)
+        g_fontDrop = CreateFontW(-12,0,0,0,FW_NORMAL,0,0,0,
+            DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
+    if (!g_fontGrid) {
+        const WCHAR *try_fonts[] = { L"Cascadia Mono", L"Cascadia Code", L"Consolas", NULL };
+        HDC hdc = GetDC(NULL);
+        for (int i = 0; try_fonts[i]; i++) {
+            g_fontGrid = CreateFontW(-14,0,0,0,FW_NORMAL,0,0,0,
+                DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,FIXED_PITCH|FF_MODERN, try_fonts[i]);
+            if (hdc && g_fontGrid) {
+                HFONT old = SelectObject(hdc, g_fontGrid);
+                WCHAR face[64] = {0};
+                GetTextFaceW(hdc, 64, face);
+                SelectObject(hdc, old);
+                if (_wcsicmp(face, try_fonts[i]) == 0) break;
+                DeleteObject(g_fontGrid); g_fontGrid = NULL;
             }
         }
-    }
-
-    // WSL Bash
-    {
-        WCHAR wszPath[MAX_PATH];
-        if (SearchPathW(NULL, L"wsl.exe", NULL, MAX_PATH, wszPath, NULL))
-        {
-            wcscpy_s(s_shells[SHELL_WSL_BASH].wszPath, MAX_PATH, wszPath);
-            s_shells[SHELL_WSL_BASH].bAvailable = TRUE;
+        if (!g_fontGrid)
+            g_fontGrid = CreateFontW(-14,0,0,0,FW_NORMAL,0,0,0,
+                DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,FIXED_PITCH|FF_MODERN,L"Consolas");
+        if (hdc && g_fontGrid) {
+            HFONT old = SelectObject(hdc, g_fontGrid);
+            TEXTMETRICW tm;
+            GetTextMetricsW(hdc, &tm);
+            g_cellW = tm.tmAveCharWidth;
+            g_cellH = tm.tmHeight + tm.tmExternalLeading;
+            if (g_cellW < 4) g_cellW = 8;
+            if (g_cellH < 6) g_cellH = 16;
+            SelectObject(hdc, old);
         }
+        if (hdc) ReleaseDC(NULL, hdc);
     }
 }
 
-static ShellType GetBestShell(void)
-{
-    if (s_shells[SHELL_POWERSHELL].bAvailable) return SHELL_POWERSHELL;
-    if (s_shells[SHELL_CMD].bAvailable) return SHELL_CMD;
-    if (s_shells[SHELL_GIT_BASH].bAvailable) return SHELL_GIT_BASH;
-    if (s_shells[SHELL_WSL_BASH].bAvailable) return SHELL_WSL_BASH;
-    return SHELL_CMD; // Fallback
+/* ═══════════════════════════════════════════════════════════════════
+ * Shell detection
+ * ═══════════════════════════════════════════════════════════════════ */
+static void ShellDetect(void) {
+    WCHAR p[MAX_PATH];
+    /* PowerShell */
+    if (SearchPathW(NULL,L"pwsh.exe",NULL,MAX_PATH,p,NULL))
+        { wcscpy_s(g_shells[SH_PS].path,MAX_PATH,p); g_shells[SH_PS].found=TRUE; }
+    else if (SearchPathW(NULL,L"powershell.exe",NULL,MAX_PATH,p,NULL))
+        { wcscpy_s(g_shells[SH_PS].path,MAX_PATH,p); g_shells[SH_PS].found=TRUE; }
+    /* CMD */
+    { DWORD d=GetEnvironmentVariableW(L"COMSPEC",p,MAX_PATH);
+      if (d>0&&d<MAX_PATH) { wcscpy_s(g_shells[SH_CMD].path,MAX_PATH,p); g_shells[SH_CMD].found=TRUE; }
+      else if (SearchPathW(NULL,L"cmd.exe",NULL,MAX_PATH,p,NULL))
+          { wcscpy_s(g_shells[SH_CMD].path,MAX_PATH,p); g_shells[SH_CMD].found=TRUE; }
+    }
+    /* Git Bash */
+    { const WCHAR *gp[]={L"C:\\Program Files\\Git\\bin\\bash.exe",
+                         L"C:\\Program Files (x86)\\Git\\bin\\bash.exe",NULL};
+      BOOL f=FALSE;
+      if (SearchPathW(NULL,L"bash.exe",NULL,MAX_PATH,p,NULL) && wcsstr(p,L"Git"))
+          { wcscpy_s(g_shells[SH_GIT].path,MAX_PATH,p); g_shells[SH_GIT].found=TRUE; f=TRUE; }
+      if (!f) for(int i=0;gp[i];i++)
+          if (GetFileAttributesW(gp[i])!=INVALID_FILE_ATTRIBUTES)
+              { wcscpy_s(g_shells[SH_GIT].path,MAX_PATH,gp[i]); g_shells[SH_GIT].found=TRUE; break; }
+    }
+    /* WSL */
+    if (SearchPathW(NULL,L"wsl.exe",NULL,MAX_PATH,p,NULL))
+        { wcscpy_s(g_shells[SH_WSL].path,MAX_PATH,p); g_shells[SH_WSL].found=TRUE; }
 }
 
-//=============================================================================
-// Public: Lifecycle
-//=============================================================================
-
-BOOL Terminal_Init(HWND hwndMain)
-{
-    s_hwndMain = hwndMain;
-    s_bConPTYAvailable = InitConPTY();
-    DetectAvailableShells();
-    s_activeShell = GetBestShell();
-    return TRUE;
+static ShellKind BestShell(void) {
+    if (g_shells[SH_PS].found)  return SH_PS;
+    if (g_shells[SH_CMD].found) return SH_CMD;
+    if (g_shells[SH_GIT].found) return SH_GIT;
+    if (g_shells[SH_WSL].found) return SH_WSL;
+    return SH_CMD;
 }
 
-void Terminal_Shutdown(void)
-{
-    if (s_pTerminal)
-    {
-        DestroyTerminalInstance(s_pTerminal);
-        n2e_Free(s_pTerminal);
-        s_pTerminal = NULL;
-    }
-
-    if (s_hwndPanel)
-    {
-        DestroyWindow(s_hwndPanel);
-        s_hwndPanel = NULL;
-    }
-
-    if (s_hFontHeader) { DeleteObject(s_hFontHeader); s_hFontHeader = NULL; }
-    if (s_hFontDropdown) { DeleteObject(s_hFontDropdown); s_hFontDropdown = NULL; }
-
-    s_bVisible = FALSE;
+/* ═══════════════════════════════════════════════════════════════════
+ * ConPTY init
+ * ═══════════════════════════════════════════════════════════════════ */
+static BOOL InitConPTY(void) {
+    HMODULE h = GetModuleHandleW(L"kernel32.dll");
+    if (!h) return FALSE;
+    pfnCreatePC = (PFN_CreatePseudoConsole)GetProcAddress(h, "CreatePseudoConsole");
+    pfnResizePC = (PFN_ResizePseudoConsole)GetProcAddress(h, "ResizePseudoConsole");
+    pfnClosePC  = (PFN_ClosePseudoConsole) GetProcAddress(h, "ClosePseudoConsole");
+    return (pfnCreatePC && pfnResizePC && pfnClosePC);
 }
 
-//=============================================================================
-// Internal: Spawn terminal with selected shell
-//=============================================================================
+/* ═══════════════════════════════════════════════════════════════════
+ * Shell process creation
+ *
+ * Pipe wiring for ConPTY:
+ *   hPipeIn_R  ──→ ConPTY stdin  ──→ shell stdin
+ *   hPipeIn_W  ← app writes here (this is t->hPipeWr)
+ *   hPipeOut_R ← app reads here  (this is t->hPipeRd)
+ *   hPipeOut_W ──→ ConPTY stdout ──→ shell stdout
+ *
+ * After CreatePseudoConsole, ConPTY dups the PTY-side handles,
+ * so we close hPipeIn_R and hPipeOut_W immediately.
+ * ═══════════════════════════════════════════════════════════════════ */
+static BOOL ShellCreate(Term *t, COORD sz, ShellKind sh) {
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    HANDLE hPipeIn_R = NULL, hPipeIn_W = NULL;
+    HANDLE hPipeOut_R = NULL, hPipeOut_W = NULL;
 
-static BOOL SpawnTerminal(HWND hwndParent, ShellType shell)
-{
-    HINSTANCE hInst = (HINSTANCE)GetWindowLongPtr(hwndParent, GWLP_HINSTANCE);
-
-    if (!s_hwndPanel)
-    {
-        RegisterTermPanelClass(hInst);
-        CreateTermFonts();
-
-        s_hwndPanel = CreateWindowExW(
-            0, TERMINAL_PANEL_CLASS, L"",
-            WS_CHILD | WS_CLIPCHILDREN,
-            0, 0, 0, 0, hwndParent,
-            (HMENU)(UINT_PTR)IDC_TERMINAL_PANEL, hInst, NULL);
-
-        if (!s_hwndPanel) return FALSE;
-    }
-
-    // Kill existing terminal
-    if (s_pTerminal)
-    {
-        DestroyTerminalInstance(s_pTerminal);
-        n2e_Free(s_pTerminal);
-        s_pTerminal = NULL;
-    }
-
-    s_pTerminal = (TerminalInstance*)n2e_Alloc(sizeof(TerminalInstance));
-    if (!s_pTerminal) return FALSE;
-    ZeroMemory(s_pTerminal, sizeof(TerminalInstance));
-    s_pTerminal->currentStyle = STYLE_DEFAULT;
-    s_pTerminal->shellType = shell;
-
-    // Create Scintilla view
-    s_pTerminal->hwndView = CreateWindowExW(
-        0, L"Scintilla", L"",
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL,
-        0, 0, 0, 0, s_hwndPanel,
-        (HMENU)(UINT_PTR)IDC_TERMINAL_VIEW, hInst, NULL);
-
-    if (!s_pTerminal->hwndView)
-    {
-        n2e_Free(s_pTerminal);
-        s_pTerminal = NULL;
+    if (!CreatePipe(&hPipeIn_R, &hPipeIn_W, &sa, 0))
+        return FALSE;
+    if (!CreatePipe(&hPipeOut_R, &hPipeOut_W, &sa, 0)) {
+        CloseHandle(hPipeIn_R); CloseHandle(hPipeIn_W);
         return FALSE;
     }
 
-    SetupTerminalStyles(s_pTerminal->hwndView);
+    /* Save app-side handles */
+    t->hPipeWr = hPipeIn_W;   /* app writes → shell stdin */
+    t->hPipeRd = hPipeOut_R;  /* app reads  ← shell stdout */
 
-    // Subclass for keyboard input
-    s_pfnOrigViewProc = (WNDPROC)SetWindowLongPtrW(
-        s_pTerminal->hwndView, GWLP_WNDPROC, (LONG_PTR)TermViewSubclassProc);
-
-    // Create the shell process
-    COORD size;
-    size.X = 120;
-    size.Y = 30;
-
-    if (!CreateTerminalProcess(s_pTerminal, size, shell))
-    {
-        DestroyTerminalInstance(s_pTerminal);
-        n2e_Free(s_pTerminal);
-        s_pTerminal = NULL;
-        return FALSE;
+    BOOL usedPTY = FALSE;
+    if (g_havePTY) {
+        HRESULT hr = pfnCreatePC(sz, hPipeIn_R, hPipeOut_W, 0, &t->hPC);
+        if (SUCCEEDED(hr)) usedPTY = TRUE;
     }
 
-    // Start reader thread
-    s_pTerminal->bAlive = TRUE;
-    s_pTerminal->hReadThread = CreateThread(NULL, 0,
-        TerminalReaderThread, s_pTerminal, 0, NULL);
-
-    s_activeShell = shell;
-    InvalidateRect(s_hwndPanel, NULL, TRUE);
-    return TRUE;
-}
-
-//=============================================================================
-// Public: Terminal management
-//=============================================================================
-
-BOOL Terminal_New(HWND hwndParent)
-{
-    BOOL result = SpawnTerminal(hwndParent, s_activeShell);
-    if (result)
-        Terminal_Show(hwndParent);
-    return result;
-}
-
-BOOL Terminal_NewShell(HWND hwndParent, int shellType)
-{
-    if (shellType < 0 || shellType >= SHELL_COUNT) return FALSE;
-    if (!s_shells[shellType].bAvailable) return FALSE;
-    BOOL result = SpawnTerminal(hwndParent, (ShellType)shellType);
-    if (result)
-        Terminal_Show(hwndParent);
-    return result;
-}
-
-void Terminal_Toggle(HWND hwndParent)
-{
-    if (s_bVisible)
-        Terminal_Hide();
-    else
-    {
-        if (!s_pTerminal)
-            Terminal_New(hwndParent);
-        else
-            Terminal_Show(hwndParent);
-    }
-}
-
-void Terminal_Show(HWND hwndParent)
-{
-    if (!s_hwndPanel) Terminal_New(hwndParent);
-    if (s_hwndPanel)
-    {
-        ShowWindow(s_hwndPanel, SW_SHOW);
-        s_bVisible = TRUE;
-
-        RECT rc;
-        GetClientRect(hwndParent, &rc);
-        SendMessage(hwndParent, WM_SIZE, SIZE_RESTORED,
-                    MAKELPARAM(rc.right, rc.bottom));
-
-        Terminal_Focus();
-    }
-}
-
-void Terminal_Hide(void)
-{
-    if (s_hwndPanel)
-    {
-        ShowWindow(s_hwndPanel, SW_HIDE);
-        s_bVisible = FALSE;
-
-        HWND hwndParent = GetParent(s_hwndPanel);
-        if (hwndParent)
-        {
-            RECT rc;
-            GetClientRect(hwndParent, &rc);
-            SendMessage(hwndParent, WM_SIZE, SIZE_RESTORED,
-                        MAKELPARAM(rc.right, rc.bottom));
-        }
-    }
-}
-
-BOOL Terminal_IsVisible(void)
-{
-    return s_bVisible;
-}
-
-//=============================================================================
-// Public: Layout
-//=============================================================================
-
-int Terminal_Layout(HWND hwndParent, int parentWidth, int parentBottom)
-{
-    UNREFERENCED_PARAMETER(hwndParent);
-
-    if (!s_bVisible || !s_hwndPanel) return 0;
-
-    int panelTop = parentBottom - s_iPanelHeight;
-    if (panelTop < 100) panelTop = 100;
-
-    MoveWindow(s_hwndPanel, 0, panelTop, parentWidth, s_iPanelHeight, TRUE);
-
-    int viewTop = TERMINAL_SPLITTER + TERMINAL_HEADER_HEIGHT;
-    int viewH = s_iPanelHeight - viewTop;
-    if (viewH < 40) viewH = 40;
-
-    if (s_pTerminal && s_pTerminal->hwndView)
-    {
-        MoveWindow(s_pTerminal->hwndView,
-                   0, viewTop,
-                   parentWidth, viewH,
-                   TRUE);
+    /* Build command line */
+    WCHAR cmd[MAX_PATH*2] = {0};
+    if (g_shells[sh].found && g_shells[sh].path[0]) {
+        if (sh == SH_GIT) swprintf_s(cmd, MAX_PATH*2, L"\"%s\" --login -i", g_shells[sh].path);
+        else wcscpy_s(cmd, MAX_PATH*2, g_shells[sh].path);
+    } else {
+        DWORD d = GetEnvironmentVariableW(L"COMSPEC", cmd, MAX_PATH);
+        if (!d) wcscpy_s(cmd, MAX_PATH*2, L"cmd.exe");
     }
 
-    return s_iPanelHeight;
-}
+    WCHAR cwd[MAX_PATH] = {0};
+    GetCurrentDirectoryW(MAX_PATH, cwd);
 
-//=============================================================================
-// Public: Input
-//=============================================================================
-
-void Terminal_Write(const char* pszData, int len)
-{
-    if (!s_pTerminal || !s_pTerminal->bAlive || !s_pTerminal->hPipeIn)
-        return;
-
-    DWORD dwWritten;
-    WriteFile(s_pTerminal->hPipeIn, pszData, (DWORD)len, &dwWritten, NULL);
-}
-
-void Terminal_SendCommand(const char* pszCommand)
-{
-    if (!pszCommand) return;
-    Terminal_Write(pszCommand, (int)strlen(pszCommand));
-    Terminal_Write("\r\n", 2);
-}
-
-void Terminal_Focus(void)
-{
-    if (s_pTerminal && s_pTerminal->hwndView)
-        SetFocus(s_pTerminal->hwndView);
-}
-
-HWND Terminal_GetPanelHwnd(void)
-{
-    return s_hwndPanel;
-}
-
-void Terminal_ApplyDarkMode(void)
-{
-    if (s_pTerminal && s_pTerminal->hwndView)
-    {
-        SetupTerminalStyles(s_pTerminal->hwndView);
-    }
-    if (s_hwndPanel)
-    {
-        InvalidateRect(s_hwndPanel, NULL, TRUE);
-    }
-}
-
-void Terminal_RunCommand(HWND hwndParent, const char* pszCommand)
-{
-    if (!s_pTerminal || !s_pTerminal->bAlive)
-        Terminal_New(hwndParent);
-
-    if (s_pTerminal && s_pTerminal->bAlive)
-    {
-        Terminal_Show(hwndParent);
-        Terminal_SendCommand(pszCommand);
-    }
-}
-
-//=============================================================================
-// Internal: ConPTY initialization
-//=============================================================================
-
-static BOOL InitConPTY(void)
-{
-    HMODULE hKernel = GetModuleHandleW(L"kernel32.dll");
-    if (!hKernel) return FALSE;
-
-    s_pfnCreatePC = (pfnCreatePseudoConsole)
-        GetProcAddress(hKernel, "CreatePseudoConsole");
-    s_pfnResizePC = (pfnResizePseudoConsole)
-        GetProcAddress(hKernel, "ResizePseudoConsole");
-    s_pfnClosePC = (pfnClosePseudoConsole)
-        GetProcAddress(hKernel, "ClosePseudoConsole");
-
-    return (s_pfnCreatePC && s_pfnResizePC && s_pfnClosePC);
-}
-
-//=============================================================================
-// Internal: Create shell process
-//=============================================================================
-
-static BOOL CreateTerminalProcess(TerminalInstance* pTerm, COORD size, ShellType shell)
-{
-    SECURITY_ATTRIBUTES sa;
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
-    sa.lpSecurityDescriptor = NULL;
-
-    HANDLE hPipeInRead = NULL, hPipeInWrite = NULL;
-    HANDLE hPipeOutRead = NULL, hPipeOutWrite = NULL;
-
-    if (!CreatePipe(&hPipeInRead, &hPipeInWrite, &sa, 0))
-        return FALSE;
-    if (!CreatePipe(&hPipeOutRead, &hPipeOutWrite, &sa, 0))
-    {
-        CloseHandle(hPipeInRead);
-        CloseHandle(hPipeInWrite);
-        return FALSE;
-    }
-
-    pTerm->hPipeIn = hPipeInWrite;
-    pTerm->hPipeOut = hPipeOutRead;
-    pTerm->hInputRead = hPipeInRead;
-    pTerm->hOutputWrite = hPipeOutWrite;
-
-    if (s_bConPTYAvailable)
-    {
-        HRESULT hr = s_pfnCreatePC(size, hPipeInRead, hPipeOutWrite, 0,
-                                   &pTerm->hPseudoConsole);
-        if (FAILED(hr))
-            s_bConPTYAvailable = FALSE;
-    }
-
-    // Resolve shell command
-    WCHAR wszCmd[MAX_PATH * 2];
-    wszCmd[0] = L'\0';
-
-    if (s_shells[shell].bAvailable && s_shells[shell].wszPath[0])
-    {
-        if (shell == SHELL_GIT_BASH)
-        {
-            // Git Bash needs --login -i for interactive mode
-            swprintf_s(wszCmd, MAX_PATH * 2, L"\"%s\" --login -i",
-                       s_shells[shell].wszPath);
-        }
-        else if (shell == SHELL_WSL_BASH)
-        {
-            wcscpy_s(wszCmd, MAX_PATH * 2, s_shells[shell].wszPath);
-        }
-        else
-        {
-            wcscpy_s(wszCmd, MAX_PATH * 2, s_shells[shell].wszPath);
-        }
-    }
-    else
-    {
-        // Fallback to COMSPEC
-        DWORD dwLen = GetEnvironmentVariableW(L"COMSPEC", wszCmd, MAX_PATH);
-        if (dwLen == 0)
-            wcscpy_s(wszCmd, MAX_PATH * 2, L"cmd.exe");
-    }
-
-    STARTUPINFOEXW si;
-    ZeroMemory(&si, sizeof(si));
+    STARTUPINFOEXW si; ZeroMemory(&si, sizeof(si));
     si.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+    PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof(pi));
+    BOOL ok = FALSE;
 
-    PROCESS_INFORMATION pi;
-    ZeroMemory(&pi, sizeof(pi));
-
-    BOOL bCreated = FALSE;
-
-    if (s_bConPTYAvailable && pTerm->hPseudoConsole)
-    {
-        SIZE_T attrListSize = 0;
-        InitializeProcThreadAttributeList(NULL, 1, 0, &attrListSize);
-
-        si.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)n2e_Alloc(attrListSize);
-        if (si.lpAttributeList)
-        {
-            if (InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attrListSize))
-            {
-                UpdateProcThreadAttribute(si.lpAttributeList, 0,
-                    0x00020016 /* PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE */,
-                    pTerm->hPseudoConsole, sizeof(HPCON), NULL, NULL);
-
-                si.StartupInfo.dwFlags = 0;
-
-                bCreated = CreateProcessW(NULL, wszCmd, NULL, NULL, FALSE,
-                    EXTENDED_STARTUPINFO_PRESENT, NULL, NULL,
-                    &si.StartupInfo, &pi);
-            }
+    if (usedPTY && t->hPC) {
+        SIZE_T asz = 0;
+        InitializeProcThreadAttributeList(NULL, 1, 0, &asz);
+        si.lpAttributeList = (LPPROC_THREAD_ATTRIBUTE_LIST)n2e_Alloc(asz);
+        if (si.lpAttributeList &&
+            InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &asz)) {
+            UpdateProcThreadAttribute(si.lpAttributeList, 0,
+                0x00020016 /*PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE*/,
+                t->hPC, sizeof(HPCON), NULL, NULL);
+            ok = CreateProcessW(NULL, cmd, NULL, NULL, FALSE,
+                EXTENDED_STARTUPINFO_PRESENT, NULL, cwd[0] ? cwd : NULL,
+                &si.StartupInfo, &pi);
         }
-    }
-
-    if (!bCreated)
-    {
-        // Fallback: plain pipes
-        si.StartupInfo.cb = sizeof(STARTUPINFOW);
-        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-        si.StartupInfo.hStdInput = hPipeInRead;
-        si.StartupInfo.hStdOutput = hPipeOutWrite;
-        si.StartupInfo.hStdError = hPipeOutWrite;
-        si.StartupInfo.wShowWindow = SW_HIDE;
-
-        bCreated = CreateProcessW(NULL, wszCmd, NULL, NULL, TRUE,
-            CREATE_NO_WINDOW, NULL, NULL,
-            &si.StartupInfo, &pi);
-    }
-
-    if (bCreated)
-    {
-        pTerm->hProcess = pi.hProcess;
-        pTerm->hThread = pi.hThread;
-    }
-
-    // Cleanup handles
-    if (s_bConPTYAvailable && pTerm->hPseudoConsole)
-    {
-        CloseHandle(hPipeInRead);
-        CloseHandle(hPipeOutWrite);
-        pTerm->hInputRead = NULL;
-        pTerm->hOutputWrite = NULL;
-
-        if (si.lpAttributeList)
-        {
+        if (si.lpAttributeList) {
             DeleteProcThreadAttributeList(si.lpAttributeList);
             n2e_Free(si.lpAttributeList);
         }
     }
-    else if (bCreated)
-    {
-        CloseHandle(hPipeInRead);
-        CloseHandle(hPipeOutWrite);
-        pTerm->hInputRead = NULL;
-        pTerm->hOutputWrite = NULL;
+
+    if (!ok && !usedPTY) {
+        /* Fallback: raw pipe, no ConPTY */
+        si.StartupInfo.cb       = sizeof(STARTUPINFOW);
+        si.StartupInfo.dwFlags  = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+        si.StartupInfo.hStdInput  = hPipeIn_R;
+        si.StartupInfo.hStdOutput = hPipeOut_W;
+        si.StartupInfo.hStdError  = hPipeOut_W;
+        si.StartupInfo.wShowWindow = SW_HIDE;
+        ok = CreateProcessW(NULL, cmd, NULL, NULL, TRUE,
+            CREATE_NO_WINDOW, NULL, cwd[0] ? cwd : NULL, &si.StartupInfo, &pi);
     }
 
-    return bCreated;
+    if (ok) {
+        t->hProc = pi.hProcess;
+        t->hThread = pi.hThread;
+    }
+
+    /* Close PTY-side pipe ends (ConPTY has duped them) */
+    CloseHandle(hPipeIn_R);
+    CloseHandle(hPipeOut_W);
+
+    if (!ok) {
+        CloseHandle(hPipeIn_W);
+        CloseHandle(hPipeOut_R);
+        t->hPipeWr = NULL;
+        t->hPipeRd = NULL;
+    }
+
+    return ok;
 }
 
-//=============================================================================
-// Internal: Destroy terminal instance
-//=============================================================================
-
-static void DestroyTerminalInstance(TerminalInstance* pTerm)
-{
-    if (!pTerm) return;
-
-    pTerm->bAlive = FALSE;
-
-    if (pTerm->hPseudoConsole && s_pfnClosePC)
-    {
-        s_pfnClosePC(pTerm->hPseudoConsole);
-        pTerm->hPseudoConsole = NULL;
+/* ═══════════════════════════════════════════════════════════════════
+ * Destroy terminal
+ * ═══════════════════════════════════════════════════════════════════ */
+static void ShellKill(Term *t) {
+    if (!t) return;
+    InterlockedExchange(&t->alive, FALSE);
+    if (t->hPC && pfnClosePC) { pfnClosePC(t->hPC); t->hPC = NULL; }
+    if (t->hPipeWr) { CloseHandle(t->hPipeWr); t->hPipeWr = NULL; }
+    if (t->hPipeRd) { CloseHandle(t->hPipeRd); t->hPipeRd = NULL; }
+    if (t->hReader) {
+        WaitForSingleObject(t->hReader, 2000);
+        CloseHandle(t->hReader); t->hReader = NULL;
     }
-
-    if (pTerm->hPipeIn) { CloseHandle(pTerm->hPipeIn); pTerm->hPipeIn = NULL; }
-    if (pTerm->hPipeOut) { CloseHandle(pTerm->hPipeOut); pTerm->hPipeOut = NULL; }
-    if (pTerm->hInputRead) { CloseHandle(pTerm->hInputRead); pTerm->hInputRead = NULL; }
-    if (pTerm->hOutputWrite) { CloseHandle(pTerm->hOutputWrite); pTerm->hOutputWrite = NULL; }
-
-    if (pTerm->hReadThread)
-    {
-        WaitForSingleObject(pTerm->hReadThread, 2000);
-        CloseHandle(pTerm->hReadThread);
-        pTerm->hReadThread = NULL;
-    }
-
-    if (pTerm->hProcess)
-    {
-        TerminateProcess(pTerm->hProcess, 0);
-        CloseHandle(pTerm->hProcess);
-        pTerm->hProcess = NULL;
-    }
-    if (pTerm->hThread)
-    {
-        CloseHandle(pTerm->hThread);
-        pTerm->hThread = NULL;
-    }
-
-    if (pTerm->hwndView)
-    {
-        DestroyWindow(pTerm->hwndView);
-        pTerm->hwndView = NULL;
-    }
+    if (t->hProc) { TerminateProcess(t->hProc, 0); CloseHandle(t->hProc); t->hProc = NULL; }
+    if (t->hThread) { CloseHandle(t->hThread); t->hThread = NULL; }
+    if (t->hwndView) { DestroyWindow(t->hwndView); t->hwndView = NULL; }
+    if (t->grid) { Grid_Free(t->grid); t->grid = NULL; }
 }
 
-//=============================================================================
-// Internal: Reader thread
-//=============================================================================
-
-static DWORD WINAPI TerminalReaderThread(LPVOID lpParam)
-{
-    TerminalInstance* pTerm = (TerminalInstance*)lpParam;
+/* ═══════════════════════════════════════════════════════════════════
+ * Reader thread — reads shell stdout, posts to panel
+ * ═══════════════════════════════════════════════════════════════════ */
+static DWORD WINAPI ReaderThread(LPVOID lp) {
+    Term *t = (Term*)lp;
     char buf[4096];
-
-    while (pTerm->bAlive && pTerm->hPipeOut)
-    {
-        DWORD dwRead = 0;
-        BOOL bOk = ReadFile(pTerm->hPipeOut, buf, sizeof(buf) - 1, &dwRead, NULL);
-        if (!bOk || dwRead == 0)
+    while (InterlockedCompareExchange(&t->alive, 0, 0) && t->hPipeRd) {
+        DWORD nr = 0;
+        if (!ReadFile(t->hPipeRd, buf, sizeof(buf)-1, &nr, NULL) || !nr)
             break;
-
-        buf[dwRead] = '\0';
-
-        if (pTerm->hwndView)
-        {
-            char* pCopy = (char*)n2e_Alloc(dwRead + 1);
-            if (pCopy)
-            {
-                memcpy(pCopy, buf, dwRead + 1);
-                PostMessage(GetParent(pTerm->hwndView),
-                    WM_USER + 200, (WPARAM)pCopy, (LPARAM)dwRead);
+        buf[nr] = '\0';
+        HWND pan = g_hwndPanel;
+        if (pan) {
+            char *cp = (char*)n2e_Alloc(nr + 1);
+            if (cp) {
+                memcpy(cp, buf, nr + 1);
+                PostMessage(pan, WM_TERMDATA, (WPARAM)cp, (LPARAM)nr);
             }
         }
     }
-
-    pTerm->bAlive = FALSE;
+    InterlockedExchange(&t->alive, FALSE);
     return 0;
 }
 
-//=============================================================================
-// Internal: Terminal styles
-//=============================================================================
+/* ═══════════════════════════════════════════════════════════════════
+ * Spawn — create panel + view + grid + shell
+ * ═══════════════════════════════════════════════════════════════════ */
+static BOOL Spawn(HWND hwndParent, ShellKind sh) {
+    HINSTANCE hi = (HINSTANCE)GetWindowLongPtr(hwndParent, GWLP_HINSTANCE);
+    EnsureClasses(hi);
+    EnsureFonts();
 
-static void SetupTerminalStyles(HWND hwndView)
-{
-    if (!hwndView) return;
-
-    BOOL bDark = DarkMode_IsEnabled();
-    COLORREF bg = bDark ? TRM_DK_TERM_BG : TRM_LT_TERM_BG;
-    COLORREF fg = bDark ? TRM_DK_TEXT : TRM_LT_TEXT;
-
-    SendMessage(hwndView, SCI_STYLESETFONT, STYLE_DEFAULT, (LPARAM)"Cascadia Code");
-    SendMessage(hwndView, SCI_STYLESETSIZE, STYLE_DEFAULT, 10);
-    SendMessage(hwndView, SCI_STYLESETBACK, STYLE_DEFAULT, bg);
-    SendMessage(hwndView, SCI_STYLESETFORE, STYLE_DEFAULT, fg);
-    SendMessage(hwndView, SCI_STYLECLEARALL, 0, 0);
-
-    // ANSI Colors (Styles 40-47: Normal, 48-55: Bright)
-    COLORREF colors[8] = {
-        RGB(0, 0, 0),       RGB(197, 15, 31),   RGB(19, 161, 14),   RGB(193, 156, 0),
-        RGB(0, 55, 218),    RGB(136, 23, 152),  RGB(58, 150, 221),  RGB(204, 204, 204)
-    };
-    COLORREF colorsBright[8] = {
-        RGB(118, 118, 118), RGB(231, 72, 86),   RGB(22, 198, 12),   RGB(249, 241, 165),
-        RGB(59, 120, 255),  RGB(180, 0, 158),   RGB(97, 214, 214),  RGB(242, 242, 242)
-    };
-
-    if (bDark) {
-        colors[0] = RGB(128, 128, 128);
-        colors[7] = RGB(242, 242, 242);
-        colors[4] = RGB(59, 120, 255);
+    /* Create panel window if needed */
+    if (!g_hwndPanel) {
+        g_hwndPanel = CreateWindowExW(0, CLS_PANEL, L"",
+            WS_CHILD | WS_CLIPCHILDREN,
+            0, 0, 0, 0, hwndParent,
+            (HMENU)(UINT_PTR)IDC_TERMINAL_PANEL, hi, NULL);
+        if (!g_hwndPanel) return FALSE;
     }
 
-    for (int i = 0; i < 8; i++) {
-        int sNorm = 40 + i;
-        SendMessage(hwndView, SCI_STYLESETFORE, sNorm, colors[i]);
-        SendMessage(hwndView, SCI_STYLESETBACK, sNorm, bg);
-        SendMessage(hwndView, SCI_STYLESETFONT, sNorm, (LPARAM)"Cascadia Code");
-        SendMessage(hwndView, SCI_STYLESETSIZE, sNorm, 10);
-
-        int sBright = 48 + i;
-        SendMessage(hwndView, SCI_STYLESETFORE, sBright, colorsBright[i]);
-        SendMessage(hwndView, SCI_STYLESETBACK, sBright, bg);
-        SendMessage(hwndView, SCI_STYLESETFONT, sBright, (LPARAM)"Cascadia Code");
-        SendMessage(hwndView, SCI_STYLESETSIZE, sBright, 10);
+    /* Tear down old terminal */
+    if (g_term) {
+        KillTimer(g_hwndPanel, TIMER_HEALTH);
+        KillTimer(g_hwndPanel, TIMER_BLINK);
+        ShellKill(g_term);
+        n2e_Free(g_term);
+        g_term = NULL;
     }
 
-    // No margins - terminal is edge-to-edge
-    SendMessage(hwndView, SCI_SETMARGINWIDTHN, 0, 6);
-    SendMessage(hwndView, SCI_SETMARGINWIDTHN, 1, 0);
-    SendMessage(hwndView, SCI_SETMARGINWIDTHN, 2, 0);
-    SendMessage(hwndView, SCI_SETMARGINWIDTHN, 3, 0);
-    SendMessage(hwndView, SCI_SETMARGINWIDTHN, 4, 0);
+    g_term = (Term*)n2e_Alloc(sizeof(Term));
+    if (!g_term) return FALSE;
+    ZeroMemory(g_term, sizeof(Term));
+    g_term->shell = sh;
 
-    // Margin backgrounds must match terminal BG to avoid white strips
-    SendMessage(hwndView, SCI_SETMARGINBACKN, 0, bg);
-    SendMessage(hwndView, SCI_SETMARGINBACKN, 1, bg);
-    SendMessage(hwndView, SCI_SETMARGINBACKN, 2, bg);
-    SendMessage(hwndView, SCI_STYLESETBACK, STYLE_LINENUMBER, bg);
-    SendMessage(hwndView, SCI_STYLESETFORE, STYLE_LINENUMBER, bg);
+    /* Create view window */
+    g_term->hwndView = CreateWindowExW(0, CLS_VIEW, L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+        0, 0, 0, 0, g_hwndPanel,
+        (HMENU)(UINT_PTR)IDC_TERMINAL_VIEW, hi, NULL);
+    if (!g_term->hwndView) {
+        n2e_Free(g_term); g_term = NULL; return FALSE;
+    }
 
-    // Fold margin colors
-    SendMessage(hwndView, SCI_SETFOLDMARGINCOLOUR, TRUE, bg);
-    SendMessage(hwndView, SCI_SETFOLDMARGINHICOLOUR, TRUE, bg);
+    /* Determine grid dimensions */
+    RECT rc;
+    GetClientRect(g_hwndPanel, &rc);
+    int vw = rc.right > 80 ? rc.right : 640;
+    int vh = rc.bottom - SPLITTER_H - HEADER_H;
+    if (vh < 40) vh = 300;
+    int cols = vw / g_cellW;
+    int rows = vh / g_cellH;
+    if (cols < 20) cols = 80;
+    if (rows < 5) rows = 24;
 
-    SendMessage(hwndView, SCI_SETWRAPMODE, SC_WRAP_CHAR, 0);
-    SendMessage(hwndView, SCI_SETREADONLY, FALSE, 0);
-    SendMessage(hwndView, SCI_SETCARETFORE, fg, 0);
+    g_term->grid = Grid_Create(cols, rows);
+    if (!g_term->grid) {
+        DestroyWindow(g_term->hwndView);
+        n2e_Free(g_term); g_term = NULL; return FALSE;
+    }
 
-    // Selection
-    SendMessage(hwndView, SCI_SETSELBACK, TRUE,
-        bDark ? RGB(55, 55, 70) : RGB(180, 215, 255));
-    SendMessage(hwndView, SCI_SETSELFORE, TRUE, fg);
+    /* Launch shell */
+    COORD sz = { (SHORT)cols, (SHORT)rows };
+    if (!ShellCreate(g_term, sz, sh)) {
+        ShellKill(g_term); n2e_Free(g_term); g_term = NULL; return FALSE;
+    }
 
-    // Line spacing
-    SendMessage(hwndView, SCI_SETEXTRAASCENT, 1, 0);
-    SendMessage(hwndView, SCI_SETEXTRADESCENT, 1, 0);
+    InterlockedExchange(&g_term->alive, TRUE);
+    g_term->hReader = CreateThread(NULL, 0, ReaderThread, g_term, 0, NULL);
+    SetTimer(g_hwndPanel, TIMER_HEALTH, 500, NULL);
+    SetTimer(g_hwndPanel, TIMER_BLINK, 530, NULL);
 
-    // Scrollbar theme
-    if (bDark)
-        SetWindowTheme(hwndView, L"DarkMode_Explorer", NULL);
-    else
-        SetWindowTheme(hwndView, NULL, NULL);
+    g_curShell = sh;
+    InvalidateRect(g_hwndPanel, NULL, TRUE);
+    return TRUE;
 }
 
-//=============================================================================
-// Internal: Append output (ANSI parsing)
-//=============================================================================
+/* ═══════════════════════════════════════════════════════════════════
+ * PUBLIC API — Lifecycle
+ * ═══════════════════════════════════════════════════════════════════ */
 
-static void AppendTerminalOutput(HWND hwndView, const char* data, int len)
-{
-    if (!hwndView || !data || len <= 0) return;
+BOOL Terminal_Init(HWND hwnd) {
+    g_hwndMain = hwnd;
+    g_havePTY = InitConPTY();
+    ShellDetect();
+    g_curShell = BestShell();
+    return TRUE;
+}
 
-    const char* p = data;
-    const char* end = data + len;
-    const char* start = p;
+void Terminal_Shutdown(void) {
+    if (g_term) { ShellKill(g_term); n2e_Free(g_term); g_term = NULL; }
+    if (g_hwndPanel) {
+        KillTimer(g_hwndPanel, TIMER_HEALTH);
+        KillTimer(g_hwndPanel, TIMER_BLINK);
+        DestroyWindow(g_hwndPanel); g_hwndPanel = NULL;
+    }
+    if (g_fontHdr)  { DeleteObject(g_fontHdr);  g_fontHdr = NULL; }
+    if (g_fontDrop) { DeleteObject(g_fontDrop); g_fontDrop = NULL; }
+    if (g_fontGrid) { DeleteObject(g_fontGrid); g_fontGrid = NULL; }
+    g_visible = FALSE;
+}
 
-    while (p < end)
-    {
-        if (*p == '\033')
-        {
-            // Flush text before escape
-            if (p > start) {
-                int L = (int)(p - start);
-                int docLen = (int)SendMessage(hwndView, SCI_GETLENGTH, 0, 0);
-                SendMessage(hwndView, SCI_APPENDTEXT, L, (LPARAM)start);
-                SendMessage(hwndView, SCI_STARTSTYLING, docLen, 0);
-                SendMessage(hwndView, SCI_SETSTYLING, L, s_pTerminal->currentStyle);
-            }
+BOOL Terminal_New(HWND hwndP) {
+    BOOL r = Spawn(hwndP, g_curShell);
+    if (r) Terminal_Show(hwndP);
+    return r;
+}
 
-            const char* escStart = p;
-            p++;
-            if (p < end && *p == '[')
-            {
-                p++;
-                int params[8] = { 0 };
-                int paramCount = 0;
-                int val = 0;
-                BOOL hasVal = FALSE;
+BOOL Terminal_NewShell(HWND hwndP, int t) {
+    if (t < 0 || t >= SH_COUNT || !g_shells[t].found) return FALSE;
+    BOOL r = Spawn(hwndP, (ShellKind)t);
+    if (r) Terminal_Show(hwndP);
+    return r;
+}
 
-                while (p < end) {
-                    if (*p >= '0' && *p <= '9') {
-                        val = val * 10 + (*p - '0');
-                        hasVal = TRUE;
-                    } else if (*p == ';') {
-                        if (paramCount < 8) params[paramCount++] = val;
-                        val = 0; hasVal = FALSE;
-                    } else {
-                        break;
-                    }
-                    p++;
-                }
-                if (hasVal && paramCount < 8) params[paramCount++] = val;
+void Terminal_Toggle(HWND hwndP) {
+    if (g_visible) Terminal_Hide();
+    else { if (!g_term) Terminal_New(hwndP); else Terminal_Show(hwndP); }
+}
 
-                if (p < end && *p == 'm') {
-                    if (paramCount == 0) s_pTerminal->currentStyle = STYLE_DEFAULT;
-                    for (int i = 0; i < paramCount; i++) {
-                        int code = params[i];
-                        if (code == 0) s_pTerminal->currentStyle = STYLE_DEFAULT;
-                        else if (code >= 30 && code <= 37) s_pTerminal->currentStyle = 40 + (code - 30);
-                        else if (code >= 90 && code <= 97) s_pTerminal->currentStyle = 48 + (code - 90);
-                        else if (code == 1) {
-                            if (s_pTerminal->currentStyle >= 40 && s_pTerminal->currentStyle <= 47)
-                                s_pTerminal->currentStyle += 8;
-                        }
-                    }
-                    p++;
-                }
-                else {
-                    while (p < end && !(*p >= 64 && *p <= 126)) p++;
-                    if (p < end) p++;
-                }
-            }
-            start = p;
+void Terminal_Show(HWND hwndP) {
+    if (!g_hwndPanel) Terminal_New(hwndP);
+    if (g_hwndPanel) {
+        ShowWindow(g_hwndPanel, SW_SHOW);
+        g_visible = TRUE;
+        g_wantFocus = TRUE;
+        RECT rc; GetClientRect(hwndP, &rc);
+        SendMessage(hwndP, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom));
+        Terminal_Focus();
+    }
+}
+
+void Terminal_Hide(void) {
+    if (g_hwndPanel) {
+        ShowWindow(g_hwndPanel, SW_HIDE);
+        g_visible = FALSE;
+        g_wantFocus = FALSE;
+        HWND p = GetParent(g_hwndPanel);
+        if (p) { RECT rc; GetClientRect(p, &rc);
+            SendMessage(p, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom)); }
+    }
+}
+
+BOOL Terminal_IsVisible(void) { return g_visible; }
+
+int Terminal_Layout(HWND hwndP, int pw, int pb) {
+    (void)hwndP;
+    if (!g_visible || !g_hwndPanel) return 0;
+    int top = pb - g_panelH;
+    if (top < 100) top = 100;
+    MoveWindow(g_hwndPanel, 0, top, pw, g_panelH, TRUE);
+    int vy = SPLITTER_H + HEADER_H;
+    int vh = g_panelH - vy;
+    if (vh < 40) vh = 40;
+    if (g_term && g_term->hwndView)
+        MoveWindow(g_term->hwndView, 0, vy, pw, vh, TRUE);
+    return g_panelH;
+}
+
+void Terminal_Write(const char *d, int n) {
+    if (!g_term || !g_term->hPipeWr) return;
+    if (!InterlockedCompareExchange(&g_term->alive, 0, 0)) return;
+    DWORD w = 0;
+    WriteFile(g_term->hPipeWr, d, (DWORD)n, &w, NULL);
+}
+
+void Terminal_SendCommand(const char *c) {
+    if (!c) return;
+    Terminal_Write(c, (int)strlen(c));
+    Terminal_Write("\r\n", 2);
+}
+
+void Terminal_Focus(void) {
+    if (g_term && g_term->hwndView && IsWindow(g_term->hwndView)) {
+        g_wantFocus = TRUE;
+        SetFocus(g_term->hwndView);
+    } else if (g_hwndPanel && IsWindow(g_hwndPanel)) {
+        g_wantFocus = TRUE;
+        SetFocus(g_hwndPanel);
+    }
+}
+
+HWND Terminal_GetPanelHwnd(void) { return g_hwndPanel; }
+
+BOOL Terminal_WantsFocus(void) { return g_visible && g_wantFocus; }
+
+void Terminal_RelinquishFocus(void) { g_wantFocus = FALSE; }
+
+void Terminal_ApplyDarkMode(void) {
+    if (g_hwndPanel) InvalidateRect(g_hwndPanel, NULL, TRUE);
+    if (g_term && g_term->hwndView) InvalidateRect(g_term->hwndView, NULL, TRUE);
+}
+
+void Terminal_RunCommand(HWND hwndP, const char *cmd) {
+    if (!g_term) Terminal_New(hwndP);
+    if (!g_visible) Terminal_Show(hwndP);
+    Terminal_SendCommand(cmd);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Colour helpers
+ * ═══════════════════════════════════════════════════════════════════ */
+static COLORREF GetFG(BYTE idx) {
+    BOOL dk = DarkMode_IsEnabled();
+    if (idx < 16) return g_ansi[idx];
+    return dk ? C_DKFG : C_LTFG;
+}
+static COLORREF GetBG(BYTE idx) {
+    BOOL dk = DarkMode_IsEnabled();
+    if (idx == 0) return dk ? C_DKBG : C_LTBG;
+    if (idx < 16) return g_ansi[idx];
+    return dk ? C_DKBG : C_LTBG;
+}
+
+/* Selection helper */
+static BOOL InSel(int r, int c) {
+    if (!g_hasSel) return FALSE;
+    int sr = g_selSR, sc = g_selSC, er = g_selER, ec = g_selEC;
+    if (sr > er || (sr == er && sc > ec)) { int t; t=sr;sr=er;er=t; t=sc;sc=ec;ec=t; }
+    if (r < sr || r > er) return FALSE;
+    if (r == sr && r == er) return c >= sc && c <= ec;
+    if (r == sr) return c >= sc;
+    if (r == er) return c <= ec;
+    return TRUE;
+}
+
+/* Copy selection to clipboard */
+static void CopySel(HWND hwnd) {
+    if (!g_hasSel || !g_term || !g_term->grid) return;
+    Grid *g = g_term->grid;
+    int sr = g_selSR, sc = g_selSC, er = g_selER, ec = g_selEC;
+    if (sr > er || (sr == er && sc > ec)) { int t; t=sr;sr=er;er=t; t=sc;sc=ec;ec=t; }
+    int sz = (er - sr + 1) * (g->cols + 2) + 1;
+    WCHAR *buf = (WCHAR*)n2e_Alloc(sz * sizeof(WCHAR));
+    if (!buf) return;
+    int pos = 0;
+    for (int r = sr; r <= er; r++) {
+        int cs = (r == sr) ? sc : 0;
+        int ce = (r == er) ? ec : g->cols - 1;
+        for (int c = cs; c <= ce && c < g->cols; c++)
+            buf[pos++] = GridCell(g, r, c)->ch;
+        if (r < er) { buf[pos++] = L'\r'; buf[pos++] = L'\n'; }
+    }
+    buf[pos] = 0;
+    /* Trim trailing spaces per line */
+    if (OpenClipboard(hwnd)) {
+        EmptyClipboard();
+        HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, (pos+1)*sizeof(WCHAR));
+        if (hg) {
+            WCHAR *p = (WCHAR*)GlobalLock(hg);
+            memcpy(p, buf, (pos+1)*sizeof(WCHAR));
+            GlobalUnlock(hg);
+            SetClipboardData(CF_UNICODETEXT, hg);
         }
-        else if (*p == '\r')
-        {
-            if (p > start) {
-                int L = (int)(p - start);
-                int docLen = (int)SendMessage(hwndView, SCI_GETLENGTH, 0, 0);
-                SendMessage(hwndView, SCI_APPENDTEXT, L, (LPARAM)start);
-                SendMessage(hwndView, SCI_STARTSTYLING, docLen, 0);
-                SendMessage(hwndView, SCI_SETSTYLING, L, s_pTerminal->currentStyle);
-            }
-            p++;
-            if (p < end && *p == '\n') {
-                start = p;
-            } else {
-                start = p;
-            }
-        }
-        else
-        {
-            p++;
-        }
+        CloseClipboard();
     }
-
-    // Flush remaining
-    if (p > start) {
-        int L = (int)(p - start);
-        int docLen = (int)SendMessage(hwndView, SCI_GETLENGTH, 0, 0);
-        SendMessage(hwndView, SCI_APPENDTEXT, L, (LPARAM)start);
-        SendMessage(hwndView, SCI_STARTSTYLING, docLen, 0);
-        SendMessage(hwndView, SCI_SETSTYLING, L, s_pTerminal->currentStyle);
-    }
-
-    SendMessage(hwndView, SCI_SCROLLTOEND, 0, 0);
+    n2e_Free(buf);
 }
 
-//=============================================================================
-// Internal: Shell context menu
-//=============================================================================
+/* ═══════════════════════════════════════════════════════════════════
+ * VIEW WNDPROC — the terminal character grid
+ *
+ * This is a plain custom HWND. Its WndProc is the ONLY handler.
+ * No Scintilla. No subclassing. Keyboard arrives directly.
+ *
+ * BUILD MARKER: 2026-02-08-v5
+ * ═══════════════════════════════════════════════════════════════════ */
+static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
 
-static void ShowShellMenu(HWND hwnd)
-{
-    HMENU hMenu = CreatePopupMenu();
-    if (!hMenu) return;
+    /* ── Tell Windows we handle ALL keyboard input ────────── */
+    case WM_GETDLGCODE:
+        return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTARROWS | DLGC_WANTTAB;
 
-    for (int i = 0; i < SHELL_COUNT; i++)
-    {
-        if (!s_shells[i].bAvailable) continue;
-
-        WCHAR wszItem[128];
-        swprintf_s(wszItem, 128, L"  %s  %s",
-                   s_shells[i].wszIcon, s_shells[i].wszLabel);
-
-        UINT flags = MF_STRING;
-        if ((ShellType)i == s_activeShell && s_pTerminal && s_pTerminal->bAlive)
-            flags |= MF_CHECKED;
-
-        AppendMenuW(hMenu, flags, 5000 + i, wszItem);
-    }
-
-    // Position below the dropdown
-    POINT pt;
-    pt.x = s_rcDropdown.left;
-    pt.y = s_rcDropdown.bottom;
-    ClientToScreen(hwnd, &pt);
-
-    int cmd = (int)TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_LEFTBUTTON | TPM_NONOTIFY,
-        pt.x, pt.y, 0, hwnd, NULL);
-
-    DestroyMenu(hMenu);
-
-    if (cmd >= 5000 && cmd < 5000 + SHELL_COUNT)
-    {
-        ShellType newShell = (ShellType)(cmd - 5000);
-        HWND hwndParent = GetParent(hwnd);
-        Terminal_NewShell(hwndParent, newShell);
-    }
-}
-
-//=============================================================================
-// Internal: Custom header painting
-//=============================================================================
-
-static void PaintHeader(HWND hwnd, HDC hdc, RECT* prcClient)
-{
-    BOOL bDark = DarkMode_IsEnabled();
-    int W = prcClient->right;
-
-    // Header background
-    RECT rcHeader = { 0, TERMINAL_SPLITTER, W, TERMINAL_SPLITTER + TERMINAL_HEADER_HEIGHT };
-    HBRUSH hHdr = CreateSolidBrush(bDark ? TRM_DK_HEADER : TRM_LT_HEADER);
-    FillRect(hdc, &rcHeader, hHdr);
-    DeleteObject(hHdr);
-
-    // Header bottom border
-    RECT rcBorder = rcHeader;
-    rcBorder.top = rcBorder.bottom - 1;
-    HBRUSH hBdr = CreateSolidBrush(bDark ? TRM_DK_BORDER : TRM_LT_BORDER);
-    FillRect(hdc, &rcBorder, hBdr);
-    DeleteObject(hBdr);
-
-    SetBkMode(hdc, TRANSPARENT);
-
-    // Shell dropdown area (left side)
-    int dropW = 140;
-    int dropH = 22;
-    int dropX = 10;
-    int dropY = TERMINAL_SPLITTER + (TERMINAL_HEADER_HEIGHT - dropH) / 2;
-    s_rcDropdown.left = dropX;
-    s_rcDropdown.top = dropY;
-    s_rcDropdown.right = dropX + dropW;
-    s_rcDropdown.bottom = dropY + dropH;
-
-    // Dropdown background
-    HBRUSH hDropBg = CreateSolidBrush(bDark ? TRM_DK_DROPDOWN_BG : TRM_LT_DROPDOWN_BG);
-    HPEN hDropPen = CreatePen(PS_SOLID, 1, bDark ? TRM_DK_BORDER : TRM_LT_BORDER);
-    HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hDropBg);
-    HPEN hOldPen = (HPEN)SelectObject(hdc, hDropPen);
-    RoundRect(hdc, s_rcDropdown.left, s_rcDropdown.top,
-              s_rcDropdown.right, s_rcDropdown.bottom, 6, 6);
-    SelectObject(hdc, hOldBr);
-    SelectObject(hdc, hOldPen);
-    DeleteObject(hDropBg);
-    DeleteObject(hDropPen);
-
-    // Shell name in dropdown
-    if (s_hFontDropdown) SelectObject(hdc, s_hFontDropdown);
-    SetTextColor(hdc, bDark ? TRM_DK_TEXT : TRM_LT_TEXT);
-    RECT rcLabel = s_rcDropdown;
-    rcLabel.left += 8;
-    rcLabel.right -= 18;
-    DrawTextW(hdc, s_shells[s_activeShell].wszLabel, -1,
-              &rcLabel, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
-
-    // Dropdown chevron
-    SetTextColor(hdc, bDark ? TRM_DK_TEXT_DIM : TRM_LT_TEXT_DIM);
-    RECT rcChev = s_rcDropdown;
-    rcChev.left = rcChev.right - 18;
-    DrawTextW(hdc, L"\x25BC", 1, &rcChev, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-
-    // Right-side buttons
-    int btnSize = 22;
-    int btnY = TERMINAL_SPLITTER + (TERMINAL_HEADER_HEIGHT - btnSize) / 2;
-    int btnPad = 4;
-
-    // Close button (X)
-    s_rcCloseBtn.left = W - btnSize - 8;
-    s_rcCloseBtn.top = btnY;
-    s_rcCloseBtn.right = s_rcCloseBtn.left + btnSize;
-    s_rcCloseBtn.bottom = btnY + btnSize;
-
-    if (s_bCloseHover)
-    {
-        HBRUSH hHov = CreateSolidBrush(bDark ? TRM_DK_BTN_HOVER : TRM_LT_BTN_HOVER);
-        HPEN hHovPen = CreatePen(PS_SOLID, 1, bDark ? TRM_DK_BTN_HOVER : TRM_LT_BTN_HOVER);
-        HBRUSH hOB = (HBRUSH)SelectObject(hdc, hHov);
-        HPEN hOP = (HPEN)SelectObject(hdc, hHovPen);
-        RoundRect(hdc, s_rcCloseBtn.left, s_rcCloseBtn.top,
-                  s_rcCloseBtn.right, s_rcCloseBtn.bottom, 4, 4);
-        SelectObject(hdc, hOB);
-        SelectObject(hdc, hOP);
-        DeleteObject(hHov);
-        DeleteObject(hHovPen);
-    }
-    SetTextColor(hdc, bDark ? TRM_DK_TEXT_DIM : TRM_LT_TEXT_DIM);
-    if (s_hFontDropdown) SelectObject(hdc, s_hFontDropdown);
-    DrawTextW(hdc, L"\x2715", 1, &s_rcCloseBtn, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-
-    // New terminal button (+)
-    s_rcNewBtn.left = s_rcCloseBtn.left - btnSize - btnPad;
-    s_rcNewBtn.top = btnY;
-    s_rcNewBtn.right = s_rcNewBtn.left + btnSize;
-    s_rcNewBtn.bottom = btnY + btnSize;
-
-    if (s_bNewHover)
-    {
-        HBRUSH hHov = CreateSolidBrush(bDark ? TRM_DK_BTN_HOVER : TRM_LT_BTN_HOVER);
-        HPEN hHovPen = CreatePen(PS_SOLID, 1, bDark ? TRM_DK_BTN_HOVER : TRM_LT_BTN_HOVER);
-        HBRUSH hOB = (HBRUSH)SelectObject(hdc, hHov);
-        HPEN hOP = (HPEN)SelectObject(hdc, hHovPen);
-        RoundRect(hdc, s_rcNewBtn.left, s_rcNewBtn.top,
-                  s_rcNewBtn.right, s_rcNewBtn.bottom, 4, 4);
-        SelectObject(hdc, hOB);
-        SelectObject(hdc, hOP);
-        DeleteObject(hHov);
-        DeleteObject(hHovPen);
-    }
-    SetTextColor(hdc, bDark ? TRM_DK_TEXT_DIM : TRM_LT_TEXT_DIM);
-    DrawTextW(hdc, L"+", 1, &s_rcNewBtn, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
-}
-
-//=============================================================================
-// Internal: Panel window procedure
-//=============================================================================
-
-static LRESULT CALLBACK TermPanelWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
-    switch (msg)
-    {
-    case WM_PAINT:
-    {
+    /* ── Paint ────────────────────────────────────────────── */
+    case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-        BOOL bDark = DarkMode_IsEnabled();
+        if (!g_term || !g_term->grid) { EndPaint(hwnd, &ps); return 0; }
+        Grid *g = g_term->grid;
+        BOOL dk = DarkMode_IsEnabled();
+        COLORREF defBg = dk ? C_DKBG : C_LTBG;
 
-        // Surface (behind Scintilla)
-        HBRUSH hBg = CreateSolidBrush(bDark ? TRM_DK_SURFACE : TRM_LT_SURFACE);
-        FillRect(hdc, &rc, hBg);
-        DeleteObject(hBg);
+        RECT rc; GetClientRect(hwnd, &rc);
 
-        // Splitter at top
-        RECT rcSplit = rc;
-        rcSplit.bottom = TERMINAL_SPLITTER;
-        HBRUSH hSplit = CreateSolidBrush(bDark ? TRM_DK_SPLITTER : TRM_LT_SPLITTER);
-        FillRect(hdc, &rcSplit, hSplit);
-        DeleteObject(hSplit);
+        HDC mem = CreateCompatibleDC(hdc);
+        HBITMAP bmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+        HBITMAP obmp = SelectObject(mem, bmp);
 
-        // Header bar
-        PaintHeader(hwnd, hdc, &rc);
+        HBRUSH bgBr = CreateSolidBrush(defBg);
+        FillRect(mem, &rc, bgBr); DeleteObject(bgBr);
 
+        HFONT ofont = NULL;
+        if (g_fontGrid) ofont = SelectObject(mem, g_fontGrid);
+        SetBkMode(mem, OPAQUE);
+
+        int viewBase = GridBase(g) - g->scrollOff;
+        if (viewBase < 0) viewBase = 0;
+
+        for (int r = 0; r < g->rows; r++) {
+            int absLine = viewBase + r;
+            if (absLine < 0 || absLine >= g->used) continue;
+            Cell *row = &g->buf[absLine * g->cols];
+            int y = r * g_cellH;
+            int c = 0;
+            while (c < g->cols) {
+                BOOL sel = InSel(r, c);
+                COLORREF fg = sel ? (dk ? RGB(255,255,255) : RGB(0,0,0)) : GetFG(row[c].fg);
+                COLORREF bg = sel ? (dk ? RGB(55,55,80) : RGB(180,215,255)) : GetBG(row[c].bg);
+                WCHAR run[512]; int rl = 0;
+                int cs = c;
+                while (c < g->cols && rl < 511) {
+                    BOOL cs2 = InSel(r, c);
+                    COLORREF f2 = cs2 ? (dk?RGB(255,255,255):RGB(0,0,0)) : GetFG(row[c].fg);
+                    COLORREF b2 = cs2 ? (dk?RGB(55,55,80):RGB(180,215,255)) : GetBG(row[c].bg);
+                    if (f2 != fg || b2 != bg) break;
+                    run[rl++] = row[c].ch;
+                    c++;
+                }
+                SetTextColor(mem, fg);
+                SetBkColor(mem, bg);
+                RECT cr = { cs * g_cellW, y, (cs + rl) * g_cellW, y + g_cellH };
+                ExtTextOutW(mem, cs * g_cellW, y, ETO_OPAQUE|ETO_CLIPPED, &cr, run, rl, NULL);
+            }
+            int rx = g->cols * g_cellW;
+            if (rx < rc.right) {
+                RECT rr = { rx, y, rc.right, y + g_cellH };
+                HBRUSH hb = CreateSolidBrush(defBg); FillRect(mem, &rr, hb); DeleteObject(hb);
+            }
+        }
+        int by = g->rows * g_cellH;
+        if (by < rc.bottom) {
+            RECT rr = { 0, by, rc.right, rc.bottom };
+            HBRUSH hb = CreateSolidBrush(defBg); FillRect(mem, &rr, hb); DeleteObject(hb);
+        }
+
+        /* Cursor */
+        if (g_caretOn && g->scrollOff == 0) {
+            int cx = g->curC * g_cellW;
+            int cy = g->curR * g_cellH;
+            RECT cr2 = { cx, cy, cx + 2, cy + g_cellH };
+            HBRUSH cb = CreateSolidBrush(dk ? RGB(200,200,220) : RGB(0,0,0));
+            FillRect(mem, &cr2, cb); DeleteObject(cb);
+        }
+
+        if (ofont) SelectObject(mem, ofont);
+        BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
+        SelectObject(mem, obmp); DeleteObject(bmp); DeleteDC(mem);
         EndPaint(hwnd, &ps);
         return 0;
     }
 
     case WM_ERASEBKGND:
-    {
-        HDC hdc = (HDC)wParam;
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-        HBRUSH hBr = CreateSolidBrush(
-            DarkMode_IsEnabled() ? TRM_DK_SURFACE : TRM_LT_SURFACE);
-        FillRect(hdc, &rc, hBr);
-        DeleteObject(hBr);
         return 1;
-    }
 
-    case WM_SETCURSOR:
-    {
-        POINT pt;
-        GetCursorPos(&pt);
-        ScreenToClient(hwnd, &pt);
-        if (pt.y < TERMINAL_SPLITTER)
-        {
-            SetCursor(LoadCursor(NULL, IDC_SIZENS));
-            return TRUE;
-        }
-        break;
-    }
-
-    case WM_LBUTTONDOWN:
-    {
-        int x = LOWORD(lParam);
-        int y = HIWORD(lParam);
-
-        // Splitter drag
-        if (y < TERMINAL_SPLITTER)
-        {
-            SetCapture(hwnd);
-            return 0;
-        }
-
-        // Dropdown click
-        POINT pt = { x, y };
-        if (PtInRect(&s_rcDropdown, pt))
-        {
-            ShowShellMenu(hwnd);
-            return 0;
-        }
-
-        // New button
-        if (PtInRect(&s_rcNewBtn, pt))
-        {
-            HWND hwndParent = GetParent(hwnd);
-            Terminal_New(hwndParent);
-            return 0;
-        }
-
-        // Close button
-        if (PtInRect(&s_rcCloseBtn, pt))
-        {
-            Terminal_Hide();
-            return 0;
-        }
-
-        break;
-    }
-
-    case WM_MOUSEMOVE:
-    {
-        if (GetCapture() == hwnd)
-        {
-            POINT pt;
-            GetCursorPos(&pt);
-            HWND hwndParent = GetParent(hwnd);
-            ScreenToClient(hwndParent, &pt);
-            RECT rcParent;
-            GetClientRect(hwndParent, &rcParent);
-            int newH = rcParent.bottom - pt.y;
-            if (newH < 120) newH = 120;
-            if (newH > rcParent.bottom - 100) newH = rcParent.bottom - 100;
-            s_iPanelHeight = newH;
-            SendMessage(hwndParent, WM_SIZE, SIZE_RESTORED,
-                        MAKELPARAM(rcParent.right, rcParent.bottom));
-        }
-        else
-        {
-            // Hover tracking for buttons
-            POINT pt = { LOWORD(lParam), HIWORD(lParam) };
-            BOOL bCloseNow = PtInRect(&s_rcCloseBtn, pt);
-            BOOL bNewNow = PtInRect(&s_rcNewBtn, pt);
-
-            if (bCloseNow != s_bCloseHover || bNewNow != s_bNewHover)
-            {
-                s_bCloseHover = bCloseNow;
-                s_bNewHover = bNewNow;
-                // Repaint header area only
-                RECT rcHdr = { 0, TERMINAL_SPLITTER, 9999, TERMINAL_SPLITTER + TERMINAL_HEADER_HEIGHT };
-                InvalidateRect(hwnd, &rcHdr, FALSE);
+    case WM_SIZE: {
+        if (!g_term || !g_term->grid) break;
+        RECT rc; GetClientRect(hwnd, &rc);
+        int nc = rc.right / g_cellW;
+        int nr = rc.bottom / g_cellH;
+        if (nc < 10) nc = 10;
+        if (nr < 3) nr = 3;
+        Grid *g = g_term->grid;
+        if (nc != g->cols || nr != g->rows) {
+            Grid_Resize(g, nc, nr);
+            if (g_term->hPC && pfnResizePC) {
+                COORD sz = { (SHORT)nc, (SHORT)nr };
+                pfnResizePC(g_term->hPC, sz);
             }
-
-            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
-            TrackMouseEvent(&tme);
         }
-        break;
-    }
-
-    case WM_MOUSELEAVE:
-        if (s_bCloseHover || s_bNewHover)
-        {
-            s_bCloseHover = FALSE;
-            s_bNewHover = FALSE;
-            RECT rcHdr = { 0, TERMINAL_SPLITTER, 9999, TERMINAL_SPLITTER + TERMINAL_HEADER_HEIGHT };
-            InvalidateRect(hwnd, &rcHdr, FALSE);
-        }
-        break;
-
-    case WM_LBUTTONUP:
-        if (GetCapture() == hwnd) ReleaseCapture();
-        break;
-
-    // Terminal output from reader thread
-    case WM_USER + 200:
-    {
-        char* pData = (char*)wParam;
-        int len = (int)lParam;
-        if (s_pTerminal && s_pTerminal->hwndView && pData)
-            AppendTerminalOutput(s_pTerminal->hwndView, pData, len);
-        if (pData) n2e_Free(pData);
+        InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     }
+
+    /* ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+     * KEYBOARD INPUT
+     *
+     * WM_CHAR: printable chars, Enter, Tab, Backspace, Ctrl+letter
+     * WM_KEYDOWN: special keys (arrow, F1-F12, etc), Ctrl+V paste
+     *
+     * BUILD MARKER: 2026-02-08-v5
+     * ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ */
+
+    case WM_CHAR: {
+        WCHAR wch = (WCHAR)wParam;
+
+        /* DEBUG: flash title bar to prove WM_CHAR arrived */
+        if (g_hwndMain) {
+            WCHAR dbg[128];
+            swprintf_s(dbg, 128, L"[v5] WM_CHAR=0x%04X '%c' pipe=%s alive=%s",
+                (unsigned)wch,
+                (wch >= 0x20 && wch < 0x7F) ? (char)wch : '?',
+                (g_term && g_term->hPipeWr) ? L"OK" : L"NULL",
+                (g_term && InterlockedCompareExchange(&g_term->alive,0,0)) ? L"YES" : L"NO");
+            SetWindowTextW(g_hwndMain, dbg);
+        }
+
+        /* Ctrl+C — copy selection or send interrupt */
+        if (wch == 0x03) {
+            if (g_hasSel) CopySel(hwnd);
+            else Terminal_Write("\x03", 1);
+            return 0;
+        }
+
+        /* Skip chars already handled as complex operations in WM_KEYDOWN */
+        if (wch == 0x16) return 0;  /* Ctrl+V → paste handled in WM_KEYDOWN */
+        if (wch == 0x0C) return 0;  /* Ctrl+L → clear handled in WM_KEYDOWN */
+
+        /* Convert to UTF-8 and write to shell pipe */
+        char u8[8];
+        int n = WideCharToMultiByte(CP_UTF8, 0, &wch, 1, u8, sizeof(u8), NULL, NULL);
+        if (n > 0) Terminal_Write(u8, n);
+        g_hasSel = FALSE;
+        return 0;
     }
 
-    return DefWindowProc(hwnd, msg, wParam, lParam);
-}
+    case WM_KEYDOWN: {
+        BOOL ctrl = !!(GetKeyState(VK_CONTROL) & 0x8000);
 
-//=============================================================================
-// Internal: Keyboard subclass for Scintilla terminal view
-//
-// CRITICAL: We must intercept ALL keyboard messages to prevent Scintilla
-// from processing them (it would modify its internal buffer/state).
-// Text-generating keys come through WM_CHAR after TranslateMessage.
-// Non-character keys (arrows, delete, etc.) are handled in WM_KEYDOWN.
-//=============================================================================
-
-static LRESULT CALLBACK TermViewSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
-{
-    switch (msg)
-    {
-    case WM_CHAR:
-    {
-        // ALL text-generating keystrokes come here (a-z, Ctrl+C, Enter, etc.)
-        char ch = (char)wParam;
-
-        if (ch == '\r')
-        {
-            Terminal_Write("\r", 1);
-        }
-        else if (ch == '\t')
-        {
-            Terminal_Write("\t", 1);
-        }
-        else
-        {
-            Terminal_Write(&ch, 1);
-        }
-        return 0; // Block Scintilla
-    }
-
-    case WM_KEYDOWN:
-    {
-        // Handle non-character keys, then BLOCK all from reaching Scintilla
-        switch (wParam)
-        {
-        case VK_UP:
-            Terminal_Write("\033[A", 3);
-            return 0;
-        case VK_DOWN:
-            Terminal_Write("\033[B", 3);
-            return 0;
-        case VK_LEFT:
-            Terminal_Write("\033[D", 3);
-            return 0;
-        case VK_RIGHT:
-            Terminal_Write("\033[C", 3);
-            return 0;
-        case VK_DELETE:
-            Terminal_Write("\033[3~", 4);
-            return 0;
-        case VK_HOME:
-            Terminal_Write("\033[H", 3);
-            return 0;
-        case VK_END:
-            Terminal_Write("\033[F", 3);
-            return 0;
-        case VK_PRIOR:  // Page Up
-            Terminal_Write("\033[5~", 4);
-            return 0;
-        case VK_NEXT:   // Page Down
-            Terminal_Write("\033[6~", 4);
-            return 0;
-        case VK_INSERT:
-            Terminal_Write("\033[2~", 4);
-            return 0;
-        case VK_ESCAPE:
-            Terminal_Hide();
-            return 0;
-        }
-
-        // Ctrl+V: paste from clipboard
-        if (wParam == 'V' && (GetKeyState(VK_CONTROL) & 0x8000))
-        {
-            if (OpenClipboard(hwnd))
-            {
-                HANDLE hData = GetClipboardData(CF_UNICODETEXT);
-                if (hData)
-                {
-                    const WCHAR* wszText = (const WCHAR*)GlobalLock(hData);
-                    if (wszText)
-                    {
-                        // Convert to UTF-8 for the terminal
-                        int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wszText, -1, NULL, 0, NULL, NULL);
-                        if (utf8Len > 0)
-                        {
-                            char* utf8 = (char*)n2e_Alloc(utf8Len);
-                            if (utf8)
-                            {
-                                WideCharToMultiByte(CP_UTF8, 0, wszText, -1, utf8, utf8Len, NULL, NULL);
-                                Terminal_Write(utf8, utf8Len - 1); // -1 to exclude null terminator
-                                n2e_Free(utf8);
+        /* Ctrl+V: paste */
+        if (wParam == 'V' && ctrl) {
+            if (OpenClipboard(hwnd)) {
+                HANDLE hd = GetClipboardData(CF_UNICODETEXT);
+                if (hd) {
+                    const WCHAR *wz = (const WCHAR*)GlobalLock(hd);
+                    if (wz) {
+                        int n = WideCharToMultiByte(CP_UTF8, 0, wz, -1, NULL, 0, NULL, NULL);
+                        if (n > 1) {
+                            char *b = (char*)n2e_Alloc(n);
+                            if (b) {
+                                WideCharToMultiByte(CP_UTF8, 0, wz, -1, b, n, NULL, NULL);
+                                Terminal_Write(b, n-1);
+                                n2e_Free(b);
                             }
                         }
-                        GlobalUnlock(hData);
+                        GlobalUnlock(hd);
                     }
                 }
                 CloseClipboard();
@@ -1417,42 +1204,411 @@ static LRESULT CALLBACK TermViewSubclassProc(HWND hwnd, UINT msg, WPARAM wParam,
             return 0;
         }
 
-        // Ctrl+C: copy selection, or send SIGINT if no selection
-        if (wParam == 'C' && (GetKeyState(VK_CONTROL) & 0x8000))
-        {
-            // Check if there's a selection in Scintilla
-            int selStart = (int)SendMessage(hwnd, SCI_GETSELECTIONSTART, 0, 0);
-            int selEnd = (int)SendMessage(hwnd, SCI_GETSELECTIONEND, 0, 0);
-            if (selStart != selEnd)
-            {
-                // Copy selection to clipboard (let Scintilla handle it)
-                SendMessage(hwnd, SCI_COPY, 0, 0);
+        /* Ctrl+L: clear screen */
+        if (wParam == 'L' && ctrl) {
+            if (g_term && g_term->grid) {
+                for (int r = 0; r < g_term->grid->rows; r++)
+                    Grid_ClearRow(g_term->grid, r);
+                g_term->grid->curR = 0; g_term->grid->curC = 0;
+                InvalidateRect(hwnd, NULL, FALSE);
             }
-            // Don't block - Ctrl+C also generates WM_CHAR with 0x03 (ETX)
-            // which will be sent to the terminal as SIGINT
+            Terminal_Write("\x0C", 1);
             return 0;
         }
 
-        // Block ALL other WM_KEYDOWN from reaching Scintilla.
-        // TranslateMessage has already queued WM_CHAR for character keys,
-        // so we'll handle those characters in the WM_CHAR handler above.
+        if (wParam == 'C' && ctrl) return 0; /* handled in WM_CHAR */
+
+        /* Special keys that do NOT generate WM_CHAR → send VT escape */
+        switch (wParam) {
+        case VK_UP:     Terminal_Write("\033[A", 3); return 0;
+        case VK_DOWN:   Terminal_Write("\033[B", 3); return 0;
+        case VK_RIGHT:  Terminal_Write("\033[C", 3); return 0;
+        case VK_LEFT:   Terminal_Write("\033[D", 3); return 0;
+        case VK_DELETE: Terminal_Write("\033[3~", 4); return 0;
+        case VK_HOME:   Terminal_Write("\033[H", 3); return 0;
+        case VK_END:    Terminal_Write("\033[F", 3); return 0;
+        case VK_PRIOR:  Terminal_Write("\033[5~", 4); return 0;
+        case VK_NEXT:   Terminal_Write("\033[6~", 4); return 0;
+        case VK_INSERT: Terminal_Write("\033[2~", 4); return 0;
+        case VK_F1:  Terminal_Write("\033OP", 3); return 0;
+        case VK_F2:  Terminal_Write("\033OQ", 3); return 0;
+        case VK_F3:  Terminal_Write("\033OR", 3); return 0;
+        case VK_F4:  Terminal_Write("\033OS", 3); return 0;
+        case VK_F5:  Terminal_Write("\033[15~", 5); return 0;
+        case VK_F6:  Terminal_Write("\033[17~", 5); return 0;
+        case VK_F7:  Terminal_Write("\033[18~", 5); return 0;
+        case VK_F8:  Terminal_Write("\033[19~", 5); return 0;
+        case VK_F9:  Terminal_Write("\033[20~", 5); return 0;
+        case VK_F10: Terminal_Write("\033[21~", 5); return 0;
+        case VK_F11: Terminal_Write("\033[23~", 5); return 0;
+        case VK_F12: Terminal_Write("\033[24~", 5); return 0;
+        case VK_ESCAPE: Terminal_Hide(); return 0;
+        }
+        break;  /* let DefWindowProc + TranslateMessage generate WM_CHAR */
+    }
+
+    case WM_KEYUP:
+    case WM_SYSKEYDOWN:
+    case WM_SYSKEYUP:
+        return 0;
+
+    /* ── Focus ────────────────────────────────────────────── */
+    case WM_SETFOCUS:
+        g_wantFocus = TRUE;
+        g_caretOn = TRUE;
+        /* DEBUG */
+        if (g_hwndMain)
+            SetWindowTextW(g_hwndMain, L"[v5] VIEW HAS FOCUS — type to test");
+        if (g_term && g_term->hwndView)
+            InvalidateRect(g_term->hwndView, NULL, FALSE);
+        return 0;
+
+    case WM_KILLFOCUS: {
+        HWND hNew = (HWND)wParam;
+        if (hNew && g_hwndPanel) {
+            if (hNew != g_hwndPanel && !IsChild(g_hwndPanel, hNew))
+                g_wantFocus = FALSE;
+        }
         return 0;
     }
 
-    case WM_SYSKEYDOWN:
-        // Block Alt+key combinations from reaching Scintilla
-        return 0;
-
-    case WM_KEYUP:
-    case WM_SYSKEYUP:
-        // Block keyup too to keep things consistent
-        return 0;
-
+    /* ── Mouse — selection ────────────────────────────────── */
     case WM_LBUTTONDOWN:
-        // Allow mouse clicks for selecting text in terminal output
         SetFocus(hwnd);
+        SetCapture(hwnd);
+        g_selecting = TRUE;
+        g_selSR = (short)HIWORD(lParam) / g_cellH;
+        g_selSC = (short)LOWORD(lParam) / g_cellW;
+        g_selER = g_selSR; g_selEC = g_selSC;
+        g_hasSel = FALSE;
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+
+    case WM_MOUSEMOVE:
+        if (g_selecting) {
+            g_selER = (short)HIWORD(lParam) / g_cellH;
+            g_selEC = (short)LOWORD(lParam) / g_cellW;
+            g_hasSel = (g_selSR != g_selER || g_selSC != g_selEC);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+
+    case WM_LBUTTONUP:
+        if (g_selecting) {
+            g_selecting = FALSE;
+            ReleaseCapture();
+            g_selER = (short)HIWORD(lParam) / g_cellH;
+            g_selEC = (short)LOWORD(lParam) / g_cellW;
+            g_hasSel = (g_selSR != g_selER || g_selSC != g_selEC);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+
+    case WM_LBUTTONDBLCLK: {
+        SetFocus(hwnd);
+        if (g_term && g_term->grid) {
+            int r = (short)HIWORD(lParam) / g_cellH;
+            int c = (short)LOWORD(lParam) / g_cellW;
+            Grid *g = g_term->grid;
+            if (r >= 0 && r < g->rows && c >= 0 && c < g->cols) {
+                Cell *cl = GridCell(g, r, c);
+                if (cl->ch != L' ') {
+                    int s = c, e = c;
+                    while (s > 0 && GridCell(g, r, s-1)->ch != L' ') s--;
+                    while (e < g->cols-1 && GridCell(g, r, e+1)->ch != L' ') e++;
+                    g_selSR = r; g_selSC = s; g_selER = r; g_selEC = e;
+                    g_hasSel = TRUE;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+            }
+        }
+        return 0;
+    }
+
+    /* ── Scroll ───────────────────────────────────────────── */
+    case WM_MOUSEWHEEL: {
+        if (!g_term || !g_term->grid) return 0;
+        int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        int lines = delta / WHEEL_DELTA * 3;
+        Grid *g = g_term->grid;
+        g->scrollOff += lines;
+        int maxOff = g->used - g->rows;
+        if (maxOff < 0) maxOff = 0;
+        if (g->scrollOff < 0) g->scrollOff = 0;
+        if (g->scrollOff > maxOff) g->scrollOff = maxOff;
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+    }
+
+    /* ── Context menu ─────────────────────────────────────── */
+    case WM_RBUTTONUP: {
+        HMENU hm = CreatePopupMenu();
+        if (hm) {
+            AppendMenuW(hm, MF_STRING | (g_hasSel ? 0 : MF_GRAYED), 1, L"  Copy\tCtrl+C");
+            AppendMenuW(hm, MF_STRING, 2, L"  Paste\tCtrl+V");
+            AppendMenuW(hm, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(hm, MF_STRING, 3, L"  Clear\tCtrl+L");
+            POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+            ClientToScreen(hwnd, &pt);
+            int cmd = TrackPopupMenu(hm, TPM_RETURNCMD|TPM_LEFTBUTTON|TPM_NONOTIFY,
+                pt.x, pt.y, 0, hwnd, NULL);
+            DestroyMenu(hm);
+            if (cmd == 1) CopySel(hwnd);
+            else if (cmd == 2) PostMessage(hwnd, WM_KEYDOWN, 'V', 0); /* trigger paste logic */
+            else if (cmd == 3) {
+                if (g_term && g_term->grid) {
+                    for (int r = 0; r < g_term->grid->rows; r++)
+                        Grid_ClearRow(g_term->grid, r);
+                    g_term->grid->curR = 0; g_term->grid->curC = 0;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+                Terminal_Write("\x0C", 1);
+            }
+        }
+        return 0;
+    }
+
+    } /* end switch */
+
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Shell dropdown menu
+ * ═══════════════════════════════════════════════════════════════════ */
+static void ShowShellMenu(HWND hwnd) {
+    HMENU hm = CreatePopupMenu();
+    if (!hm) return;
+    for (int i = 0; i < SH_COUNT; i++) {
+        if (!g_shells[i].found) continue;
+        WCHAR it[128];
+        swprintf_s(it, 128, L"  %s", g_shells[i].label);
+        UINT fl = MF_STRING;
+        if ((ShellKind)i == g_curShell && g_term && InterlockedCompareExchange(&g_term->alive,0,0))
+            fl |= MF_CHECKED;
+        AppendMenuW(hm, fl, 5000+i, it);
+    }
+    POINT pt = { g_rcDrop.left, g_rcDrop.bottom };
+    ClientToScreen(hwnd, &pt);
+    int cmd = TrackPopupMenu(hm, TPM_RETURNCMD|TPM_LEFTBUTTON|TPM_NONOTIFY,
+        pt.x, pt.y, 0, hwnd, NULL);
+    DestroyMenu(hm);
+    if (cmd >= 5000 && cmd < 5000+SH_COUNT)
+        Terminal_NewShell(GetParent(hwnd), cmd - 5000);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Header painting
+ * ═══════════════════════════════════════════════════════════════════ */
+static void CalcBtns(int w) {
+    int bs = 22, by = SPLITTER_H + (HEADER_H - 22) / 2;
+    g_rcClose.left = w - bs - 8; g_rcClose.top = by;
+    g_rcClose.right = g_rcClose.left + bs; g_rcClose.bottom = by + bs;
+    g_rcNew.left = g_rcClose.left - bs - 4; g_rcNew.top = by;
+    g_rcNew.right = g_rcNew.left + bs; g_rcNew.bottom = by + bs;
+    g_rcDrop.left = 10; g_rcDrop.top = SPLITTER_H + (HEADER_H - 22) / 2;
+    g_rcDrop.right = 10 + 140; g_rcDrop.bottom = g_rcDrop.top + 22;
+}
+
+static void PaintHeader(HWND hwnd, HDC dc, RECT *rc) {
+    BOOL dk = DarkMode_IsEnabled();
+    int W = rc->right;
+    CalcBtns(W);
+
+    RECT rH = { 0, SPLITTER_H, W, SPLITTER_H + HEADER_H };
+    HBRUSH hb = CreateSolidBrush(dk ? C_DKHDR : C_LTHDR);
+    FillRect(dc, &rH, hb); DeleteObject(hb);
+    RECT rB = rH; rB.top = rB.bottom - 1;
+    hb = CreateSolidBrush(dk ? C_DKBORD : C_LTBORD);
+    FillRect(dc, &rB, hb); DeleteObject(hb);
+
+    SetBkMode(dc, TRANSPARENT);
+
+    /* Dropdown */
+    { HBRUSH bg = CreateSolidBrush(dk ? C_DKDROP : C_LTDROP);
+      HPEN pe = CreatePen(PS_SOLID, 1, dk ? C_DKBORD : C_LTBORD);
+      HBRUSH ob = SelectObject(dc, bg); HPEN op = SelectObject(dc, pe);
+      RoundRect(dc, g_rcDrop.left, g_rcDrop.top, g_rcDrop.right, g_rcDrop.bottom, 6, 6);
+      SelectObject(dc, ob); SelectObject(dc, op);
+      DeleteObject(bg); DeleteObject(pe); }
+    if (g_fontDrop) SelectObject(dc, g_fontDrop);
+    SetTextColor(dc, dk ? C_DKTXT : C_LTTXT);
+    RECT rl = g_rcDrop; rl.left += 8; rl.right -= 18;
+    DrawTextW(dc, g_shells[g_curShell].label, -1, &rl, DT_SINGLELINE|DT_VCENTER|DT_LEFT|DT_NOPREFIX);
+    SetTextColor(dc, dk ? C_DKDIM : C_LTDIM);
+    RECT rv = g_rcDrop; rv.left = rv.right - 18;
+    DrawTextW(dc, L"\x25BC", 1, &rv, DT_SINGLELINE|DT_VCENTER|DT_CENTER);
+
+    /* Close button */
+    if (g_hoverClose) {
+        HBRUSH h2 = CreateSolidBrush(dk ? C_DKBTN : C_LTBTN);
+        HPEN p2 = CreatePen(PS_SOLID, 1, dk ? C_DKBTN : C_LTBTN);
+        HBRUSH o2 = SelectObject(dc, h2); HPEN o3 = SelectObject(dc, p2);
+        RoundRect(dc, g_rcClose.left, g_rcClose.top, g_rcClose.right, g_rcClose.bottom, 4, 4);
+        SelectObject(dc, o2); SelectObject(dc, o3);
+        DeleteObject(h2); DeleteObject(p2);
+    }
+    SetTextColor(dc, dk ? C_DKDIM : C_LTDIM);
+    if (g_fontDrop) SelectObject(dc, g_fontDrop);
+    DrawTextW(dc, L"\x2715", 1, &g_rcClose, DT_SINGLELINE|DT_VCENTER|DT_CENTER);
+
+    /* New button */
+    if (g_hoverNew) {
+        HBRUSH h2 = CreateSolidBrush(dk ? C_DKBTN : C_LTBTN);
+        HPEN p2 = CreatePen(PS_SOLID, 1, dk ? C_DKBTN : C_LTBTN);
+        HBRUSH o2 = SelectObject(dc, h2); HPEN o3 = SelectObject(dc, p2);
+        RoundRect(dc, g_rcNew.left, g_rcNew.top, g_rcNew.right, g_rcNew.bottom, 4, 4);
+        SelectObject(dc, o2); SelectObject(dc, o3);
+        DeleteObject(h2); DeleteObject(p2);
+    }
+    SetTextColor(dc, dk ? C_DKDIM : C_LTDIM);
+    DrawTextW(dc, L"+", 1, &g_rcNew, DT_SINGLELINE|DT_VCENTER|DT_CENTER);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * PANEL WNDPROC
+ * ═══════════════════════════════════════════════════════════════════ */
+static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc; GetClientRect(hwnd, &rc);
+        BOOL dk = DarkMode_IsEnabled();
+        HBRUSH hb = CreateSolidBrush(dk ? C_DKBG : C_LTBG);
+        FillRect(dc, &rc, hb); DeleteObject(hb);
+        RECT rs = rc; rs.bottom = SPLITTER_H;
+        hb = CreateSolidBrush(dk ? C_DKSPLIT : C_LTSPLIT);
+        FillRect(dc, &rs, hb); DeleteObject(hb);
+        PaintHeader(hwnd, dc, &rc);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_ERASEBKGND: {
+        HDC dc = (HDC)wParam;
+        RECT rc; GetClientRect(hwnd, &rc);
+        HBRUSH h = CreateSolidBrush(DarkMode_IsEnabled() ? C_DKBG : C_LTBG);
+        FillRect(dc, &rc, h); DeleteObject(h);
+        return 1;
+    }
+
+    case WM_SIZE: {
+        int cx = LOWORD(lParam);
+        if (cx > 0) CalcBtns(cx);
+        InvalidateRect(hwnd, NULL, TRUE);
+        return 0;
+    }
+
+    case WM_SETCURSOR: {
+        POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
+        if (pt.y < SPLITTER_H) { SetCursor(LoadCursor(NULL, IDC_SIZENS)); return TRUE; }
         break;
     }
 
-    return CallWindowProc(s_pfnOrigViewProc, hwnd, msg, wParam, lParam);
+    case WM_LBUTTONDOWN: {
+        int x = (short)LOWORD(lParam), y = (short)HIWORD(lParam);
+        if (y < SPLITTER_H) { SetCapture(hwnd); return 0; }
+        POINT pt = { x, y };
+        if (PtInRect(&g_rcDrop, pt))  { ShowShellMenu(hwnd); return 0; }
+        if (PtInRect(&g_rcNew, pt))   { Terminal_New(GetParent(hwnd)); return 0; }
+        if (PtInRect(&g_rcClose, pt)) { Terminal_Hide(); return 0; }
+        /* Click below header → focus view */
+        if (g_term && g_term->hwndView) {
+            g_wantFocus = TRUE;
+            SetFocus(g_term->hwndView);
+        }
+        return 0;
+    }
+
+    case WM_MOUSEMOVE: {
+        if (GetCapture() == hwnd) {
+            POINT pt; GetCursorPos(&pt);
+            HWND p = GetParent(hwnd); ScreenToClient(p, &pt);
+            RECT rp; GetClientRect(p, &rp);
+            int nh = rp.bottom - pt.y;
+            if (nh < 120) nh = 120;
+            if (nh > rp.bottom - 100) nh = rp.bottom - 100;
+            g_panelH = nh;
+            SendMessage(p, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rp.right, rp.bottom));
+        } else {
+            POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+            BOOL c2 = PtInRect(&g_rcClose, pt), n2 = PtInRect(&g_rcNew, pt);
+            if (c2 != g_hoverClose || n2 != g_hoverNew) {
+                g_hoverClose = c2; g_hoverNew = n2;
+                RECT rh = { 0, SPLITTER_H, 9999, SPLITTER_H + HEADER_H };
+                InvalidateRect(hwnd, &rh, FALSE);
+            }
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+            TrackMouseEvent(&tme);
+        }
+        break;
+    }
+
+    case WM_MOUSELEAVE:
+        if (g_hoverClose || g_hoverNew) {
+            g_hoverClose = FALSE; g_hoverNew = FALSE;
+            RECT rh = { 0, SPLITTER_H, 9999, SPLITTER_H + HEADER_H };
+            InvalidateRect(hwnd, &rh, FALSE);
+        }
+        break;
+
+    case WM_LBUTTONUP:
+        if (GetCapture() == hwnd) ReleaseCapture();
+        break;
+
+    /* ── Terminal output from reader thread ────────────────── */
+    case WM_TERMDATA: {
+        char *d = (char*)wParam;
+        int n = (int)lParam;
+        if (g_term && g_term->grid && d && n > 0) {
+            Grid_ProcessVT(g_term->grid, d, n);
+            if (g_term->hwndView)
+                InvalidateRect(g_term->hwndView, NULL, FALSE);
+        }
+        if (d) n2e_Free(d);
+        return 0;
+    }
+
+    /* ── Timers ───────────────────────────────────────────── */
+    case WM_TIMER:
+        if (wParam == TIMER_HEALTH && g_term && g_term->hProc) {
+            DWORD ec = 0;
+            if (GetExitCodeProcess(g_term->hProc, &ec) && ec != STILL_ACTIVE) {
+                InterlockedExchange(&g_term->alive, FALSE);
+                if (g_term->grid) {
+                    char m[128];
+                    int ml = sprintf_s(m, 128, "\r\n\r\n[Process exited with code %lu]\r\n", ec);
+                    Grid_ProcessVT(g_term->grid, m, ml);
+                    if (g_term->hwndView)
+                        InvalidateRect(g_term->hwndView, NULL, FALSE);
+                }
+                KillTimer(hwnd, TIMER_HEALTH);
+            }
+        }
+        if (wParam == TIMER_BLINK) {
+            g_caretOn = !g_caretOn;
+            if (g_term && g_term->hwndView && GetFocus() == g_term->hwndView)
+                InvalidateRect(g_term->hwndView, NULL, FALSE);
+        }
+        return 0;
+
+    /* Forward keyboard to view if panel somehow gets it */
+    case WM_CHAR:
+    case WM_KEYDOWN:
+        if (g_term && g_term->hwndView)
+            return SendMessage(g_term->hwndView, msg, wParam, lParam);
+        return 0;
+
+    /* Redirect focus to view */
+    case WM_SETFOCUS:
+        if (g_term && g_term->hwndView) {
+            SetFocus(g_term->hwndView);
+            return 0;
+        }
+        break;
+    }
+
+    return DefWindowProc(hwnd, msg, wParam, lParam);
 }

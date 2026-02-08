@@ -13,6 +13,8 @@
 #include "tinyexpr/tinyexpr.h"
 #include "Utils.h"
 #include "VersionHelper.h"
+#include "Terminal.h"
+#include "ChatPanel.h"
 
 HHOOK hShellHook = NULL;
 
@@ -259,6 +261,7 @@ void n2e_OnActivateMainWindow(const WPARAM wParam, const LPARAM lParam)
   bIsModalDialogOnTop = (wParam == WA_INACTIVE) ? n2e_IsModalDialog((HWND)lParam) : FALSE;
   if (wParam != WA_INACTIVE)
   {
+    // [biko]: Let n2e_RestoreActiveEdit handle terminal/chat focus redirection
     n2e_RestoreActiveEdit(FALSE);
     UpdateToolbar();
     UpdateStatusbar();
