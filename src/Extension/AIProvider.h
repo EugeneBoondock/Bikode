@@ -180,6 +180,23 @@ char* AIProviderConfig_ToJSON(const AIProviderConfig* pCfg);
 // Parse provider config from a JSON string.
 void AIProviderConfig_FromJSON(const char* szJSON, AIProviderConfig* pCfg);
 
+//=============================================================================
+// Chat Attachments
+//=============================================================================
+
+#define AI_MAX_CHAT_ATTACHMENTS 8
+#define AI_ATTACHMENT_PATH_MAX   1024
+#define AI_ATTACHMENT_NAME_MAX    256
+#define AI_ATTACHMENT_TYPE_MAX     64
+
+typedef struct TAIChatAttachment
+{
+    char path[AI_ATTACHMENT_PATH_MAX];        // Absolute path to the saved attachment (UTF-8)
+    char displayName[AI_ATTACHMENT_NAME_MAX]; // Short name to show in manifest (UTF-8)
+    char contentType[AI_ATTACHMENT_TYPE_MAX]; // MIME-like hint (e.g., "image/png")
+    int  isImage;               // TRUE if attachment is an image/thumbnail
+} AIChatAttachment;
+
 #ifdef __cplusplus
 }
 #endif

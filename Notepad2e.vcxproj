@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug LPeg|Win32">
@@ -67,7 +67,7 @@
   <PropertyGroup Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <CharacterSet>Unicode</CharacterSet>
-    <PlatformToolset Condition="'$(VisualStudioVersion)' != '14.0'">v141_xp</PlatformToolset>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' != '14.0'">v143</PlatformToolset>
     <PlatformToolset Condition="'$(VisualStudioVersion)' == '14.0'">v140_xp</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
@@ -478,10 +478,13 @@
     <ClCompile Include="src\Extension\AIContext.c" />
     <ClCompile Include="src\Extension\AICommands.c" />
     <ClCompile Include="src\Extension\AIProvider.c" />
+    <ClCompile Include="src\Extension\PluginManager.c" />
     <ClCompile Include="src\Extension\DiffParse.c" />
     <ClCompile Include="src\Extension\DiffPreview.c" />
     <ClCompile Include="src\Extension\PatchUndo.c" />
-    <ClCompile Include="src\Extension\ChatPanel.c" />
+    <ClCompile Include="src\Extension\ChatPanel.c">
+      <CompileAs>CompileAsCpp</CompileAs>
+    </ClCompile>
     <ClCompile Include="src\Extension\BikoToolbar.c" />
     <ClCompile Include="src\Extension\BikoMenuBar.c" />
     <ClCompile Include="src\Extension\BikoStatusBar.c" />

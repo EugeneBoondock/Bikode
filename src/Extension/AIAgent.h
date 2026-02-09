@@ -43,12 +43,19 @@ void AIAgent_Init(void);
 // Shut down the agent. Frees conversation history.
 void AIAgent_Shutdown(void);
 
+// Shut down the agent. Frees conversation history.
+void AIAgent_Shutdown(void);
+
+// Start an async agent chat. Runs the full agent loop on a background thread.
+
 // Start an async agent chat. Runs the full agent loop on a background thread.
 // Posts WM_AI_AGENT_STATUS / WM_AI_AGENT_TOOL during execution.
 // Posts WM_AI_DIRECT_RESPONSE with the final answer when done.
 // Returns FALSE if a request is already in progress.
 BOOL AIAgent_ChatAsync(const AIProviderConfig* pCfg,
                        const char* szUserMessage,
+                       const AIChatAttachment* pAttachments,
+                       int cAttachments,
                        HWND hwndTarget,
                        HWND hwndMainWnd);
 

@@ -18,7 +18,9 @@
 #include <string.h>
 #include <process.h>
 
+#include <wincrypt.h>
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "Crypt32.lib")
 
 //=============================================================================
 // Growable string buffer
@@ -71,6 +73,69 @@ static void sb_free(StrBuf* sb)
 {
     if (sb->data) { free(sb->data); sb->data = NULL; }
     sb->len = sb->cap = 0;
+}
+
+//=============================================================================
+// File helpers
+//=============================================================================
+
+static char* ReadFileContents(const char* path, DWORD* outSize)
+{
+    HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return NULL;
+
+    DWORD size = GetFileSize(hFile, NULL);
+    if (size == INVALID_FILE_SIZE || size == 0) { CloseHandle(hFile); return NULL; }
+
+    // Limit size to avoid exploding memory (e.g. 10MB limit for attachments)
+    if (size > 10 * 1024 * 1024) size = 10 * 1024 * 1024;
+
+    char* buf = (char*)malloc(size + 1);
+    if (!buf) { CloseHandle(hFile); return NULL; }
+
+    DWORD read;
+    if (!ReadFile(hFile, buf, size, &read, NULL))
+    {
+        free(buf);
+        CloseHandle(hFile);
+        return NULL;
+    }
+    CloseHandle(hFile);
+    buf[read] = '\0';
+    if (outSize) *outSize = read;
+    return buf;
+}
+
+static char* ReadFileToBase64(const char* path)
+{
+    DWORD size = 0;
+    char* data = ReadFileContents(path, &size);
+    if (!data) return NULL;
+
+    DWORD strLen = 0;
+    // CRYPT_STRING_BASE64 | CRYPT_STRING_NOCRLF (0x40000000 | 0x01) -> 0x40000001
+    // But older Headers might not define NOCRLF. Let's use standard BASE64 and strip CRLF ourselves if needed.
+    // Actually CRYPT_STRING_BASE64 is usually fine, JSON tolerates whitespace.
+    // But for data URIs we want one line.
+    
+    if (!CryptBinaryToStringA((const BYTE*)data, size, CRYPT_STRING_BASE64 | 0x40000000 /* CRYPT_STRING_NOCRLF */, NULL, &strLen))
+    {
+        // Try without NOCRLF if that failed (e.g. XP/Win7 support issues?)
+        if (!CryptBinaryToStringA((const BYTE*)data, size, CRYPT_STRING_BASE64, NULL, &strLen))
+        {
+            free(data);
+            return NULL;
+        }
+    }
+
+    char* b64 = (char*)malloc(strLen + 1);
+    if (b64)
+    {
+        CryptBinaryToStringA((const BYTE*)data, size, CRYPT_STRING_BASE64 | 0x40000000, b64, &strLen);
+    }
+    free(data);
+    return b64;
 }
 
 //=============================================================================
@@ -804,7 +869,72 @@ static void BuildBodyMulti_OpenAI(StrBuf* body, const AIProviderConfig* cfg,
     {
         if (i > 0) sb_append(body, ",", 1);
         sb_appendf(body, "{\"role\":\"%s\",\"content\":", msgs[i].role);
-        json_escape_append(body, msgs[i].content);
+
+        // Check for attachments
+        if (msgs[i].attachmentCount > 0 && msgs[i].attachments)
+        {
+            // Multi-modal content array
+            sb_append(body, "[", 1);
+            int hasItems = 0;
+            
+            // 1. Text content (if any)
+            if (msgs[i].content && msgs[i].content[0])
+            {
+                sb_append(body, "{\"type\":\"text\",\"text\":", -1);
+                json_escape_append(body, msgs[i].content);
+                sb_append(body, "}", 1);
+                hasItems = 1;
+            }
+
+            // 2. Attachments
+            for (int k = 0; k < msgs[i].attachmentCount; k++)
+            {
+                AIChatAttachment* att = &msgs[i].attachments[k];
+                if (att->isImage)
+                {
+                    char* b64 = ReadFileToBase64(att->path);
+                    if (b64)
+                    {
+                        if (hasItems) sb_append(body, ",", 1);
+                        sb_append(body, "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:", -1);
+                        const char* mime = att->contentType[0] ? att->contentType : "image/png";
+                        sb_append(body, mime, -1);
+                        sb_append(body, ";base64,", -1);
+                        sb_append(body, b64, -1);
+                        sb_append(body, "\",\"detail\":\"auto\"}}", -1);
+                        free(b64);
+                        hasItems = 1;
+                    }
+                }
+                else
+                {
+                    // Text/Code file -> append as text block
+                    DWORD size = 0;
+                    char* text = ReadFileContents(att->path, &size);
+                    if (text)
+                    {
+                        if (hasItems) sb_append(body, ",", 1);
+                        sb_append(body, "{\"type\":\"text\",\"text\":", -1);
+                        
+                        StrBuf fileMsg;
+                        sb_init(&fileMsg, size + 128);
+                        sb_appendf(&fileMsg, "\n\n[File: %s]\n```\n%s\n```\n", att->displayName, text);
+                        json_escape_append(body, fileMsg.data);
+                        sb_free(&fileMsg);
+                        
+                        sb_append(body, "}", 1);
+                        free(text);
+                        hasItems = 1;
+                    }
+                }
+            }
+            sb_append(body, "]", 1);
+        }
+        else
+        {
+            // Simple string content
+            json_escape_append(body, msgs[i].content);
+        }
         sb_append(body, "}", 1);
     }
     sb_append(body, "]}", -1);

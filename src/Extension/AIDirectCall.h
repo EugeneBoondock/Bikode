@@ -52,6 +52,8 @@ BOOL AIDirectCall_ChatAsync(const AIProviderConfig* pCfg,
 typedef struct {
     const char* role;       // "system", "user", "assistant"
     const char* content;    // message text (UTF-8)
+    AIChatAttachment* attachments; // Optional attachments
+    int attachmentCount;
 } AIChatMessage;
 
 // Synchronous multi-message call. Returns heap-allocated response (caller frees).

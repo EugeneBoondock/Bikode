@@ -12,6 +12,8 @@
 
 #include <wtypes.h>
 
+typedef struct TAIChatAttachment AIChatAttachment;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -21,6 +23,8 @@ extern "C" {
 #define IDC_CHAT_OUTPUT     0xFB21
 #define IDC_CHAT_INPUT      0xFB22
 #define IDC_CHAT_SEND       0xFB23
+#define IDC_CHAT_ATTACH     0xFB24
+#define IDC_CHAT_SEARCH     0xFB25
 
 //=============================================================================
 // Lifecycle
@@ -62,7 +66,9 @@ int     ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop, int ed
 //=============================================================================
 
 // Append a user message to the chat output.
-void    ChatPanel_AppendUserMessage(const char* pszMessage);
+void    ChatPanel_AppendUserMessage(const char* pszMessage,
+                                    const AIChatAttachment* pAttachments,
+                                    int cAttachments);
 
 // Append an AI response to the chat output.
 void    ChatPanel_AppendResponse(const char* pszResponse);
@@ -77,8 +83,9 @@ void    ChatPanel_Clear(void);
 // Input handling
 //=============================================================================
 
-// Process Enter key in the input field â€” sends the message.
+// Process Enter key in the input field - sends the message.
 void    ChatPanel_SendInput(void);
+void    ChatPanel_SendSearchInput(void);
 
 // Focus the input field.
 void    ChatPanel_FocusInput(void);

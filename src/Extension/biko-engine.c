@@ -1,4 +1,4 @@
-﻿/******************************************************************************
+/******************************************************************************
 *
 * Biko â€” AI Engine (Multi-Provider)
 *
@@ -841,6 +841,129 @@ static char* CallLLMAPI(const AIProviderConfig* cfg,
 }
 
 //=============================================================================
+// Web Search using Playwright (DuckDuckGo)
+//=============================================================================
+
+static char* WebSearch(const char* query, int maxResults)
+{
+    if (!query || !query[0])
+        return _strdup("{\"success\":false,\"error\":\"No query provided\",\"results\":[]}");
+
+    // Resolve path to web-search.js in common dev/runtime layouts.
+    WCHAR wszExePath[MAX_PATH];
+    GetModuleFileNameW(NULL, wszExePath, MAX_PATH);
+    WCHAR* lastSlash = wcsrchr(wszExePath, L'\\');
+    if (lastSlash) *lastSlash = L'\0';
+
+    WCHAR wszScriptPath[MAX_PATH];
+    BOOL foundScript = FALSE;
+    const WCHAR* candidates[] = {
+        L"src\\Extension\\tools\\web-search.js",
+        L"src\\tools\\web-search.js",
+        L"..\\..\\..\\src\\Extension\\tools\\web-search.js",
+        L"..\\..\\..\\src\\tools\\web-search.js",
+        NULL
+    };
+    for (int i = 0; candidates[i]; i++)
+    {
+        if (i < 2)
+            swprintf(wszScriptPath, MAX_PATH, L"%s", candidates[i]);
+        else
+            swprintf(wszScriptPath, MAX_PATH, L"%s\\%s", wszExePath, candidates[i]);
+
+        DWORD attrs = GetFileAttributesW(wszScriptPath);
+        if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            foundScript = TRUE;
+            break;
+        }
+    }
+
+    if (!foundScript)
+        return _strdup("{\"success\":false,\"error\":\"web-search.js not found\",\"results\":[]}");
+
+    // Build command: node "<script>" "query" --max=N
+    WCHAR wszCmd[4096];
+    WCHAR wszQuery[2048];
+    MultiByteToWideChar(CP_UTF8, 0, query, -1, wszQuery, 2048);
+
+    // Escape quotes in query
+    for (WCHAR* p = wszQuery; *p; p++)
+        if (*p == L'"') *p = L'\'';
+
+    swprintf(wszCmd, 4096,
+        L"node \"%s\" \"%s\" --max=%d",
+        wszScriptPath, wszQuery, maxResults > 0 ? maxResults : 5);
+
+    // Create pipe for reading stdout
+    HANDLE hReadPipe, hWritePipe;
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0))
+        return _strdup("{\"success\":false,\"error\":\"CreatePipe failed\",\"results\":[]}");
+
+    SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
+    // Set up process
+    STARTUPINFOW si = { sizeof(si) };
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.hStdOutput = hWritePipe;
+    si.hStdError = hWritePipe;
+    si.wShowWindow = SW_HIDE;
+
+    PROCESS_INFORMATION pi = {0};
+
+    if (!CreateProcessW(NULL, wszCmd, NULL, NULL, TRUE,
+        CREATE_NO_WINDOW, NULL, NULL, &si, &pi))
+    {
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        return _strdup("{\"success\":false,\"error\":\"Node.js not found or script missing\",\"results\":[]}");
+    }
+
+    CloseHandle(hWritePipe);
+
+    // Read output with timeout (30 seconds max)
+    StrBuf output;
+    sb_init(&output, 4096);
+    char buf[1024];
+    DWORD dwRead;
+    DWORD startTick = GetTickCount();
+
+    while (GetTickCount() - startTick < 30000)
+    {
+        DWORD avail = 0;
+        if (PeekNamedPipe(hReadPipe, NULL, 0, NULL, &avail, NULL) && avail > 0)
+        {
+            if (ReadFile(hReadPipe, buf, sizeof(buf) - 1, &dwRead, NULL) && dwRead > 0)
+            {
+                buf[dwRead] = '\0';
+                sb_append(&output, buf, dwRead);
+            }
+        }
+        else
+        {
+            DWORD exitCode;
+            if (GetExitCodeProcess(pi.hProcess, &exitCode) && exitCode != STILL_ACTIVE)
+                break;
+            Sleep(50);
+        }
+    }
+
+    // Clean up
+    CloseHandle(hReadPipe);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    if (output.len == 0)
+    {
+        sb_free(&output);
+        return _strdup("{\"success\":false,\"error\":\"Search timeout or no output\",\"results\":[]}");
+    }
+
+    return output.data;
+}
+
+//=============================================================================
 // Resolve per-request provider config
 //=============================================================================
 
@@ -1002,6 +1125,46 @@ static char* ProcessRequest(const char* jsonReq)
         FreeRequest(&req);
         char* result = sb.data;
         sb.data = NULL;
+        return result;
+    }
+
+    // Handle web search request
+    if (req.pszType && strcmp(req.pszType, "websearch") == 0)
+    {
+        char* query = req.pszChatMessage ? req.pszChatMessage : req.pszInstruction;
+        if (!query || !query[0])
+        {
+            FreeRequest(&req);
+            return _strdup("{\"type\":\"websearch_result\",\"success\":false,"
+                           "\"error\":\"No search query provided\",\"results\":[]}");
+        }
+
+        // Call web search (default 5 results)
+        char* searchResult = WebSearch(query, 5);
+
+        // Wrap in response format
+        StrBuf resp;
+        sb_init(&resp, 4096);
+        sb_append(&resp, "{\"type\":\"websearch_result\",\"query\":", -1);
+        json_escape_append(&resp, query);
+        sb_append(&resp, ",", 1);
+
+        // Append the search result JSON (strip outer braces to merge)
+        if (searchResult && searchResult[0] == '{')
+        {
+            // Include the results directly
+            sb_append(&resp, searchResult + 1, strlen(searchResult) - 2);
+        }
+        else
+        {
+            sb_append(&resp, "\"success\":false,\"error\":\"Search failed\"", -1);
+        }
+        sb_append(&resp, "}", 1);
+
+        if (searchResult) free(searchResult);
+        FreeRequest(&req);
+        char* result = resp.data;
+        resp.data = NULL;
         return result;
     }
 

@@ -56,6 +56,7 @@
 #include "Extension/AICommands.h"
 #include "Extension/AIBridge.h"
 #include "Extension/AIAgent.h"
+#include "Extension/PluginManager.h"
 #include "Extension/ChatPanel.h"
 #include "Extension/DarkMode.h"
 #include "Extension/Terminal.h"
@@ -1091,7 +1092,8 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
         // call SaveSettings() when hwndToolbar is still valid
         SaveSettings(FALSE);
 
-        // [biko]: Shutdown AI subsystem and custom bars
+        // [biko]: Shutdown plugins and AI subsystem, then custom bars
+        PluginManager_Shutdown();
         BikoMenuBar_Destroy();
         BikoStatusBar_Destroy();
         AICommands_Shutdown();
@@ -1942,9 +1944,12 @@ LRESULT MsgCreate(HWND hwnd, WPARAM wParam, LPARAM lParam)
   // [2e]: DPI awareness #154
   n2e_UpdateViewsDPI(GetDPIFromWindow(hwnd));
 
-  // [biko]: Initialize AI subsystem
+  // [biko]: Initialize AI and Plugin subsystems
   AICommands_Init(hwnd, _hwndEdit);
   AICommands_CreateMenu(GetMenu(hwnd));
+  PluginManager_Init(hwnd, _hwndEdit);
+  PluginManager_LoadAll();
+  PluginManager_CreateMenu(GetMenu(hwnd));
   // Defer dark mode + menu bar creation to after WM_CREATE completes
   PostMessage(hwnd, WM_USER + 0x600, 0, 0);
   // [/biko]
@@ -5841,8 +5846,10 @@ LRESULT MsgCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
       break;
     // [/2e]
 
-    // [biko]: AI command dispatch
+    // [biko]: Plugin and AI command dispatch
     default:
+      if (PluginManager_HandleCommand(hwnd, wCommandID))
+        return 0;
       if (AICommands_HandleCommand(hwnd, wCommandID))
         return 0;
       break;

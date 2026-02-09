@@ -213,7 +213,7 @@ static LRESULT CALLBACK SendBtnProc(HWND, UINT, WPARAM, LPARAM);
 static LRESULT CALLBACK AttachBtnProc(HWND, UINT, WPARAM, LPARAM);
 static LRESULT CALLBACK SearchBtnProc(HWND, UINT, WPARAM, LPARAM);
 static void AddMessage(MsgRole role, const char* text,
-                       const ChatAttachment* attachments, int attachmentCount);
+                       ChatAttachment* attachments, int attachmentCount);
 static void InvalidateAllHeights(void);
 static int  MeasureMsgHeight(HDC hdc, int idx, int chatW);
 static int  ComputeContentHeight(HDC hdc, int chatW);
@@ -221,7 +221,7 @@ static void EnsureScrollEnd(void);
 static void ClampScroll(void);
 static void PaintChatView(HWND hwnd, HDC hdc, int cx, int cy);
 static void DrawPendingAttachments(HDC hdc);
-static int  GetPendingSectionHeight(void);
+static int  GetPendingSectionHeight(int availableWidth);
 static void ChatPanel_InvokeAttachmentPicker(void);
 static void PendingAttachments_Reset(void);
 static BOOL EnsureAttachmentTempDir(void);
@@ -243,9 +243,6 @@ static int  ComputeAttachmentRows(int count, int availableWidth);
 static int  ComputeAttachmentAreaHeight(int count, int availableWidth);
 static void DrawMessageAttachments(HDC hdc, const ChatMsg* msg,
                                    int startX, int startY, int availableWidth);
-static void DrawAttachmentTile(HDC hdc, ChatAttachment* pAtt, const RECT* prcTile);
-static BOOL PendingAttachments_AddFile(const WCHAR* wszSourcePath, const WCHAR* wszDisplayName);
-static BOOL PendingAttachments_AddImage(const WCHAR* wszSourcePath, const WCHAR* wszDisplayName);
 
 //=============================================================================
 // Class registration
@@ -322,33 +319,9 @@ static BOOL EnsureGdiplus(void)
 
 static void PendingAttachments_NotifyChanged(void)
 {
-    if (!s_hwndPanel) {
-        return;
-    }
     InvalidateRect(s_hwndPanel, &s_rcInputCard, FALSE);
-    HWND hwndParent = GetParent(s_hwndPanel);
-    if (hwndParent && s_lastLayoutParentRight > 0 && s_lastLayoutEditorHeight > 0) {
-        ChatPanel_Layout(hwndParent, s_lastLayoutParentRight, s_lastLayoutEditorTop, s_lastLayoutEditorHeight);
-    }
-    if (s_hwndChat) {
-        InvalidateRect(s_hwndChat, NULL, FALSE);
-    }
+    ChatPanel_Layout(GetParent(s_hwndPanel), 0, 0, 0);
     InvalidateRect(s_hwndPanel, NULL, FALSE);
-}
-
-static BOOL PendingAttachments_AddFromPath(const WCHAR* wszSourcePath)
-{
-    if (!wszSourcePath || !wszSourcePath[0]) {
-        return FALSE;
-    }
-    WCHAR* ext = PathFindExtensionW(wszSourcePath);
-    if (ext && (*ext != L'\0') &&
-        (_wcsicmp(ext, L".png") == 0 || _wcsicmp(ext, L".jpg") == 0 ||
-         _wcsicmp(ext, L".jpeg") == 0 || _wcsicmp(ext, L".bmp") == 0 ||
-         _wcsicmp(ext, L".gif") == 0 || _wcsicmp(ext, L".webp") == 0)) {
-        return PendingAttachments_AddImage(wszSourcePath, NULL);
-    }
-    return PendingAttachments_AddFile(wszSourcePath, NULL);
 }
 
 static BOOL PendingAttachments_AddFile(const WCHAR* wszSourcePath, const WCHAR* wszDisplayName)
@@ -665,26 +638,6 @@ static void PendingAttachments_Reset(void)
     }
     s_pendingAttachmentCount = 0;
     SetRectEmpty(&s_rcPendingStrip);
-}
-
-static BOOL BuildAttachmentSummary(const ChatAttachment* attachments, int count,
-                                   AIChatAttachment* pOutMeta, int* pcOutMeta)
-{
-    if (pcOutMeta) {
-        *pcOutMeta = 0;
-    }
-    if (!attachments || count <= 0 || !pOutMeta || !pcOutMeta) {
-        return FALSE;
-    }
-    int n = count;
-    if (n > AI_MAX_CHAT_ATTACHMENTS) {
-        n = AI_MAX_CHAT_ATTACHMENTS;
-    }
-    for (int i = 0; i < n; i++) {
-        pOutMeta[i] = attachments[i].meta;
-    }
-    *pcOutMeta = n;
-    return TRUE;
 }
 
 //=============================================================================
@@ -1016,10 +969,6 @@ static LRESULT CALLBACK ChatViewWndProc(HWND hwnd, UINT msg,
 // Public: Lifecycle
 //=============================================================================
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 HWND ChatPanel_GetPanelHwnd(void)
 {
     return s_hwndPanel;
@@ -1136,11 +1085,6 @@ void ChatPanel_Destroy(void)
     s_bVisible = FALSE;
 
     if (s_hIconLogo) { DestroyIcon(s_hIconLogo); s_hIconLogo = NULL; }
-    if (s_gdiplusInitialized) {
-        Gdiplus::GdiplusShutdown(s_gdiplusToken);
-        s_gdiplusToken = 0;
-        s_gdiplusInitialized = FALSE;
-    }
     DestroyFonts();
 }
 
@@ -1193,9 +1137,6 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
                      int editorHeight)
 {
     if (!s_bVisible || !s_hwndPanel) return 0;
-    s_lastLayoutParentRight = parentRight;
-    s_lastLayoutEditorTop = editorTop;
-    s_lastLayoutEditorHeight = editorHeight;
 
     int panelLeft = parentRight - s_iPanelWidth;
     if (panelLeft < 200) panelLeft = 200;
@@ -1287,29 +1228,9 @@ void ChatPanel_AppendUserMessage(const char* pszMessage,
                                  const AIChatAttachment* pAttachments,
                                  int cAttachments)
 {
-    ChatAttachment* converted = NULL;
-    if (pAttachments && cAttachments > 0)
-    {
-        converted = (ChatAttachment*)n2e_Alloc(cAttachments * sizeof(ChatAttachment));
-        if (converted)
-        {
-            ZeroMemory(converted, cAttachments * sizeof(ChatAttachment));
-            for (int i = 0; i < cAttachments; i++)
-            {
-                converted[i].meta = pAttachments[i];
-                MultiByteToWideChar(CP_UTF8, 0, pAttachments[i].displayName, -1,
-                                    converted[i].wzDisplayName, AI_ATTACHMENT_NAME_MAX);
-                MultiByteToWideChar(CP_UTF8, 0, pAttachments[i].path, -1,
-                                    converted[i].wzPath, MAX_PATH);
-            }
-        }
-    }
-
-    AddMessage(MSG_USER, pszMessage, converted, cAttachments);
-
-    if (converted)
-        n2e_Free(converted);
-
+    AddMessage(MSG_USER, pszMessage, (ChatAttachment*)pAttachments, cAttachments);
+    UNREFERENCED_PARAMETER(pAttachments);
+    UNREFERENCED_PARAMETER(cAttachments);
     if (s_hwndChat) {
         HDC hdc = GetDC(s_hwndChat);
         RECT rc;
@@ -1376,40 +1297,37 @@ void ChatPanel_SendInput(void)
     if (!s_hwndInput) return;
 
     int len = GetWindowTextLengthW(s_hwndInput);
-    if (len <= 0 && s_pendingAttachmentCount <= 0) return;
+    if (len <= 0) return;
 
     WCHAR* wszText = (WCHAR*)n2e_Alloc((len + 1) * sizeof(WCHAR));
     if (!wszText) return;
     GetWindowTextW(s_hwndInput, wszText, len + 1);
 
-    int utf8Len = 1;
-    if (len > 0)
-        utf8Len = WideCharToMultiByte(CP_UTF8, 0, wszText, -1, NULL, 0, NULL, NULL);
+    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wszText, -1, NULL, 0, NULL, NULL);
     char* utf8 = (char*)n2e_Alloc(utf8Len);
     if (utf8) {
-        if (len > 0) {
-            WideCharToMultiByte(CP_UTF8, 0, wszText, -1, utf8, utf8Len, NULL, NULL);
-        } else {
-            utf8[0] = '\0';
-        }
-
-        AIChatAttachment aiAttachments[AI_MAX_CHAT_ATTACHMENTS];
-        int cAtt = 0;
-        BuildAttachmentSummary(s_pendingAttachments, s_pendingAttachmentCount, aiAttachments, &cAtt);
-
-        const char* displayText = utf8;
-        if (displayText[0] == '\0' && cAtt > 0) {
-            displayText = "(attachment)";
-        }
-        ChatPanel_AppendUserMessage(displayText, cAtt > 0 ? aiAttachments : NULL, cAtt);
+        WideCharToMultiByte(CP_UTF8, 0, wszText, -1, utf8, utf8Len, NULL, NULL);
+    ChatPanel_AppendUserMessage(utf8, s_pendingAttachmentCount > 0 ? (AIChatAttachment*)s_pendingAttachments : NULL, s_pendingAttachmentCount);
 
         const AIProviderConfig* pCfg = AIBridge_GetProviderConfig();
         if (pCfg && pCfg->szApiKey[0]) {
             ChatPanel_AppendSystem("Thinking\xe2\x80\xa6");
             HWND hwndMainWnd = GetParent(s_hwndPanel);
+            
+            // Convert pending attachments to AIChatAttachment array for AIAgent
+            int cAtt = s_pendingAttachmentCount;
+            AIChatAttachment* pAttMeta = NULL;
+            if (cAtt > 0) {
+                pAttMeta = (AIChatAttachment*)malloc(cAtt * sizeof(AIChatAttachment));
+                if (pAttMeta) {
+                    for (int i=0; i<cAtt; i++) pAttMeta[i] = s_pendingAttachments[i].meta;
+                }
+            }
 
-            if (!AIAgent_ChatAsync(pCfg, displayText, cAtt > 0 ? aiAttachments : NULL, cAtt, s_hwndPanel, hwndMainWnd))
+            if (!AIAgent_ChatAsync(pCfg, utf8, pAttMeta, cAtt, s_hwndPanel, hwndMainWnd))
                 ChatPanel_AppendSystem("AI is busy. Please wait.");
+                
+            if (pAttMeta) free(pAttMeta);
         } else {
             ChatPanel_AppendSystem("No API key. Use Biko \xe2\x86\x92 AI Settings.");
         }
@@ -1440,6 +1358,7 @@ void ChatPanel_SendSearchInput(void)
         ChatPanel_AppendUserMessage(utf8, NULL, 0);
 
         // Prefix for AI to trigger tool
+        StrBuf sb;
         // Simple buffer allocation since we don't have StrBuf exposed here easily, using explicit alloc
         char* searchPrompt = (char*)n2e_Alloc(utf8Len + 32);
         if (searchPrompt) {
@@ -1511,10 +1430,6 @@ void ChatPanel_ApplyDarkMode(void)
     if (s_hwndAttach) InvalidateRect(s_hwndAttach, NULL, TRUE);
     if (s_hwndSearch) InvalidateRect(s_hwndSearch, NULL, TRUE);
 }
-
-#ifdef __cplusplus
-}
-#endif
 
 //=============================================================================
 // Internal: Panel window procedure
@@ -1720,12 +1635,6 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
     case WM_COMMAND:
         if (ChatPanel_HandleCommand(wParam, lParam)) return 0;
         break;
-    case WM_DROPFILES:
-    {
-        HDROP hDrop = (HDROP)wParam;
-        AddAttachmentsFromDrop(hDrop);
-        return 0;
-    }
 
     default:
         if (msg == WM_AI_DIRECT_RESPONSE) {
@@ -1880,47 +1789,35 @@ static LRESULT CALLBACK SearchBtnProc(HWND hwnd, UINT msg,
 
 static void ChatPanel_InvokeAttachmentPicker(void)
 {
-    WCHAR szFiles[8192];
-    ZeroMemory(szFiles, sizeof(szFiles));
+    // Filter: All Attachments | *.*  (could be specific)
+    // Actually we support Images + Code
+    WCHAR szFile[MAX_PATH] = L"";
     OPENFILENAMEW ofn;
 
     ZeroMemory(&ofn, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner   = s_hwndPanel;
-    ofn.lpstrFile   = szFiles;
-    ofn.nMaxFile    = (DWORD)(sizeof(szFiles) / sizeof(szFiles[0]));
+    ofn.lpstrFile   = szFile;
+    ofn.nMaxFile    = MAX_PATH;
     ofn.lpstrFilter = L"All Files\0*.*\0Images\0*.png;*.jpg;*.jpeg;*.bmp;*.gif\0\0";
     ofn.nFilterIndex = 1;
     ofn.lpstrFileTitle = NULL;
     ofn.nMaxFileTitle = 0;
     ofn.lpstrInitialDir = NULL;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR | OFN_ALLOWMULTISELECT | OFN_EXPLORER;
+    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
 
     if (GetOpenFileNameW(&ofn) == TRUE)
     {
-        WCHAR* p = szFiles;
-        WCHAR* first = p;
-        size_t firstLen = wcslen(first);
-        p += firstLen + 1;
-
-        if (*p == L'\0') {
-            PendingAttachments_AddFromPath(first);
-            return;
+        // Check extension for image
+        WCHAR* ext = PathFindExtensionW(szFile);
+        if (_wcsicmp(ext, L".png") == 0 || _wcsicmp(ext, L".jpg") == 0 ||
+            _wcsicmp(ext, L".jpeg") == 0 || _wcsicmp(ext, L".bmp") == 0)
+        {
+            PendingAttachments_AddImage(szFile, NULL);
         }
-
-        WCHAR fullPath[MAX_PATH];
-        while (*p != L'\0') {
-            if (FAILED(StringCchCopyW(fullPath, MAX_PATH, first))) {
-                break;
-            }
-            if (FAILED(StringCchCatW(fullPath, MAX_PATH, L"\\"))) {
-                break;
-            }
-            if (FAILED(StringCchCatW(fullPath, MAX_PATH, p))) {
-                break;
-            }
-            PendingAttachments_AddFromPath(fullPath);
-            p += wcslen(p) + 1;
+        else
+        {
+            PendingAttachments_AddFile(szFile, NULL);
         }
     }
 }
@@ -1983,24 +1880,29 @@ static BOOL SaveBitmapToTempPng(HBITMAP hBitmap, WCHAR* wszOutPath, size_t cchOu
 static BOOL PendingAttachments_AddClipboardImage(void)
 {
     if (!OpenClipboard(NULL)) return FALSE;
-
-    BOOL bAdded = FALSE;
+    
     HBITMAP hBmp = (HBITMAP)GetClipboardData(CF_BITMAP);
     if (hBmp)
     {
         WCHAR szPath[MAX_PATH];
         if (SaveBitmapToTempPng(hBmp, szPath, MAX_PATH))
         {
-            bAdded = PendingAttachments_AddImage(szPath, L"Pasted Image");
+            PendingAttachments_AddImage(szPath, L"Pasted Image");
         }
     }
     CloseClipboard();
-    return bAdded;
+    return TRUE;
 }
 
 static BOOL HandleClipboardPaste(void)
 {
-    // Prefer file-drop payload when copying files from Explorer.
+    // 1. Check for bitmap
+    if (IsClipboardFormatAvailable(CF_BITMAP) || IsClipboardFormatAvailable(CF_DIB))
+    {
+        PendingAttachments_AddClipboardImage();
+        return TRUE;
+    }
+    // 2. Check for file drop (CF_HDROP)
     if (IsClipboardFormatAvailable(CF_HDROP))
     {
         if (OpenClipboard(NULL))
@@ -2015,27 +1917,31 @@ static BOOL HandleClipboardPaste(void)
             CloseClipboard();
         }
     }
-
-    // Bitmap / screenshot
-    if (IsClipboardFormatAvailable(CF_BITMAP) || IsClipboardFormatAvailable(CF_DIB))
-    {
-        return PendingAttachments_AddClipboardImage();
-    }
     return FALSE; // Let default handler handle text
 }
 
 static BOOL AddAttachmentsFromDrop(HDROP hDrop)
 {
     int count = DragQueryFileW(hDrop, 0xFFFFFFFF, NULL, 0);
-    BOOL bAnyAdded = FALSE;
     for (int i = 0; i < count; i++)
     {
         WCHAR szFile[MAX_PATH];
         DragQueryFileW(hDrop, i, szFile, MAX_PATH);
-        bAnyAdded |= PendingAttachments_AddFromPath(szFile);
+        
+        WCHAR* ext = PathFindExtensionW(szFile);
+        if (_wcsicmp(ext, L".png") == 0 || _wcsicmp(ext, L".jpg") == 0 ||
+            _wcsicmp(ext, L".jpeg") == 0 || _wcsicmp(ext, L".bmp") == 0 ||
+            _wcsicmp(ext, L".gif") == 0)
+        {
+            PendingAttachments_AddImage(szFile, NULL);
+        }
+        else
+        {
+            PendingAttachments_AddFile(szFile, NULL);
+        }
     }
     DragFinish(hDrop);
-    return bAnyAdded;
+    return TRUE;
 }
 
 static void DrawAttachmentTile(HDC hdc, ChatAttachment* pAtt, const RECT* prcTile)

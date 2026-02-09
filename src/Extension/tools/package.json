@@ -1,0 +1,12 @@
+{
+  "name": "biko-tools",
+  "version": "1.0.0",
+  "description": "Biko AI engine tools",
+  "private": true,
+  "scripts": {
+    "search": "node web-search.js"
+  },
+  "dependencies": {
+    "playwright": "^1.40.0"
+  }
+}

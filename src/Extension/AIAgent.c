@@ -344,6 +344,11 @@ static char* BuildSystemPrompt(void)
         "- Before running destructive commands or irreversible operations, summarise the impact in one line and ask for explicit confirmation.\n"
         "  Examples: deleting files, wiping folders, git reset --hard, removing dependencies, uninstalling software, killing critical processes.\n\n"
 
+        "File editing discipline\n"
+        "- Always inspect the target file(s) before writing code so you understand the surrounding context and reference the exact path/region in your explanation (use @path#line_start-line_end).\n"
+        "- When the user asks you to write code, modify the actual files via tools (apply_patch/write_file/etc.) instead of dumping large code blocks in the chat response.\n"
+        "- Final answers should describe what changed and where, not reproduce the code verbatim.\n\n"
+
         "Context inference\n"
         "- Assume requests relate to this workspace unless the user states otherwise.\n"
         "- When the user asks to inspect or edit a file, locate it yourself; do not ask which framework, language, or path unless multiple plausible targets exist.\n"
@@ -442,6 +447,11 @@ static char* BuildSystemPrompt(void)
         "Parameters: name, path\n"
         "Example: {\"name\": \"list_dir\", \"path\": \"src\"}\n\n"
 
+        "### web_search\n"
+        "Perform a web search using DuckDuckGo to find information, documentation, or solutions.\n"
+        "Parameters: name, query\n"
+        "Example: {\"name\": \"web_search\", \"query\": \"react useeffect dependency array\"}\n\n"
+
         "## Guidelines\n"
         "- Read files before modifying them to understand their current content.\n"
         "- Use replace_in_file for targeted edits; use write_file for creating new files.\n"
@@ -511,7 +521,8 @@ static const char* FindRawJsonToolCall(const char* p)
             // Check if it's one of our known tools
             if (strcmp(name, "read_file") == 0 || strcmp(name, "write_file") == 0 ||
                 strcmp(name, "replace_in_file") == 0 || strcmp(name, "run_command") == 0 ||
-                strcmp(name, "list_dir") == 0 || strcmp(name, "insert_in_editor") == 0)
+                strcmp(name, "list_dir") == 0 || strcmp(name, "insert_in_editor") == 0 ||
+                strcmp(name, "web_search") == 0)
             {
                 free(name);
                 return s;
@@ -567,6 +578,8 @@ static int ParseOneToolCall(const char* json, int jsonLen, ToolCall* tc)
     tc->oldText = json_extract_string_a(buf, "old_text");
     tc->newText = json_extract_string_a(buf, "new_text");
     tc->command = json_extract_string_a(buf, "command");
+    if (!tc->command)
+        tc->command = json_extract_string_a(buf, "query"); // Map query -> command
 
     free(buf);
     return (tc->name[0] != '\0') ? 1 : 0;
@@ -1014,7 +1027,8 @@ static char* Tool_ListDir(const char* path)
     int count = 0;
     do
     {
-        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0)
+        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0 ||
+            strcmp(fd.cFileName, "node_modules") == 0 || strcmp(fd.cFileName, ".git") == 0)
             continue;
 
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
@@ -1059,6 +1073,77 @@ static char* Tool_InsertInEditor(const char* content)
     return _strdup(msg);
 }
 
+static char* Tool_WebSearch(const char* query)
+{
+    if (!query || !query[0])
+        return _strdup("Error: No search query specified");
+
+    char modulePath[MAX_PATH];
+    char moduleDir[MAX_PATH];
+    char scriptPath[MAX_PATH];
+    DWORD pathLen = GetModuleFileNameA(NULL, modulePath, MAX_PATH);
+    if (pathLen == 0 || pathLen >= MAX_PATH)
+        return _strdup("Error: Failed to resolve executable path");
+
+    strncpy(moduleDir, modulePath, MAX_PATH - 1);
+    moduleDir[MAX_PATH - 1] = '\0';
+    char* lastSlash = strrchr(moduleDir, '\\');
+    if (!lastSlash)
+        lastSlash = strrchr(moduleDir, '/');
+    if (lastSlash)
+        *lastSlash = '\0';
+
+    // Probe common development/runtime locations for Playwright search script.
+    const char* candidates[] = {
+        "src\\Extension\\tools\\web-search.js",
+        "src\\tools\\web-search.js",
+        "..\\..\\..\\src\\Extension\\tools\\web-search.js",
+        "..\\..\\..\\src\\tools\\web-search.js",
+        NULL
+    };
+
+    BOOL found = FALSE;
+    for (int i = 0; candidates[i]; i++)
+    {
+        const char* rel = candidates[i];
+        if (i < 2) {
+            strncpy(scriptPath, rel, MAX_PATH - 1);
+            scriptPath[MAX_PATH - 1] = '\0';
+        } else {
+            snprintf(scriptPath, MAX_PATH, "%s\\%s", moduleDir, rel);
+        }
+
+        DWORD attrs = GetFileAttributesA(scriptPath);
+        if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            found = TRUE;
+            break;
+        }
+    }
+
+    if (!found)
+        return _strdup("Error: web-search.js not found (expected under src/Extension/tools or src/tools)");
+
+    // Construct command: node "<scriptPath>" "<query>" --max=5
+    StrBuf cmd;
+    sb_init(&cmd, 1024);
+    sb_append(&cmd, "node \"", -1);
+    sb_append(&cmd, scriptPath, -1);
+    sb_append(&cmd, "\" \"", -1);
+    
+    // Simple escaping for quotes in query
+    for (const char* p = query; *p; p++) {
+        if (*p == '"') sb_append(&cmd, "\\\"", 2);
+        else sb_append(&cmd, p, 1);
+    }
+    sb_append(&cmd, "\" --max=5", -1);
+
+    char* result = Tool_RunCommand(cmd.data);
+    sb_free(&cmd);
+
+    return result;
+}
+
 // Dispatch a single tool call
 static char* ExecuteTool(const ToolCall* tc)
 {
@@ -1074,6 +1159,8 @@ static char* ExecuteTool(const ToolCall* tc)
         return Tool_RunCommand(tc->command);
     if (strcmp(tc->name, "list_dir") == 0)
         return Tool_ListDir(tc->path);
+    if (strcmp(tc->name, "web_search") == 0)
+        return Tool_WebSearch(tc->command ? tc->command : tc->content);
 
     char err[128];
     snprintf(err, sizeof(err), "Error: Unknown tool '%s'", tc->name);
@@ -1177,6 +1264,8 @@ static char* StripToolCallTags(const char* text)
 typedef struct {
     AIProviderConfig cfg;
     char*   szUserMessage;
+    AIChatAttachment* attachments; // Copy of attachments
+    int     attachmentCount;
     HWND    hwndTarget;
     HWND    hwndMainWnd;
 } AgentParams;
@@ -1195,6 +1284,7 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
         char* err = _strdup("Error: Could not build system prompt");
         PostMessage(p->hwndTarget, WM_AI_DIRECT_RESPONSE, 0, (LPARAM)err);
         free(p->szUserMessage);
+        if (p->attachments) free(p->attachments);
         free(p);
         InterlockedExchange(&s_bBusy, FALSE);
         return 1;
@@ -1225,6 +1315,11 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     // Current user message
     msgs[msgCount].role = "user";
     msgs[msgCount].content = p->szUserMessage;
+    // Pass pointer to attachments (AIDirectCall will use them but not free them)
+    if (p->attachmentCount > 0 && p->attachments) {
+        msgs[msgCount].attachments = p->attachments;
+        msgs[msgCount].attachmentCount = p->attachmentCount;
+    }
     msgCount++;
 
     // Agent loop
@@ -1359,6 +1454,7 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     free(ownedStrings);
     free(msgs);
     free(p->szUserMessage);
+    if (p->attachments) free(p->attachments);
     free(p);
 
     InterlockedExchange(&s_bBusy, FALSE);
@@ -1389,6 +1485,8 @@ void AIAgent_Shutdown(void)
 
 BOOL AIAgent_ChatAsync(const AIProviderConfig* pCfg,
                        const char* szUserMessage,
+                       const AIChatAttachment* pAttachments,
+                       int cAttachments,
                        HWND hwndTarget,
                        HWND hwndMainWnd)
 {
@@ -1405,11 +1503,26 @@ BOOL AIAgent_ChatAsync(const AIProviderConfig* pCfg,
     p->szUserMessage = _strdup(szUserMessage ? szUserMessage : "");
     p->hwndTarget = hwndTarget;
     p->hwndMainWnd = hwndMainWnd;
+    
+    // Copy attachments
+    if (pAttachments && cAttachments > 0) {
+        p->attachmentCount = cAttachments;
+        p->attachments = (AIChatAttachment*)calloc(cAttachments, sizeof(AIChatAttachment));
+        if (p->attachments) {
+            memcpy(p->attachments, pAttachments, cAttachments * sizeof(AIChatAttachment));
+        } else {
+            p->attachmentCount = 0; // fallback
+        }
+    } else {
+        p->attachments = NULL;
+        p->attachmentCount = 0;
+    }
 
     HANDLE hThread = (HANDLE)_beginthreadex(NULL, 0, AgentThreadProc, p, 0, NULL);
     if (!hThread)
     {
         free(p->szUserMessage);
+        if (p->attachments) free(p->attachments);
         free(p);
         InterlockedExchange(&s_bBusy, FALSE);
         return FALSE;
