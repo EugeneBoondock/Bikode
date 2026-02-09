@@ -296,9 +296,18 @@ void AICommands_CreateMenu(HMENU hMainMenu)
     // ── Get existing top-level submenus by position ──
     // File=0, Edit=1, View=2, Settings=3, ?=4
     int menuCount = GetMenuItemCount(hMainMenu);
+    HMENU hFile     = (menuCount > 0) ? GetSubMenu(hMainMenu, 0) : NULL;
     HMENU hEdit     = (menuCount > 1) ? GetSubMenu(hMainMenu, 1) : NULL;
     HMENU hView     = (menuCount > 2) ? GetSubMenu(hMainMenu, 2) : NULL;
     HMENU hSettings = (menuCount > 3) ? GetSubMenu(hMainMenu, 3) : NULL;
+
+    // ── File menu: Open Folder ──
+    if (hFile)
+    {
+        AppendMenuW(hFile, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hFile, MF_STRING, IDM_FILEMGR_OPENFOLDER,
+                    L"Open Folder...");
+    }
 
     // ── Edit menu: AI actions on selection ──
     if (hEdit)

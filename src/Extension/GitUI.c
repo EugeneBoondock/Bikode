@@ -11,6 +11,7 @@
 #include "GitUI.h"
 #include "DarkMode.h"
 #include "CommonUtils.h"
+#include "FileManager.h"
 #include <string.h>
 #include <stdio.h>
 #include <commctrl.h>
@@ -31,7 +32,15 @@ static WCHAR    s_wszBranch[128] = L"";
 static WCHAR    s_wszStatusSummary[64] = L"";
 static BOOL     s_bPanelVisible = FALSE;
 
-// External: szCurFile from Notepad2
+// Replace all uses of szCurFile or current directory for git commands:
+// For each git operation, use FileManager_GetRootPath() as the working directory.
+
+// Example for command execution:
+// BOOL bOk = CreateProcessW(
+//     NULL, wszCmd, NULL, NULL, TRUE,
+//     CREATE_NO_WINDOW, NULL, FileManager_GetRootPath(),
+//     &si, &pi);
+
 extern WCHAR szCurFile[MAX_PATH + 40];
 
 //=============================================================================
@@ -144,9 +153,9 @@ BOOL GitUI_Init(HWND hwndMain)
     if (!FindGitExe())
         return FALSE;
 
-    if (szCurFile[0])
+    if (FileManager_GetRootPath()[0])
     {
-        DetectRepoRoot(szCurFile);
+        DetectRepoRoot(FileManager_GetRootPath());
         if (s_bInRepo)
         {
             UpdateBranch();
@@ -185,9 +194,9 @@ const WCHAR* GitUI_GetStatusSummary(void)
 
 void GitUI_Refresh(void)
 {
-    if (szCurFile[0])
+    if (FileManager_GetRootPath()[0])
     {
-        DetectRepoRoot(szCurFile);
+        DetectRepoRoot(FileManager_GetRootPath());
         if (s_bInRepo)
         {
             UpdateBranch();
@@ -1000,7 +1009,7 @@ BOOL GitUI_RunCommand(const WCHAR* pszArgs, char** ppszOutput, int* piExitCode)
     _snwprintf_s(wszCmd, _countof(wszCmd), _TRUNCATE,
                  L"\"%s\" %s", s_wszGitExe, pszArgs);
 
-    return RunProcess(wszCmd, s_wszRepoRoot[0] ? s_wszRepoRoot : NULL,
+    return RunProcess(wszCmd, FileManager_GetRootPath(),
                       ppszOutput, piExitCode);
 }
 

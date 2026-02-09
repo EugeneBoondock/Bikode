@@ -289,7 +289,7 @@ void EditSetNewText(HWND hwnd, char *lpstrText, DWORD cbText)
 //
 BOOL EditConvertText(HWND hwnd, UINT cpSource, UINT cpDest, BOOL bSetSavePoint)
 {
-  struct TextRange tr = { { 0, -1 }, NULL };
+  struct Sci_TextRange tr = { { 0, -1 }, NULL };
   int length, cbText, cbwText;
   char *pchText;
   WCHAR *pwchText;
@@ -2359,7 +2359,7 @@ void EditTabsToSpaces(HWND hwnd, int nTabWidth, BOOL bOnlyIndentingWS)
   int iSelEnd;
   int iSelCount;
   UINT cpEdit;
-  struct TextRange tr;
+  struct Sci_TextRange tr;
   BOOL bIsLineStart = TRUE;
   BOOL bModified = FALSE;
 
@@ -2494,7 +2494,7 @@ void EditSpacesToTabs(HWND hwnd, int nTabWidth, BOOL bOnlyIndentingWS)
   int iSelEnd;
   int iSelCount;
   UINT cpEdit;
-  struct TextRange tr;
+  struct Sci_TextRange tr;
   WCHAR space[256];
   BOOL bIsLineStart = TRUE;
   BOOL bModified = FALSE;
@@ -3438,7 +3438,7 @@ void EditToggleLineComments(HWND hwnd, LPCWSTR pwszComment, BOOL bInsertAtStart)
       int iCommentPos;
       int iIndentPos = (int)SendMessage(hwnd, SCI_GETLINEINDENTPOSITION, (WPARAM)iLine, 0);
       char tchBuf[32];
-      struct TextRange tr;
+      struct Sci_TextRange tr;
       if (iIndentPos == SendMessage(hwnd, SCI_GETLINEENDPOSITION, (WPARAM)iLine, 0))
         continue;
 
@@ -4014,7 +4014,7 @@ void EditWrapToColumn(HWND hwnd, int nColumn)
   int iSelEnd;
   int iSelCount;
   UINT cpEdit;
-  struct TextRange tr;
+  struct Sci_TextRange tr;
   int   cEOLMode;
   WCHAR wszEOL[] = L"\r\n";
   int   cchEOL = 2;
@@ -4197,7 +4197,7 @@ void EditJoinLinesEx(HWND hwnd, BOOL noSpaceDelimiter)
   int iSelStart;
   int iSelEnd;
   int iSelCount;
-  struct TextRange tr;
+  struct Sci_TextRange tr;
   int  cEOLMode;
   char szEOL[] = "\r\n";
   int  cchEOL = 2;
@@ -4830,7 +4830,7 @@ void EditGetExcerpt(HWND hwnd, LPWSTR lpszExcerpt, DWORD cchExcerpt)
   WCHAR *p;
   DWORD cch = 0;
   UINT cpEdit;
-  struct TextRange tr;
+  struct Sci_TextRange tr;
   char*  pszText;
   LPWSTR pszTextW;
 

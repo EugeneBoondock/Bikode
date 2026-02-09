@@ -18,6 +18,7 @@
 
 #include "FileManager.h"
 #include "DarkMode.h"
+#include "Terminal.h"
 #include "CommonUtils.h"
 #include <uxtheme.h>
 #include <shlwapi.h>
@@ -240,6 +241,15 @@ void FileManager_Show(HWND hwndP) {
         GetCurrentDirectoryW(MAX_PATH, s_rootPath);
     }
 
+    /* Sync terminal working directory */
+    if (Terminal_IsVisible() && s_rootPath[0] != L'\0') {
+        char cmd[MAX_PATH + 8];
+        char pathUtf8[MAX_PATH];
+        WideCharToMultiByte(CP_UTF8, 0, s_rootPath, -1, pathUtf8, MAX_PATH, NULL, NULL);
+        sprintf_s(cmd, sizeof(cmd), "cd \"%s\"", pathUtf8);
+        Terminal_SendCommand(cmd);
+    }
+
     PopulateRoot();
 
     ShowWindow(s_hwndPanel, SW_SHOW);
@@ -300,6 +310,15 @@ void FileManager_OpenFolder(LPCWSTR pszPath) {
     }
     if (!s_visible && s_hwndMain) {
         FileManager_Show(s_hwndMain);
+    }
+
+    /* Change terminal working directory to match */
+    if (Terminal_IsVisible()) {
+        char cmd[MAX_PATH + 8];
+        char pathUtf8[MAX_PATH];
+        WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, pathUtf8, MAX_PATH, NULL, NULL);
+        sprintf_s(cmd, sizeof(cmd), "cd \"%s\"", pathUtf8);
+        Terminal_SendCommand(cmd);
     }
 }
 
@@ -754,4 +773,8 @@ void FileManager_BrowseForFolder(HWND hwndParent) {
         CoTaskMemFree(pidl);
         if (szFolder[0]) FileManager_OpenFolder(szFolder);
     }
+}
+
+const WCHAR* FileManager_GetRootPath(void) {
+    return s_rootPath;
 }

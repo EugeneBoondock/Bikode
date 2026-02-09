@@ -2278,14 +2278,13 @@ void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam)
     // Terminal stays at the bottom
     panelH = Terminal_Layout(hwnd, cx, y + cy);
     cy -= panelH;
-    // File explorer takes width from the left
-    FileManager_Layout(hwnd, &x, &cx, y, cy);
-    // Chat panel is a right sidebar
+    // Right-side panels first (they use absolute coords from window right edge)
     int chatW = ChatPanel_Layout(hwnd, cx, y, cy);
     cx -= chatW;
-    // Markdown preview takes width from the right
     int mdW = MarkdownPreview_Layout(hwnd, cx, cy);
     cx -= mdW;
+    // File explorer takes width from the left
+    FileManager_Layout(hwnd, &x, &cx, y, cy);
   }
   // [/biko]
 
@@ -6000,7 +5999,7 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
             int  iSize = iCurPos - iStartPos;
             if (iSize >= 3)
             {
-              struct TextRange tr = { { iStartPos, iCurPos }, tchBuf };
+              struct Sci_TextRange tr = { { iStartPos, iCurPos }, tchBuf };
               SendMessage(hwndFrom, SCI_GETTEXTRANGE, 0, (LPARAM)&tr);
               if (tchBuf[iSize - 2] != '/')
               {

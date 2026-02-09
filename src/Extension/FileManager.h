@@ -58,6 +58,9 @@ void    FileManager_Refresh(void);
 // Get the panel HWND (may be NULL).
 HWND    FileManager_GetPanelHwnd(void);
 
+// Get the current root directory (repo/folder).
+const WCHAR* FileManager_GetRootPath(void);
+
 //=============================================================================
 // Theme
 //=============================================================================
