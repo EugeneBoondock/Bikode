@@ -1,13 +1,13 @@
-# Notepad 2e
+# Bikode
 
 ![License: 3-clause BSD](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)
 ![Status: x86 build](https://proger.me/notepad2e/status/1.svg)
 ![Status: tests](https://proger.me/notepad2e/status/2.svg)
 
-*Notepad 2e* is a fork of *Notepad2* by Florian Balmer (www.flos-freeware.ch), version 4.2.25.
+*Bikode* is a lightweight IDE by **BoondockLabs**, built as a wrapper around *Notepad2e* (which is itself a fork of *Notepad2* by Florian Balmer, version 4.2.25).
 
-For information about the original project please see `Readme.txt` and `Notepad2.txt`.
-This document describes *2e*-specific features (**e** for **E**xtended).
+For information about the original project lineage please see `Readme.txt` and `Notepad2.txt`.
+This document covers the current Bikode build and inherited 2e behavior.
 
 For those of you who are unfamiliar with *Notepad2*:
 
@@ -20,7 +20,7 @@ Some folks use it to replace the standard `Notepad.exe` of Windows.
 
 It's also part of [TortoiseGit](https://tortoisegit.org).
 
-**License:** *Notepad2* uses 3-clause BSD license. *Notepad 2e* follows the same license.
+**License:** *Notepad2* uses 3-clause BSD license. *Notepad 2e* and Bikode follow the same license.
 
 **Thanks to** Steven Penny for his generous donations! #286 #251 <a name="thanks"></a>
 
@@ -44,18 +44,25 @@ Latest non-stable x86/non-ICU build is permanently available by [this URL](http:
 
 **Note:** x64 configuration is not considered "mainstream" and was poorly tested. #157
 
+## Distribution Setup
+Use release builds for distribution; keep using debug builds for local testing.
+
+1. Build release output (`Bikode.exe`) in `bin\x64\Release\`.
+2. Run `powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1`.
+3. The generated installer (`Bikode-Setup-...exe`) will be placed in `dist\`.
+
 ## Replacing Windows (XP/7/10) Notepad
 One obvious way is to overwrite all `Notepad.exe`s inside Windows directory. However, this irritates SFC and may not persist across OS updates.
 
 A better way is using `Image File Execution Options`, originally explained [here](http://www.flos-freeware.ch/doc/notepad2-Replacement.html). In short: #157
 
-1. Place `Notepad2e.exe` somewhere. `Program Files (x86)\Notepad2e\` directory is a good place.
+1. Place `Bikode.exe` somewhere. `Program Files\Bikode\` is a good place.
 2. Import this registry key:
 ```
 Windows Registry Editor Version 5.00
 
 [HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe]
-"Debugger"="\"C:\\Program Files (x86)\\Notepad2e\\Notepad2e.exe\" /z"
+"Debugger"="\"C:\\Program Files\\Bikode\\Bikode.exe\" /z"
 ```
   * If the EXE was put elsewhere, edit the part inside the *second* quotes, and don't forget to double all backslashes - example: `...="\"D:\\Foo\\Bar\\MyN2e.exe\" /z"`
   * **Attention:** the EXE should not be named `notepad.exe` (in any char case).
@@ -67,7 +74,7 @@ To undo, replace last line above with `"Debugger"=-` and import the key.
 ## INI File Location
 *This describes the algorithm used in *Notepad2* and this fork. The process is fully Unicode-safe.*
 
-All settings are stored in a single INI file. If the program cannot find it, then default settings are used and changes to them are lost when the process exits. To make settings persistent, either put [bin\Notepad2e.ini](https://github.com/ProgerXP/Notepad2e/blob/master/bin/Notepad2e.ini) near the EXE or create one from scratch by pressing **F7** (Settings > Save Settings Now).
+All settings are stored in a single INI file. If the program cannot find it, then default settings are used and changes to them are lost when the process exits. To make settings persistent, either put `Bikode.ini` near the EXE (a template is provided in `bin/Bikode.ini`) or create one from scratch by pressing **F7** (Settings > Save Settings Now).
 
 The following locations are checked for an existing INI file, in order:
 

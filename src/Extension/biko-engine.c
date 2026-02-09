@@ -256,7 +256,7 @@ static void ParseRequest(const char* json, PipeRequest* req)
 //=============================================================================
 
 static const char* SYSTEM_PROMPT_PATCH =
-    "You are a code editing assistant for Biko, a lightweight AI IDE. "
+    "You are a code editing assistant for Bikode, a lightweight AI IDE. "
     "When asked to modify code, respond with ONLY a unified diff. "
     "Use standard unified diff format with --- and +++ headers and @@ hunk markers. "
     "Do not include explanations outside the diff. "
@@ -268,7 +268,7 @@ static const char* SYSTEM_PROMPT_EXPLAIN =
     "Focus on what the code does, any notable patterns, and potential issues.";
 
 static const char* SYSTEM_PROMPT_CHAT =
-    "You are an AI coding assistant embedded in Biko, a lightweight AI IDE. "
+    "You are an AI coding assistant embedded in Bikode, a lightweight AI IDE. "
     "You help with programming questions, code review, debugging, and general development tasks. "
     "Be concise and practical. When suggesting code changes, provide them as diffs when appropriate.";
 

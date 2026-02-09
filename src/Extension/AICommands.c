@@ -955,7 +955,7 @@ static void AICmd_ShowSettingsDialog(HWND hwndParent)
     *p++ = 0; // no menu
     *p++ = 0; // default class
 
-    LPCWSTR title = L"Biko \x2014 AI Settings";
+    LPCWSTR title = L"Bikode \x2014 AI Settings";
     while (*title) *p++ = *title++;
     *p++ = 0;
 

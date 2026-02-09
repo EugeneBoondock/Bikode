@@ -105,7 +105,7 @@ static TBButton s_btns[] = {
     { CMD_VIEW_ZOOMIN, ICON_ZOOMIN,  L"Zoom In (Ctrl++)",       TRUE, FALSE },
     { CMD_VIEW_ZOOMOUT,ICON_ZOOMOUT, L"Zoom Out (Ctrl+-)",      TRUE, FALSE },
     { 0, ICON_NONE, NULL, FALSE, FALSE },
-    { CMD_BIKO_AI,     ICON_BIKO,    L"Biko AI (Ctrl+Shift+C)", TRUE, FALSE },
+    { CMD_BIKO_AI,     ICON_BIKO,    L"Bikode AI (Ctrl+Shift+C)", TRUE, FALSE },
 };
 
 #define BTN_COUNT (sizeof(s_btns) / sizeof(s_btns[0]))

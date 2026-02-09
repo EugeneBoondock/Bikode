@@ -511,7 +511,7 @@ static INT_PTR CALLBACK GitCommitDlgProc(HWND hwnd, UINT msg,
         HFONT hUI, hMono;
 
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)d);
-        SetWindowTextW(hwnd, L"Biko \u2014 Git Commit");
+        SetWindowTextW(hwnd, L"Bikode \u2014 Git Commit");
 
         hUI = CreateFontW(-13, 0, 0, 0, FW_NORMAL, 0, 0, 0,
             DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
@@ -728,7 +728,7 @@ static void ShowCommitDialogImpl(HWND hwndParent)
                 _snwprintf_s(finalMsg, _countof(finalMsg), _TRUNCATE,
                     L"Committed successfully:\r\n\r\n%s", ws);
                 MessageBoxW(hwndParent, finalMsg,
-                    L"Biko \u2014 Git Commit", MB_OK | MB_ICONINFORMATION);
+                    L"Bikode \u2014 Git Commit", MB_OK | MB_ICONINFORMATION);
                 n2e_Free(ws);
             }
         }
@@ -744,13 +744,13 @@ void GitUI_ShowStatus(HWND hwndParent)
 {
     if (!s_bInRepo) {
         MessageBoxW(hwndParent, L"Not in a git repository.",
-                     L"Biko \u2014 Git", MB_OK | MB_ICONINFORMATION);
+                     L"Bikode \u2014 Git", MB_OK | MB_ICONINFORMATION);
         return;
     }
     {
         char *out = NULL; int ex = 0;
         GitUI_RunCommand(L"status", &out, &ex);
-        ShowGitOutput(hwndParent, L"Biko \u2014 Git Status", out);
+        ShowGitOutput(hwndParent, L"Bikode \u2014 Git Status", out);
         if (out) n2e_Free(out);
     }
 }
@@ -759,7 +759,7 @@ void GitUI_ShowDiff(HWND hwndParent)
 {
     if (!s_bInRepo) {
         MessageBoxW(hwndParent, L"Not in a git repository.",
-                     L"Biko \u2014 Git", MB_OK | MB_ICONINFORMATION);
+                     L"Bikode \u2014 Git", MB_OK | MB_ICONINFORMATION);
         return;
     }
     {
@@ -769,9 +769,9 @@ void GitUI_ShowDiff(HWND hwndParent)
                      L"diff -- \"%s\"", szCurFile);
         GitUI_RunCommand(args, &out, &ex);
         if (out && out[0])
-            ShowGitOutput(hwndParent, L"Biko \u2014 Git Diff", out);
+            ShowGitOutput(hwndParent, L"Bikode \u2014 Git Diff", out);
         else
-            ShowGitOutput(hwndParent, L"Biko \u2014 Git Diff",
+            ShowGitOutput(hwndParent, L"Bikode \u2014 Git Diff",
                            "No changes detected.");
         if (out) n2e_Free(out);
     }
@@ -781,7 +781,7 @@ void GitUI_ShowCommitDialog(HWND hwndParent)
 {
     if (!s_bInRepo) {
         MessageBoxW(hwndParent, L"Not in a git repository.",
-                     L"Biko \u2014 Git", MB_OK | MB_ICONINFORMATION);
+                     L"Bikode \u2014 Git", MB_OK | MB_ICONINFORMATION);
         return;
     }
     ShowCommitDialogImpl(hwndParent);
@@ -791,13 +791,13 @@ void GitUI_ShowLog(HWND hwndParent)
 {
     if (!s_bInRepo) {
         MessageBoxW(hwndParent, L"Not in a git repository.",
-                     L"Biko \u2014 Git", MB_OK | MB_ICONINFORMATION);
+                     L"Bikode \u2014 Git", MB_OK | MB_ICONINFORMATION);
         return;
     }
     {
         char *out = NULL; int ex = 0;
         GitUI_RunCommand(L"log --oneline -40 --decorate", &out, &ex);
-        ShowGitOutput(hwndParent, L"Biko \u2014 Git Log (last 40)", out);
+        ShowGitOutput(hwndParent, L"Bikode \u2014 Git Log (last 40)", out);
         if (out) n2e_Free(out);
     }
 }
@@ -810,7 +810,7 @@ void GitUI_ShowBlame(HWND hwndParent)
 {
     if (!s_bInRepo || !szCurFile[0]) {
         MessageBoxW(hwndParent, L"Not in a git repository or no file open.",
-                     L"Biko \u2014 Git", MB_OK | MB_ICONINFORMATION);
+                     L"Bikode \u2014 Git", MB_OK | MB_ICONINFORMATION);
         return;
     }
     {
@@ -819,7 +819,7 @@ void GitUI_ShowBlame(HWND hwndParent)
         _snwprintf_s(args, _countof(args), _TRUNCATE,
                      L"blame \"%s\"", szCurFile);
         GitUI_RunCommand(args, &out, &ex);
-        ShowGitOutput(hwndParent, L"Biko \u2014 Git Blame", out);
+        ShowGitOutput(hwndParent, L"Bikode \u2014 Git Blame", out);
         if (out) n2e_Free(out);
     }
 }
@@ -828,13 +828,13 @@ void GitUI_ShowBranches(HWND hwndParent)
 {
     if (!s_bInRepo) {
         MessageBoxW(hwndParent, L"Not in a git repository.",
-                     L"Biko \u2014 Git", MB_OK | MB_ICONINFORMATION);
+                     L"Bikode \u2014 Git", MB_OK | MB_ICONINFORMATION);
         return;
     }
     {
         char *out = NULL; int ex = 0;
         GitUI_RunCommand(L"branch -a --no-color", &out, &ex);
-        ShowGitOutput(hwndParent, L"Biko \u2014 Git Branches", out);
+        ShowGitOutput(hwndParent, L"Bikode \u2014 Git Branches", out);
         if (out) n2e_Free(out);
     }
 }
@@ -843,16 +843,16 @@ void GitUI_ShowStash(HWND hwndParent)
 {
     if (!s_bInRepo) {
         MessageBoxW(hwndParent, L"Not in a git repository.",
-                     L"Biko \u2014 Git", MB_OK | MB_ICONINFORMATION);
+                     L"Bikode \u2014 Git", MB_OK | MB_ICONINFORMATION);
         return;
     }
     {
         char *out = NULL; int ex = 0;
         GitUI_RunCommand(L"stash list", &out, &ex);
         if (out && out[0])
-            ShowGitOutput(hwndParent, L"Biko \u2014 Git Stash", out);
+            ShowGitOutput(hwndParent, L"Bikode \u2014 Git Stash", out);
         else
-            ShowGitOutput(hwndParent, L"Biko \u2014 Git Stash",
+            ShowGitOutput(hwndParent, L"Bikode \u2014 Git Stash",
                            "No stashes found.");
         if (out) n2e_Free(out);
     }
@@ -862,7 +862,7 @@ void GitUI_PullWithUI(HWND hwndParent)
 {
     if (!s_bInRepo) {
         MessageBoxW(hwndParent, L"Not in a git repository.",
-                     L"Biko \u2014 Git", MB_OK | MB_ICONINFORMATION);
+                     L"Bikode \u2014 Git", MB_OK | MB_ICONINFORMATION);
         return;
     }
     {
@@ -870,10 +870,10 @@ void GitUI_PullWithUI(HWND hwndParent)
         GitUI_RunCommand(L"pull", &out, &ex);
         GitUI_Refresh();
         if (ex == 0)
-            ShowGitOutput(hwndParent, L"Biko \u2014 Git Pull",
+            ShowGitOutput(hwndParent, L"Bikode \u2014 Git Pull",
                            out && out[0] ? out : "Already up to date.");
         else
-            ShowGitOutput(hwndParent, L"Biko \u2014 Git Pull (failed)", out);
+            ShowGitOutput(hwndParent, L"Bikode \u2014 Git Pull (failed)", out);
         if (out) n2e_Free(out);
     }
 }
@@ -882,17 +882,17 @@ void GitUI_PushWithUI(HWND hwndParent)
 {
     if (!s_bInRepo) {
         MessageBoxW(hwndParent, L"Not in a git repository.",
-                     L"Biko \u2014 Git", MB_OK | MB_ICONINFORMATION);
+                     L"Bikode \u2014 Git", MB_OK | MB_ICONINFORMATION);
         return;
     }
     {
         char *out = NULL; int ex = 0;
         GitUI_RunCommand(L"push", &out, &ex);
         if (ex == 0)
-            ShowGitOutput(hwndParent, L"Biko \u2014 Git Push",
+            ShowGitOutput(hwndParent, L"Bikode \u2014 Git Push",
                            out && out[0] ? out : "Pushed successfully.");
         else
-            ShowGitOutput(hwndParent, L"Biko \u2014 Git Push (failed)", out);
+            ShowGitOutput(hwndParent, L"Bikode \u2014 Git Push (failed)", out);
         if (out) n2e_Free(out);
     }
 }

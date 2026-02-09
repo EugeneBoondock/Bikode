@@ -724,7 +724,7 @@ static char* SendHTTPRequest(const AIProviderConfig* pCfg, const char* body, int
         MultiByteToWideChar(CP_UTF8, 0, szPath, -1, wszPath, 1024);
     }
 
-    HINTERNET hSession = WinHttpOpen(L"Biko/1.0",
+    HINTERNET hSession = WinHttpOpen(L"Bikode/1.0",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS, 0);

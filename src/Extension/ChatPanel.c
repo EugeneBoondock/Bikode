@@ -24,14 +24,17 @@
 #include <shlwapi.h>
 #include <strsafe.h>
 #include <gdiplus.h>
+#include <urlmon.h>
 #include "SciCall.h"
 #include "Scintilla.h"
 #include "DarkMode.h"
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 #include "resource.h"
 
 #pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "urlmon.lib")
 
 //=============================================================================
 // Color palette
@@ -74,6 +77,17 @@
 #define CP_SCROLLBAR_BG    RGB(30, 30, 34)
 #define CP_SCROLLBAR_TH    RGB(60, 60, 68)
 #define CP_SCROLLBAR_HOV   RGB(80, 80, 90)
+#define CP_BTN_BG             RGB(39, 39, 43)
+#define CP_BTN_HOV            RGB(52, 52, 57)
+#define CP_BTN_DOWN           RGB(31, 31, 35)
+#define CP_BTN_BORDER         RGB(72, 72, 78)
+#define CP_BTN_BORDER_HOV     RGB(98, 98, 106)
+#define CP_BTN_ICON           RGB(236, 236, 240)
+
+#define CP_BTN_PRIMARY_BG     RGB(58, 58, 64)
+#define CP_BTN_PRIMARY_HOV    RGB(72, 72, 79)
+#define CP_BTN_PRIMARY_DOWN   RGB(46, 46, 52)
+#define CP_BTN_PRIMARY_BORDER RGB(106, 106, 114)
 
 //=============================================================================
 // Layout constants
@@ -85,7 +99,8 @@
 #define CHAT_INPUT_PAD          10
 #define CHAT_INPUT_INNER_PAD    10
 #define CHAT_INPUT_RADIUS       8
-#define CHAT_SEND_SIZE          30
+#define CHAT_SEND_SIZE          32
+#define CHAT_BTN_GAP             8
 #define CHAT_HDR_BTN_SIZE       28
 #define CHAT_STATUS_DOT_R       4
 
@@ -104,6 +119,11 @@
 #define CHAT_ATTACHMENT_GAP        6
 #define CHAT_PENDING_PAD_TOP       6
 #define CHAT_PENDING_PAD_BOTTOM    6
+#define CHAT_INLINE_GIF_MAX_W    220
+#define CHAT_INLINE_GIF_MAX_H    140
+#define CHAT_INLINE_GIF_GAP        6
+#define CHAT_GIF_TIMER_ID      0x71A1
+#define CHAT_GIF_TIMER_MS         80
 
 //=============================================================================
 // Message model
@@ -131,6 +151,15 @@ typedef struct {
     int     attachmentCount;
     int     cachedH;       // cached rendered height (invalidate = -1)
     int     cachedW;       // width used when cachedH was computed
+    // Optional inline GIF rendered under AI text.
+    Gdiplus::Image* pInlineGif;
+    GUID            gifFrameGuid;
+    UINT            gifFrameCount;
+    UINT            gifFrameIndex;
+    UINT*           gifDelaysCs;   // centiseconds per frame
+    DWORD           gifLastTick;
+    int             gifDrawW;
+    int             gifDrawH;
 } ChatMsg;
 
 #define MAX_MSGS 256
@@ -154,6 +183,9 @@ static WNDPROC  s_pfnOrigSearchProc = NULL;
 static BOOL     s_bSendHover  = FALSE;
 static BOOL     s_bAttachHover = FALSE;
 static BOOL     s_bSearchHover = FALSE;
+static BOOL     s_bSendDown = FALSE;
+static BOOL     s_bAttachDown = FALSE;
+static BOOL     s_bSearchDown = FALSE;
 static BOOL     s_bInputFocused = FALSE;
 
 // Header close button
@@ -246,6 +278,185 @@ static void DrawMessageAttachments(HDC hdc, const ChatMsg* msg,
 static void DrawAttachmentTile(HDC hdc, ChatAttachment* pAtt, const RECT* prcTile);
 static BOOL PendingAttachments_AddFile(const WCHAR* wszSourcePath, const WCHAR* wszDisplayName);
 static BOOL PendingAttachments_AddImage(const WCHAR* wszSourcePath, const WCHAR* wszDisplayName);
+static BOOL ExtractGifUrl(const char* text, char* outUrl, int cchOut)
+{
+    if (!text || !outUrl || cchOut <= 1) return FALSE;
+    outUrl[0] = '\0';
+
+    const char* p = text;
+    while ((p = strstr(p, "http")) != NULL)
+    {
+        const char* end = p;
+        while (*end && !isspace((unsigned char)*end) && *end != '"' && *end != '\'' && *end != ')' && *end != ']')
+            end++;
+        int len = (int)(end - p);
+        if (len > 0 && len < cchOut)
+        {
+            char tmp[1024];
+            if (len >= (int)sizeof(tmp)) len = (int)sizeof(tmp) - 1;
+            memcpy(tmp, p, len);
+            tmp[len] = '\0';
+            while (len > 0 && (tmp[len - 1] == '.' || tmp[len - 1] == ',' || tmp[len - 1] == ';' || tmp[len - 1] == ':'))
+                tmp[--len] = '\0';
+
+            if (StrStrIA(tmp, ".gif") != NULL)
+            {
+                StringCchCopyA(outUrl, cchOut, tmp);
+                return TRUE;
+            }
+        }
+        p = end;
+    }
+    return FALSE;
+}
+
+static BOOL LoadGifFromPath(ChatMsg* msg, const WCHAR* wszPath)
+{
+    if (!msg || !wszPath || !wszPath[0] || !EnsureGdiplus())
+        return FALSE;
+
+    Gdiplus::Image* img = Gdiplus::Image::FromFile(wszPath, FALSE);
+    if (!img || img->GetLastStatus() != Gdiplus::Ok)
+    {
+        if (img) delete img;
+        return FALSE;
+    }
+
+    UINT imgW = img->GetWidth();
+    UINT imgH = img->GetHeight();
+    if (imgW == 0 || imgH == 0)
+    {
+        delete img;
+        return FALSE;
+    }
+
+    msg->pInlineGif = img;
+    msg->gifDrawW = CHAT_INLINE_GIF_MAX_W;
+    msg->gifDrawH = (int)((double)imgH * (double)msg->gifDrawW / (double)imgW);
+    if (msg->gifDrawH > CHAT_INLINE_GIF_MAX_H)
+    {
+        msg->gifDrawH = CHAT_INLINE_GIF_MAX_H;
+        msg->gifDrawW = (int)((double)imgW * (double)msg->gifDrawH / (double)imgH);
+    }
+    if (msg->gifDrawW < 80) msg->gifDrawW = 80;
+    if (msg->gifDrawH < 48) msg->gifDrawH = 48;
+
+    UINT dimCount = img->GetFrameDimensionsCount();
+    if (dimCount > 0)
+    {
+        GUID guid;
+        if (img->GetFrameDimensionsList(&guid, 1) == Gdiplus::Ok)
+        {
+            msg->gifFrameGuid = guid;
+            msg->gifFrameCount = img->GetFrameCount(&guid);
+            if (msg->gifFrameCount > 1)
+            {
+                UINT sz = img->GetPropertyItemSize(PropertyTagFrameDelay);
+                if (sz > 0)
+                {
+                    Gdiplus::PropertyItem* pItem = (Gdiplus::PropertyItem*)n2e_Alloc(sz);
+                    if (pItem && img->GetPropertyItem(PropertyTagFrameDelay, sz, pItem) == Gdiplus::Ok)
+                    {
+                        msg->gifDelaysCs = (UINT*)n2e_Alloc(msg->gifFrameCount * sizeof(UINT));
+                        if (msg->gifDelaysCs)
+                        {
+                            for (UINT i = 0; i < msg->gifFrameCount; i++)
+                            {
+                                UINT delay = ((UINT*)pItem->value)[i];
+                                if (delay == 0) delay = 8;
+                                msg->gifDelaysCs[i] = delay;
+                            }
+                        }
+                    }
+                    if (pItem) n2e_Free(pItem);
+                }
+            }
+        }
+    }
+
+    msg->gifFrameIndex = 0;
+    msg->gifLastTick = GetTickCount();
+    return TRUE;
+}
+
+static BOOL TryAttachInlineGif(ChatMsg* msg, const char* sourceText)
+{
+    if (!msg || !sourceText || msg->role != MSG_AI)
+        return FALSE;
+
+    char gifUrl[1024];
+    if (!ExtractGifUrl(sourceText, gifUrl, (int)ARRAYSIZE(gifUrl)))
+        return FALSE;
+
+    WCHAR wszUrl[1024];
+    MultiByteToWideChar(CP_UTF8, 0, gifUrl, -1, wszUrl, ARRAYSIZE(wszUrl));
+
+    WCHAR localPath[MAX_PATH] = L"";
+    if (StrCmpNIW(wszUrl, L"http://", 7) == 0 || StrCmpNIW(wszUrl, L"https://", 8) == 0)
+    {
+        if (!EnsureAttachmentTempDir())
+            return FALSE;
+
+        WCHAR tmpName[MAX_PATH];
+        if (!GetTempFileNameW(s_wszAttachmentDir, L"gif", 0, tmpName))
+            return FALSE;
+        DeleteFileW(tmpName);
+        StringCchPrintfW(localPath, MAX_PATH, L"%s.gif", tmpName);
+        if (FAILED(URLDownloadToFileW(NULL, wszUrl, localPath, 0, NULL)))
+            return FALSE;
+    }
+    else
+    {
+        StringCchCopyW(localPath, MAX_PATH, wszUrl);
+    }
+
+    return LoadGifFromPath(msg, localPath);
+}
+
+static void UpdateGifTimerState(void)
+{
+    if (!s_hwndChat) return;
+    BOOL hasAnimatedGif = FALSE;
+    for (int i = 0; i < s_nMsgs; i++)
+    {
+        if (s_msgs[i].pInlineGif && s_msgs[i].gifFrameCount > 1)
+        {
+            hasAnimatedGif = TRUE;
+            break;
+        }
+    }
+    if (hasAnimatedGif)
+        SetTimer(s_hwndChat, CHAT_GIF_TIMER_ID, CHAT_GIF_TIMER_MS, NULL);
+    else
+        KillTimer(s_hwndChat, CHAT_GIF_TIMER_ID);
+}
+
+static void AdvanceGifFrames(void)
+{
+    DWORD now = GetTickCount();
+    BOOL changed = FALSE;
+    for (int i = 0; i < s_nMsgs; i++)
+    {
+        ChatMsg* m = &s_msgs[i];
+        if (!m->pInlineGif || m->gifFrameCount <= 1 || !m->gifDelaysCs)
+            continue;
+
+        UINT delayMs = max(40U, m->gifDelaysCs[m->gifFrameIndex] * 10U);
+        if (now - m->gifLastTick >= delayMs)
+        {
+            m->gifFrameIndex = (m->gifFrameIndex + 1) % m->gifFrameCount;
+            m->pInlineGif->SelectActiveFrame(&m->gifFrameGuid, m->gifFrameIndex);
+            m->gifLastTick = now;
+            changed = TRUE;
+        }
+    }
+    if (changed && s_hwndChat)
+        InvalidateRect(s_hwndChat, NULL, FALSE);
+}
+static BOOL TryAttachInlineGif(ChatMsg* msg, const char* sourceText);
+static void UpdateGifTimerState(void);
+static void AdvanceGifFrames(void);
+static char* SanitizeAIResponseForDisplay(const char* text);
 
 //=============================================================================
 // Class registration
@@ -518,24 +729,38 @@ static void DrawStatusDot(HDC hdc, int cx, int cy, int r, COLORREF clr)
 
 static void DrawSendArrow(HDC hdc, int cx, int cy, COLORREF clr)
 {
-    HPEN hPen = CreatePen(PS_SOLID, 2, clr);
+    POINT plane[3];
+    plane[0].x = cx - 5; plane[0].y = cy - 5;
+    plane[1].x = cx + 6; plane[1].y = cy;
+    plane[2].x = cx - 5; plane[2].y = cy + 5;
+
+    HBRUSH hFill = CreateSolidBrush(clr);
+    HPEN hPen = CreatePen(PS_SOLID, 1, clr);
+    HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hFill);
     HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
-    MoveToEx(hdc, cx, cy + 5, NULL); LineTo(hdc, cx, cy - 5);
-    MoveToEx(hdc, cx, cy - 5, NULL); LineTo(hdc, cx - 4, cy - 1);
-    MoveToEx(hdc, cx, cy - 5, NULL); LineTo(hdc, cx + 4, cy - 1);
+    Polygon(hdc, plane, 3);
+
+    HPEN hTail = CreatePen(PS_SOLID, 2, clr);
+    SelectObject(hdc, hTail);
+    MoveToEx(hdc, cx - 2, cy, NULL);
+    LineTo(hdc, cx + 2, cy);
+
+    SelectObject(hdc, hOldBr);
     SelectObject(hdc, hOldPen);
-    SelectObject(hdc, hOldPen);
+    DeleteObject(hTail);
     DeleteObject(hPen);
+    DeleteObject(hFill);
 }
 
 static void DrawSearchIcon(HDC hdc, int cx, int cy, COLORREF clr)
 {
     HPEN hPen = CreatePen(PS_SOLID, 2, clr);
     HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
-    // Magnifying glass circle
+    HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
     Ellipse(hdc, cx - 5, cy - 6, cx + 4, cy + 3);
-    // Handle
-    MoveToEx(hdc, cx + 3, cy + 3, NULL); LineTo(hdc, cx + 6, cy + 6);
+    MoveToEx(hdc, cx + 2, cy + 2, NULL);
+    LineTo(hdc, cx + 6, cy + 6);
+    SelectObject(hdc, hOldBr);
     SelectObject(hdc, hOldPen);
     DeleteObject(hPen);
 }
@@ -551,6 +776,198 @@ static void DrawCloseX(HDC hdc, const RECT* prc, COLORREF clr)
     MoveToEx(hdc, cx + d, cy - d, NULL); LineTo(hdc, cx - d - 1, cy + d + 1);
     SelectObject(hdc, hOldPen);
     DeleteObject(hPen);
+}
+
+static void DrawAddIcon(HDC hdc, int cx, int cy, COLORREF clr)
+{
+    HPEN hPen = CreatePen(PS_SOLID, 2, clr);
+    HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+    MoveToEx(hdc, cx, cy - 6, NULL); LineTo(hdc, cx, cy + 6);
+    MoveToEx(hdc, cx - 6, cy, NULL); LineTo(hdc, cx + 6, cy);
+    SelectObject(hdc, hOldPen);
+    DeleteObject(hPen);
+}
+
+static void DrawButtonFace(HDC hdc, const RECT* rc, BOOL hover, BOOL down, BOOL primary)
+{
+    if (!rc) return;
+
+    COLORREF fill = primary ? CP_BTN_PRIMARY_BG : CP_BTN_BG;
+    COLORREF border = primary ? CP_BTN_PRIMARY_BORDER : CP_BTN_BORDER;
+    if (down) {
+        fill = primary ? CP_BTN_PRIMARY_DOWN : CP_BTN_DOWN;
+    } else if (hover) {
+        fill = primary ? CP_BTN_PRIMARY_HOV : CP_BTN_HOV;
+        if (!primary) border = CP_BTN_BORDER_HOV;
+    }
+
+    RECT rcButton = *rc;
+    InflateRect(&rcButton, -1, -1);
+    FillRoundRect(hdc, &rcButton, 10, fill, border);
+
+    // Inner shell adds cleaner depth without bright color accents.
+    RECT rcInner = rcButton;
+    InflateRect(&rcInner, -1, -1);
+    COLORREF innerFill = fill;
+    if (!down) {
+        innerFill = primary ? RGB(64, 64, 70) : RGB(44, 44, 49);
+        if (hover) innerFill = primary ? RGB(78, 78, 85) : RGB(56, 56, 61);
+    }
+    FillRoundRectSolid(hdc, &rcInner, 9, innerFill);
+
+    // Subtle top highlight line for tactile feel.
+    RECT rcHighlight = rcInner;
+    InflateRect(&rcHighlight, -2, -2);
+    COLORREF hl = down ? RGB(64, 64, 68) : RGB(118, 118, 124);
+    HPEN hPen = CreatePen(PS_SOLID, 1, hl);
+    HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+    MoveToEx(hdc, rcHighlight.left + 3, rcHighlight.top + 1, NULL);
+    LineTo(hdc, rcHighlight.right - 3, rcHighlight.top + 1);
+    SelectObject(hdc, hOldPen);
+    DeleteObject(hPen);
+}
+
+static BOOL StartsWithNoCase(const char* s, const char* prefix)
+{
+    if (!s || !prefix) return FALSE;
+    while (*prefix)
+    {
+        if (*s == '\0') return FALSE;
+        if (tolower((unsigned char)*s) != tolower((unsigned char)*prefix))
+            return FALSE;
+        s++;
+        prefix++;
+    }
+    return TRUE;
+}
+
+static char* TrimLeadingSpaces(char* s)
+{
+    while (*s && isspace((unsigned char)*s)) s++;
+    return s;
+}
+
+static void TrimTrailingSpaces(char* s)
+{
+    int n = (int)strlen(s);
+    while (n > 0 && isspace((unsigned char)s[n - 1])) {
+        s[n - 1] = '\0';
+        n--;
+    }
+}
+
+static BOOL IsInternalReasoningLine(const char* line)
+{
+    const char* p = line;
+    if (p[0] == '-' && p[1] == ' ') p += 2;
+    if (p[0] == '*' && p[1] == ' ') p += 2;
+
+    if (StartsWithNoCase(p, "take stock")) return TRUE;
+    if (StartsWithNoCase(p, "goal:")) return TRUE;
+    if (StartsWithNoCase(p, "current state:")) return TRUE;
+    if (StartsWithNoCase(p, "current stock:")) return TRUE;
+    if (StartsWithNoCase(p, "constraint:")) return TRUE;
+    if (StartsWithNoCase(p, "constraints:")) return TRUE;
+    if (StartsWithNoCase(p, "unknown:")) return TRUE;
+    if (StartsWithNoCase(p, "unknowns:")) return TRUE;
+    if (StartsWithNoCase(p, "### take stock")) return TRUE;
+    if (StartsWithNoCase(p, "[web_search:")) return TRUE;
+    return FALSE;
+}
+
+static char* SanitizeAIResponseForDisplay(const char* text)
+{
+    if (!text) return NULL;
+    int srcLen = (int)strlen(text);
+    if (srcLen <= 0) {
+        char* empty = (char*)n2e_Alloc(1);
+        if (empty) empty[0] = '\0';
+        return empty;
+    }
+
+    char* tmp = (char*)n2e_Alloc(srcLen + 1);
+    if (!tmp) {
+        char* copy = (char*)n2e_Alloc(srcLen + 1);
+        if (copy) memcpy(copy, text, srcLen + 1);
+        return copy;
+    }
+    memcpy(tmp, text, srcLen + 1);
+
+    int cap = srcLen * 2 + 64;
+    char* out = (char*)n2e_Alloc(cap);
+    if (!out) {
+        n2e_Free(tmp);
+        char* copy = (char*)n2e_Alloc(srcLen + 1);
+        if (copy) memcpy(copy, text, srcLen + 1);
+        return copy;
+    }
+    out[0] = '\0';
+    int outLen = 0;
+    BOOL prevBlank = FALSE;
+
+    char* ctx = NULL;
+    for (char* line = strtok_s(tmp, "\r\n", &ctx); line; line = strtok_s(NULL, "\r\n", &ctx))
+    {
+        char* p = TrimLeadingSpaces(line);
+        TrimTrailingSpaces(p);
+
+        while (*p == '#') {
+            p++;
+            while (*p == ' ') p++;
+        }
+
+        if (IsInternalReasoningLine(p)) {
+            continue;
+        }
+
+        char cleaned[2048];
+        int ci = 0;
+        for (const char* c = p; *c && ci < (int)sizeof(cleaned) - 1; c++)
+        {
+            if (*c == '*' || *c == '`' || *c == '#') continue;
+            cleaned[ci++] = *c;
+        }
+        cleaned[ci] = '\0';
+
+        char* finalLine = TrimLeadingSpaces(cleaned);
+        TrimTrailingSpaces(finalLine);
+        if (!finalLine[0]) {
+            if (!prevBlank && outLen > 0) {
+                if (outLen + 1 < cap) out[outLen++] = '\n';
+                prevBlank = TRUE;
+            }
+            continue;
+        }
+
+        int need = (int)strlen(finalLine) + 2;
+        if (outLen + need >= cap) {
+            int newCap = cap * 2 + need;
+            char* grown = (char*)n2e_Realloc(out, newCap);
+            if (!grown) break;
+            out = grown;
+            cap = newCap;
+        }
+        memcpy(out + outLen, finalLine, strlen(finalLine));
+        outLen += (int)strlen(finalLine);
+        out[outLen++] = '\n';
+        out[outLen] = '\0';
+        prevBlank = FALSE;
+    }
+
+    while (outLen > 0 && (out[outLen - 1] == '\n' || out[outLen - 1] == '\r' || out[outLen - 1] == ' ')) {
+        out[--outLen] = '\0';
+    }
+
+    n2e_Free(tmp);
+    if (outLen == 0) {
+        n2e_Free(out);
+        const char* fallback = "I could not find clear results for that query. Try adding keywords like official, github, location, or industry.";
+        int n = (int)strlen(fallback);
+        char* msg = (char*)n2e_Alloc(n + 1);
+        if (msg) memcpy(msg, fallback, n + 1);
+        return msg;
+    }
+    return out;
 }
 
 //=============================================================================
@@ -573,20 +990,32 @@ static void AddMessage(MsgRole role, const char* text,
     m->role = role;
     m->cachedH = -1;  // not yet measured
 
-    int len = (int)strlen(text);
+    const char* sourceText = text ? text : "";
+    char* sanitized = NULL;
+    if (role == MSG_AI) {
+        sanitized = SanitizeAIResponseForDisplay(sourceText);
+        if (sanitized) sourceText = sanitized;
+    }
+
+    int len = (int)strlen(sourceText);
     m->text = (char*)n2e_Alloc(len + 1);
     if (m->text) {
-        memcpy(m->text, text, len);
+        memcpy(m->text, sourceText, len);
         m->text[len] = 0;
     }
 
     // Convert to wide for DrawText
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, text, -1, NULL, 0);
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, sourceText, -1, NULL, 0);
     m->wtext = (WCHAR*)n2e_Alloc(wlen * sizeof(WCHAR));
     if (m->wtext) {
-        MultiByteToWideChar(CP_UTF8, 0, text, -1, m->wtext, wlen);
+        MultiByteToWideChar(CP_UTF8, 0, sourceText, -1, m->wtext, wlen);
         m->wtextLen = wlen - 1;
     }
+    if (sanitized)
+        n2e_Free(sanitized);
+
+    // Optional inline GIF support for AI messages.
+    TryAttachInlineGif(m, text ? text : sourceText);
 
     // Copy attachments
     if (attachments && attachmentCount > 0)
@@ -619,6 +1048,7 @@ static void AddMessage(MsgRole role, const char* text,
     }
 
     s_nMsgs++;
+    UpdateGifTimerState();
 }
 
 static void FreeChatMessage(ChatMsg* m)
@@ -634,6 +1064,16 @@ static void FreeChatMessage(ChatMsg* m)
         }
         n2e_Free(m->attachments);
     }
+    if (m->pInlineGif)
+    {
+        delete m->pInlineGif;
+        m->pInlineGif = NULL;
+    }
+    if (m->gifDelaysCs)
+    {
+        n2e_Free(m->gifDelaysCs);
+        m->gifDelaysCs = NULL;
+    }
     ZeroMemory(m, sizeof(ChatMsg));
 }
 
@@ -645,6 +1085,7 @@ static void FreeMessages(void)
     s_nMsgs = 0;
     s_scrollY = 0;
     s_contentH = 0;
+    UpdateGifTimerState();
 }
 
 static void InvalidateAllHeights(void) {
@@ -734,7 +1175,11 @@ static int MeasureMsgHeight(HDC hdc, int idx, int chatW)
         attachH = ComputeAttachmentAreaHeight(m->attachmentCount, availW);
     }
     
-    m->cachedH = labelH + CHAT_LABEL_GAP + bubbleH + attachH;
+    int gifH = 0;
+    if (m->pInlineGif)
+        gifH = CHAT_INLINE_GIF_GAP + m->gifDrawH;
+
+    m->cachedH = labelH + CHAT_LABEL_GAP + bubbleH + attachH + gifH;
     m->cachedW = chatW;
     return m->cachedH;
 }
@@ -835,7 +1280,7 @@ static void PaintChatView(HWND hwnd, HDC hdc, int cx, int cy)
 
             // Label
             int labelH = 14;
-            const WCHAR* label = isUser ? L"You" : L"Biko";
+            const WCHAR* label = isUser ? L"You" : L"Bikode";
             HFONT hOldF = (HFONT)SelectObject(hdc, s_hFontLabel);
             SetTextColor(hdc, isUser ? CP_ACCENT : CP_TEXT_SECONDARY);
 
@@ -882,18 +1327,22 @@ static void PaintChatView(HWND hwnd, HDC hdc, int cx, int cy)
             SelectObject(hdc, hOld);
 
             // Draw attachments if any
+            int attachAreaH = 0;
             if (m->attachmentCount > 0)
             {
-                int attachY = rcText.bottom + CHAT_BUBBLE_PAD_V; // Start after text
-                // However, bubbleH includes attachment area.
-                // We need to just draw below the text area.
-                // Actually rcText.bottom is the bottom of the TEXT rect, which might be smaller than actual text.
-                // We computed rcCalc earlier, that's the text height.
-                // bubbleY + CHAT_BUBBLE_PAD_V + actualTextH
-                
+                attachAreaH = ComputeAttachmentAreaHeight(m->attachmentCount, textAreaW);
                 DrawMessageAttachments(hdc, m, bubbleX + CHAT_BUBBLE_PAD_H, 
                                        bubbleY + CHAT_BUBBLE_PAD_V + actualTextH, 
                                        textAreaW);
+            }
+
+            if (m->pInlineGif)
+            {
+                int gifX = bubbleX + CHAT_BUBBLE_PAD_H;
+                int gifY = bubbleY + CHAT_BUBBLE_PAD_V + actualTextH + attachAreaH + CHAT_INLINE_GIF_GAP;
+                Gdiplus::Graphics g(hdc);
+                g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+                g.DrawImage(m->pInlineGif, gifX, gifY, m->gifDrawW, m->gifDrawH);
             }
         }
 
@@ -1006,6 +1455,14 @@ static LRESULT CALLBACK ChatViewWndProc(HWND hwnd, UINT msg,
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
 
+    case WM_TIMER:
+        if (wParam == CHAT_GIF_TIMER_ID)
+        {
+            AdvanceGifFrames();
+            return 0;
+        }
+        break;
+
     default:
         break;
     }
@@ -1062,7 +1519,7 @@ BOOL ChatPanel_Create(HWND hwndParent)
             s_hwndInput, GWLP_WNDPROC, (LONG_PTR)ChatInputSubclassProc);
         SendMessage(s_hwndInput, WM_SETFONT, (WPARAM)s_hFontInput, TRUE);
         SendMessageW(s_hwndInput, EM_SETCUEBANNER, TRUE,
-                     (LPARAM)L"Message Biko\x2026");
+                     (LPARAM)L"Message Bikode\x2026");
     }
 
     // Owner-drawn send button
@@ -1108,7 +1565,7 @@ BOOL ChatPanel_Create(HWND hwndParent)
     s_hIconLogo = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDR_MAINWND),
                                     IMAGE_ICON, 18, 18, LR_DEFAULTCOLOR);
 
-    AddMessage(MSG_SYSTEM, "Biko AI \xe2\x80\xa2 Ready", NULL, 0);
+    AddMessage(MSG_SYSTEM, "Bikode AI \xe2\x80\xa2 Ready", NULL, 0);
     return TRUE;
 }
 
@@ -1235,11 +1692,7 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
     int ip = CHAT_INPUT_INNER_PAD;
     int editLeft   = cardLeft + ip;
     int editTop    = cardTop + ip + pendingHeight;
-    int editRight  = cardRight - ip - CHAT_SEND_SIZE - 6;
     int editBottom = cardBottom - ip;
-    if (s_hwndInput)
-        MoveWindow(s_hwndInput, editLeft, editTop,
-                   editRight - editLeft, editBottom - editTop, TRUE);
 
     int sendLeft = cardRight - ip - CHAT_SEND_SIZE;
     int sendTop  = cardBottom - ip - CHAT_SEND_SIZE;
@@ -1247,19 +1700,21 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
         MoveWindow(s_hwndSend, sendLeft, sendTop,
                    CHAT_SEND_SIZE, CHAT_SEND_SIZE, TRUE);
 
-    int attachLeft = sendLeft - CHAT_SEND_SIZE - 6;
+    int attachLeft = sendLeft - CHAT_SEND_SIZE - CHAT_BTN_GAP;
+    if (s_hwndAttach)
         MoveWindow(s_hwndAttach, attachLeft, sendTop,
                    CHAT_SEND_SIZE, CHAT_SEND_SIZE, TRUE);
 
-    int searchLeft = attachLeft - CHAT_SEND_SIZE - 6;
+    int searchLeft = attachLeft - CHAT_SEND_SIZE - CHAT_BTN_GAP;
     if (s_hwndSearch)
         MoveWindow(s_hwndSearch, searchLeft, sendTop,
                    CHAT_SEND_SIZE, CHAT_SEND_SIZE, TRUE);
 
     // Adjust input right edge to avoid overlapping buttons
+    int editRight = searchLeft - CHAT_BTN_GAP;
     if (s_hwndInput)
     {
-        int inputsRight = searchLeft - 6;
+        int inputsRight = editRight;
         MoveWindow(s_hwndInput, editLeft, editTop,
                    inputsRight - editLeft, editBottom - editTop, TRUE);
     }
@@ -1411,7 +1866,7 @@ void ChatPanel_SendInput(void)
             if (!AIAgent_ChatAsync(pCfg, displayText, cAtt > 0 ? aiAttachments : NULL, cAtt, s_hwndPanel, hwndMainWnd))
                 ChatPanel_AppendSystem("AI is busy. Please wait.");
         } else {
-            ChatPanel_AppendSystem("No API key. Use Biko \xe2\x86\x92 AI Settings.");
+            ChatPanel_AppendSystem("No API key. Use Bikode \xe2\x86\x92 AI Settings.");
         }
         n2e_Free(utf8);
     }
@@ -1452,7 +1907,7 @@ void ChatPanel_SendSearchInput(void)
                 if (!AIAgent_ChatAsync(pCfg, searchPrompt, NULL, 0, s_hwndPanel, hwndMainWnd))
                     ChatPanel_AppendSystem("AI is busy. Please wait.");
             } else {
-                ChatPanel_AppendSystem("No API key. Use Biko \xe2\x86\x92 AI Settings.");
+                ChatPanel_AppendSystem("No API key. Use Bikode \xe2\x86\x92 AI Settings.");
             }
             n2e_Free(searchPrompt);
         }
@@ -1560,7 +2015,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             SetTextColor(hm, CP_TEXT_PRIMARY);
             RECT rcTitle = { iconX + 18 + 6, 0,
                              s_rcCloseBtn.left - 8, CHAT_HEADER_HEIGHT };
-            DrawTextW(hm, L"Biko AI", -1, &rcTitle,
+            DrawTextW(hm, L"Bikode AI", -1, &rcTitle,
                       DT_SINGLELINE | DT_VCENTER | DT_LEFT);
 
             if (s_bCloseHover)
@@ -1617,37 +2072,32 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
         {
             if (pDIS->CtlID == IDC_CHAT_SEND)
             {
-                COLORREF bgClr = s_bSendHover ? CP_SEND_HOV : CP_SEND_BG;
-                COLORREF arrowClr = RGB(255, 255, 255);
-                FillRoundRectSolid(pDIS->hDC, &pDIS->rcItem, 6, bgClr);
+                BOOL down = ((pDIS->itemState & ODS_SELECTED) != 0) || s_bSendDown;
+                DrawButtonFace(pDIS->hDC, &pDIS->rcItem, s_bSendHover, down, TRUE);
                 int bcx = (pDIS->rcItem.left + pDIS->rcItem.right) / 2;
                 int bcy = (pDIS->rcItem.top + pDIS->rcItem.bottom) / 2;
-                DrawSendArrow(pDIS->hDC, bcx, bcy, arrowClr);
+                COLORREF icon = down ? RGB(236, 238, 245) : CP_BTN_ICON;
+                DrawSendArrow(pDIS->hDC, bcx, bcy, icon);
                 return TRUE;
             }
             if (pDIS->CtlID == IDC_CHAT_ATTACH)
             {
-                COLORREF bgClr = s_bAttachHover ? CP_SEND_HOV : CP_SEND_BG;
-                COLORREF plusClr = RGB(255, 255, 255);
-                FillRoundRectSolid(pDIS->hDC, &pDIS->rcItem, 6, bgClr);
+                BOOL down = ((pDIS->itemState & ODS_SELECTED) != 0) || s_bAttachDown;
+                DrawButtonFace(pDIS->hDC, &pDIS->rcItem, s_bAttachHover, down, FALSE);
                 int cx = (pDIS->rcItem.left + pDIS->rcItem.right) / 2;
                 int cy = (pDIS->rcItem.top + pDIS->rcItem.bottom) / 2;
-                HPEN hPen = CreatePen(PS_SOLID, 2, plusClr);
-                HPEN hOldPen = (HPEN)SelectObject(pDIS->hDC, hPen);
-                MoveToEx(pDIS->hDC, cx, cy - 6, NULL); LineTo(pDIS->hDC, cx, cy + 6);
-                MoveToEx(pDIS->hDC, cx - 6, cy, NULL); LineTo(pDIS->hDC, cx + 6, cy);
-                SelectObject(pDIS->hDC, hOldPen);
-                DeleteObject(hPen);
+                COLORREF icon = down ? RGB(228, 232, 240) : CP_BTN_ICON;
+                DrawAddIcon(pDIS->hDC, cx, cy, icon);
                 return TRUE;
             }
             if (pDIS->CtlID == IDC_CHAT_SEARCH)
             {
-                COLORREF bgClr = s_bSearchHover ? CP_SEND_HOV : CP_SEND_BG;
-                COLORREF iconClr = RGB(255, 255, 255);
-                FillRoundRectSolid(pDIS->hDC, &pDIS->rcItem, 6, bgClr);
+                BOOL down = ((pDIS->itemState & ODS_SELECTED) != 0) || s_bSearchDown;
+                DrawButtonFace(pDIS->hDC, &pDIS->rcItem, s_bSearchHover, down, FALSE);
                 int cx = (pDIS->rcItem.left + pDIS->rcItem.right) / 2;
                 int cy = (pDIS->rcItem.top + pDIS->rcItem.bottom) / 2;
-                DrawSearchIcon(pDIS->hDC, cx, cy, iconClr);
+                COLORREF icon = down ? RGB(228, 232, 240) : CP_BTN_ICON;
+                DrawSearchIcon(pDIS->hDC, cx, cy, icon);
                 return TRUE;
             }
         }
@@ -1824,6 +2274,14 @@ static LRESULT CALLBACK SendBtnProc(HWND hwnd, UINT msg,
     case WM_SETCURSOR:
         SetCursor(LoadCursor(NULL, IDC_HAND));
         return TRUE;
+    case WM_LBUTTONDOWN:
+        s_bSendDown = TRUE;
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+    case WM_LBUTTONUP:
+        s_bSendDown = FALSE;
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
     }
     return CallWindowProc(s_pfnOrigSendProc, hwnd, msg, wParam, lParam);
 }
@@ -1849,6 +2307,14 @@ static LRESULT CALLBACK AttachBtnProc(HWND hwnd, UINT msg,
     case WM_SETCURSOR:
         SetCursor(LoadCursor(NULL, IDC_HAND));
         return TRUE;
+    case WM_LBUTTONDOWN:
+        s_bAttachDown = TRUE;
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+    case WM_LBUTTONUP:
+        s_bAttachDown = FALSE;
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
     }
     return CallWindowProc(s_pfnOrigAttachProc, hwnd, msg, wParam, lParam);
 }
@@ -1874,6 +2340,14 @@ static LRESULT CALLBACK SearchBtnProc(HWND hwnd, UINT msg,
     case WM_SETCURSOR:
         SetCursor(LoadCursor(NULL, IDC_HAND));
         return TRUE;
+    case WM_LBUTTONDOWN:
+        s_bSearchDown = TRUE;
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+    case WM_LBUTTONUP:
+        s_bSearchDown = FALSE;
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
     }
     return CallWindowProc(s_pfnOrigSearchProc, hwnd, msg, wParam, lParam);
 }

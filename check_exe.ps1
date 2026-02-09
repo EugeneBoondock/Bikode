@@ -1,4 +1,4 @@
-$bytes = [IO.File]::ReadAllBytes('c:\Users\USER\Projects\Biko\bin\x64\Debug\Biko.exe')
+$bytes = [IO.File]::ReadAllBytes('c:\Users\USER\Projects\Bikode\bin\x64\Debug\Bikode.exe')
 $text = [Text.Encoding]::Unicode.GetString($bytes)
 $searches = @('BikoTermView', 'BikoTermPanel', '[v5]', 'Terminal_Init', 'Terminal_Toggle', 'VIEW HAS FOCUS')
 foreach ($s in $searches) {

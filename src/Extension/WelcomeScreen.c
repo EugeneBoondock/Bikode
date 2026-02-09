@@ -79,7 +79,7 @@ static WelcomeButton s_buttons[NUM_BUTTONS] = {
     { IDC_BTN_NEW,      L"New File",           L"Create a new empty document",       L"Ctrl+N"  },
     { IDC_BTN_OPEN,     L"Open File",          L"Open an existing file from disk",   L"Ctrl+O"  },
     { IDC_BTN_TERMINAL, L"Terminal",            L"Open the integrated terminal",      L"Ctrl+`"  },
-    { IDC_BTN_CHAT,     L"Biko AI",            L"Chat with the AI assistant",        L""        },
+    { IDC_BTN_CHAT,     L"Bikode AI",          L"Chat with the AI assistant",        L""        },
 };
 
 //=============================================================================
@@ -311,7 +311,7 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         SelectObject(hm, s_hFontTitle);
         SetTextColor(hm, C(DK_TEXT1, LT_TEXT1));
         RECT rcT = { 0, startY + 96, cx, startY + 146 };
-        DrawTextW(hm, L"Biko", -1, &rcT, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+        DrawTextW(hm, L"Bikode", -1, &rcT, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
         // --- Tagline ---
         SelectObject(hm, s_hFontTagline);
@@ -338,7 +338,7 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         SelectObject(hm, s_hFontFooter);
         SetTextColor(hm, C(DK_MUTED, LT_MUTED));
         RECT rcF = { 0, cy - 32, cx, cy - 12 };
-        DrawTextW(hm, L"Biko  \x2022  A text editor for those who write what they like",
+        DrawTextW(hm, L"Bikode  \x2022  A text editor for those who write what they like",
                   -1, &rcF, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
         // Blit

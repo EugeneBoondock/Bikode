@@ -362,8 +362,8 @@ BEGIN
         POPUP "Esc &Key Function"
         BEGIN
             MENUITEM "&None",                       IDM_VIEW_NOESCFUNC
-            MENUITEM "&Minimize Biko",        IDM_VIEW_ESCMINIMIZE
-            MENUITEM "E&xit Biko",            IDM_VIEW_ESCEXIT
+            MENUITEM "&Minimize Bikode",      IDM_VIEW_ESCMINIMIZE
+            MENUITEM "E&xit Bikode",          IDM_VIEW_ESCEXIT
             MENUITEM SEPARATOR
             MENUITEM "First Close Current &Split View, If Any" IDM_VIEW_ESCCLOSEVIEW
         END
@@ -437,8 +437,8 @@ BEGIN
     END
     POPUP "+"
     BEGIN
-        MENUITEM "Open Biko",             IDM_TRAY_RESTORE
-        MENUITEM "Exit Biko",             IDM_TRAY_EXIT
+        MENUITEM "Open Bikode",           IDM_TRAY_RESTORE
+        MENUITEM "Exit Bikode",           IDM_TRAY_EXIT
     END
 END
 
@@ -692,7 +692,7 @@ END
 
 IDD_ABOUT DIALOGEX 0, 0, 227, 158
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | DS_NOFAILCREATE | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Biko"
+CAPTION "Bikode"
 FONT 8, "MS Shell Dlg", 0, 0, 0x0
 BEGIN
     DEFPUSHBUTTON   "OK",IDOK,170,137,50,14
@@ -1095,7 +1095,7 @@ END
 
 IDD_INFOBOX DIALOGEX 0, 0, 244, 79
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Biko"
+CAPTION "Bikode"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     ICON            IDR_MAINWND,IDC_INFOBOXICON,7,7,20,20
@@ -1487,7 +1487,7 @@ BEGIN
     IDS_SAVEFILE            "Saving ""%s""..."
     IDS_PRINTFILE           "Printing page %i..."
     IDS_SAVINGSETTINGS      "Saving settings..."
-    IDS_LINKDESCRIPTION     "Edit with Notepad 2e"
+    IDS_LINKDESCRIPTION     "Edit with Bikode"
     IDS_FILTER_ALL          "All files (*.*)|*.*|"
     IDS_FILTER_EXE          "Executable files (*.exe;*.com;*.bat;*.cmd;*.lnk;*.pif)|*.exe;*.com;*.bat;*.cmd;*.lnk;*.pif|All files (*.*)|*.*|"
 END
@@ -1557,7 +1557,7 @@ BEGIN
     IDS_ERR_BROWSE          "No file browser plugin was found.\nThe metapath file browser plugin can be downloaded from http://www.flos-freeware.ch."
     IDS_ERR_MRUDLG          "No access to the selected file!\nWould you like to remove it from the list?"
     IDS_ERR_CREATELINK      "Error creating the Desktop link."
-    IDS_ERR_PREVWINDISABLED "Existing Notepad 2e window is busy or has an active dialog box.\nWould you like to open another Notepad 2e window?"
+    IDS_ERR_PREVWINDISABLED "Existing Bikode window is busy or has an active dialog box.\nWould you like to open another Bikode window?"
     IDS_SELRECT             "This operation can't be perfomed within a rectangular selection."
     IDS_BUFFERTOOSMALL      "This operation can't be performed (lines too long)."
     IDS_FIND_WRAPFW         "Reached the end of the document, restarting search at the beginning.\n\nAlternatively, press [Shift+]F3/F4 to continue."
@@ -1600,7 +1600,7 @@ BEGIN
     IDS_READONLY_SAVE       """%s"" is read only. Save to a different file?"
     IDS_FILECHANGENOTIFY    "The current file has been modified by an external program. Reload?"
     IDS_FILECHANGENOTIFY2   "The current file has been deleted. Save now?"
-    IDS_STICKYWINPOS        "Sticky Window Position is enabled. Any new Notepad 2e windows will use the current window placement settings."
+    IDS_STICKYWINPOS        "Sticky Window Position is enabled. Any new Bikode windows will use the current window placement settings."
     IDS_SAVEDSETTINGS       "The current program settings have been saved."
     IDS_CREATEINI_FAIL      "Error creating configuration file."
     IDS_WRITEINI_FAIL       "Error writing settings to configuration file."
@@ -1609,7 +1609,7 @@ BEGIN
     IDS_ERR_SAVEAS          "New file name refers to the same old file. This is not allowed.%s"
     IDS_ERR_SAVEAS_RENAME_DETAILS 
                             "\n\nIf you were trying to rename it into a different character case, this would not work due to Windows Save File Dialog limitation (#140). To work around this, do two renames using a temporary file name."
-    IDS_WARN_ICU_REGEX      "Regular expressions in Notepad 2e-ICU can only work on Unicode buffers. Convert this file to UTF-8?\r\n\r\nNon-ICU versions of Notepad 2e do not have this limitation."
+    IDS_WARN_ICU_REGEX      "Regular expressions in Bikode-ICU can only work on Unicode buffers. Convert this file to UTF-8?\r\n\r\nNon-ICU versions of Bikode do not have this limitation."
     IDS_ERR_ELEVATE         "Failed to run elevated instance."
     IDS_ERR_MEMORY_ALLOCATION "Failed to allocate memory buffer (%d bytes)."
     IDS_ERR_FAILED_CREATE   "Failed to create %s: %s"

@@ -30,13 +30,13 @@
 #define VERSION_LEGALCOPYRIGHT_SHORT L"Copyright � 2004-2011"
 #define VERSION_LEGALCOPYRIGHT_LONG  L"� Florian Balmer and contributors"
 #if defined(ICU_BUILD) && defined(LPEG_LEXER)
-#define VERSION_FILEDESCRIPTION_BASE L"Biko"
+#define VERSION_FILEDESCRIPTION_BASE L"Bikode"
 #elif ICU_BUILD
-#define VERSION_FILEDESCRIPTION_BASE L"Biko"
+#define VERSION_FILEDESCRIPTION_BASE L"Bikode"
 #elif LPEG_LEXER
-#define VERSION_FILEDESCRIPTION_BASE L"Biko"
+#define VERSION_FILEDESCRIPTION_BASE L"Bikode"
 #else
-#define VERSION_FILEDESCRIPTION_BASE L"Biko"
+#define VERSION_FILEDESCRIPTION_BASE L"Bikode"
 #endif
 #ifdef _WIN64
 #define VERSION_FILEDESCRIPTION      VERSION_FILEDESCRIPTION_BASE L" x64"
@@ -44,22 +44,22 @@
 #define VERSION_FILEDESCRIPTION      VERSION_FILEDESCRIPTION_BASE
 #endif
 #if defined(ICU_BUILD) && defined(LPEG_LEXER)
-#define VERSION_INTERNALNAME         L"Biko"
-#define VERSION_ORIGINALFILENAME     L"Biko.exe"
+#define VERSION_INTERNALNAME         L"Bikode"
+#define VERSION_ORIGINALFILENAME     L"Bikode.exe"
 #elif ICU_BUILD
-#define VERSION_INTERNALNAME         L"Biko"
-#define VERSION_ORIGINALFILENAME     L"Biko.exe"
+#define VERSION_INTERNALNAME         L"Bikode"
+#define VERSION_ORIGINALFILENAME     L"Bikode.exe"
 #elif LPEG_LEXER
-#define VERSION_INTERNALNAME         L"Biko"
-#define VERSION_ORIGINALFILENAME     L"Biko.exe"
+#define VERSION_INTERNALNAME         L"Bikode"
+#define VERSION_ORIGINALFILENAME     L"Bikode.exe"
 #else
-#define VERSION_INTERNALNAME         L"Biko"
-#define VERSION_ORIGINALFILENAME     L"Biko.exe"
+#define VERSION_INTERNALNAME         L"Bikode"
+#define VERSION_ORIGINALFILENAME     L"Bikode.exe"
 #endif
 #define VERSION_AUTHORNAME           L"Florian Balmer"
 #define VERSION_WEBPAGEDISPLAY       L"flo's freeware - http://www.flos-freeware.ch"
 #define VERSION_EMAILDISPLAY         L"florian.balmer@gmail.com"
 #define VERSION_EXT_VERSION          L"Extended Edition � 2013-"BUILD_YEAR_STR
-#define VERSION_EXT_BY               L"By Proger_XP and contributors"
-#define VERSION_EXT_PAGE             L"https://github.com/user/biko"
+#define VERSION_EXT_BY               L"By BoondockLabs (wrapper around Notepad2e)"
+#define VERSION_EXT_PAGE             L"https://github.com/boondocklabs/bikode"
 #define VERSION_COMMIT               L"6c3f5ac"

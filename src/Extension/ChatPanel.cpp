@@ -788,7 +788,7 @@ static void PaintChatView(HWND hwnd, HDC hdc, int cx, int cy)
 
             // Label
             int labelH = 14;
-            const WCHAR* label = isUser ? L"You" : L"Biko";
+            const WCHAR* label = isUser ? L"You" : L"Bikode";
             HFONT hOldF = (HFONT)SelectObject(hdc, s_hFontLabel);
             SetTextColor(hdc, isUser ? CP_ACCENT : CP_TEXT_SECONDARY);
 
@@ -1011,7 +1011,7 @@ BOOL ChatPanel_Create(HWND hwndParent)
             s_hwndInput, GWLP_WNDPROC, (LONG_PTR)ChatInputSubclassProc);
         SendMessage(s_hwndInput, WM_SETFONT, (WPARAM)s_hFontInput, TRUE);
         SendMessageW(s_hwndInput, EM_SETCUEBANNER, TRUE,
-                     (LPARAM)L"Message Biko\x2026");
+                     (LPARAM)L"Message Bikode\x2026");
     }
 
     // Owner-drawn send button
@@ -1057,7 +1057,7 @@ BOOL ChatPanel_Create(HWND hwndParent)
     s_hIconLogo = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDR_MAINWND),
                                     IMAGE_ICON, 18, 18, LR_DEFAULTCOLOR);
 
-    AddMessage(MSG_SYSTEM, "Biko AI \xe2\x80\xa2 Ready", NULL, 0);
+    AddMessage(MSG_SYSTEM, "Bikode AI \xe2\x80\xa2 Ready", NULL, 0);
     return TRUE;
 }
 
@@ -1329,7 +1329,7 @@ void ChatPanel_SendInput(void)
                 
             if (pAttMeta) free(pAttMeta);
         } else {
-            ChatPanel_AppendSystem("No API key. Use Biko \xe2\x86\x92 AI Settings.");
+            ChatPanel_AppendSystem("No API key. Use Bikode \xe2\x86\x92 AI Settings.");
         }
         n2e_Free(utf8);
     }
@@ -1371,7 +1371,7 @@ void ChatPanel_SendSearchInput(void)
                 if (!AIAgent_ChatAsync(pCfg, searchPrompt, NULL, 0, s_hwndPanel, hwndMainWnd))
                     ChatPanel_AppendSystem("AI is busy. Please wait.");
             } else {
-                ChatPanel_AppendSystem("No API key. Use Biko \xe2\x86\x92 AI Settings.");
+                ChatPanel_AppendSystem("No API key. Use Bikode \xe2\x86\x92 AI Settings.");
             }
             n2e_Free(searchPrompt);
         }
@@ -1475,7 +1475,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             SetTextColor(hm, CP_TEXT_PRIMARY);
             RECT rcTitle = { iconX + 18 + 6, 0,
                              s_rcCloseBtn.left - 8, CHAT_HEADER_HEIGHT };
-            DrawTextW(hm, L"Biko AI", -1, &rcTitle,
+            DrawTextW(hm, L"Bikode AI", -1, &rcTitle,
                       DT_SINGLELINE | DT_VCENTER | DT_LEFT);
 
             if (s_bCloseHover)
