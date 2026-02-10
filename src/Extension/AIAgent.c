@@ -254,7 +254,10 @@ static char* BuildSystemPrompt(void)
         "Default output style\n"
         "- Be concise by default.\n"
         "- Expand when the user asks, or when risk is high (security, data loss, big refactors).\n\n"
-        "- You may include a direct GIF URL (.gif) for light/fun responses when relevant. Prefer reputable sources (e.g., giphy/tenor direct CDN URLs) and keep it optional.\n\n"
+        "- You may send a GIF occasionally when context truly benefits from it (humor, celebration, thinking pauses).\n"
+        "- Never invent GIF links from memory. Always call gif_search first and only use the returned validated URL.\n"
+        "- If user asks for a GIF, call gif_search using intent-rich query words from the user context.\n"
+        "- Keep GIF links concise and put the URL on its own line.\n\n"
 
         "Greetings and light interactions\n"
         "- When the user only greets or has not stated a task yet, reply with a short welcome plus one invitation to describe their goal.\n"
@@ -450,6 +453,11 @@ static char* BuildSystemPrompt(void)
         "Parameters: name, query\n"
         "Example: {\"name\": \"web_search\", \"query\": \"react useeffect dependency array\"}\n\n"
 
+        "### gif_search\n"
+        "Find a context-relevant GIF URL and validate that it exists as a direct media GIF.\n"
+        "Parameters: name, query\n"
+        "Example: {\"name\": \"gif_search\", \"query\": \"funny coding bug reaction gif\"}\n\n"
+
         "## Guidelines\n"
         "- Read files before modifying them to understand their current content.\n"
         "- Use replace_in_file for targeted edits; use write_file for creating new files.\n"
@@ -520,7 +528,8 @@ static const char* FindRawJsonToolCall(const char* p)
             if (strcmp(name, "read_file") == 0 || strcmp(name, "write_file") == 0 ||
                 strcmp(name, "replace_in_file") == 0 || strcmp(name, "run_command") == 0 ||
                 strcmp(name, "list_dir") == 0 || strcmp(name, "insert_in_editor") == 0 ||
-                strcmp(name, "web_search") == 0)
+                strcmp(name, "web_search") == 0 ||
+                strcmp(name, "gif_search") == 0)
             {
                 free(name);
                 return s;
@@ -1142,6 +1151,72 @@ static char* Tool_WebSearch(const char* query)
     return result;
 }
 
+static char* Tool_GifSearch(const char* query)
+{
+    if (!query || !query[0])
+        return _strdup("Error: No GIF search query specified");
+
+    char modulePath[MAX_PATH];
+    char moduleDir[MAX_PATH];
+    char scriptPath[MAX_PATH];
+    DWORD pathLen = GetModuleFileNameA(NULL, modulePath, MAX_PATH);
+    if (pathLen == 0 || pathLen >= MAX_PATH)
+        return _strdup("Error: Failed to resolve executable path");
+
+    strncpy(moduleDir, modulePath, MAX_PATH - 1);
+    moduleDir[MAX_PATH - 1] = '\0';
+    char* lastSlash = strrchr(moduleDir, '\\');
+    if (!lastSlash)
+        lastSlash = strrchr(moduleDir, '/');
+    if (lastSlash)
+        *lastSlash = '\0';
+
+    const char* candidates[] = {
+        "src\\Extension\\tools\\gif-search.js",
+        "src\\tools\\gif-search.js",
+        "..\\..\\..\\src\\Extension\\tools\\gif-search.js",
+        "..\\..\\..\\src\\tools\\gif-search.js",
+        NULL
+    };
+
+    BOOL found = FALSE;
+    for (int i = 0; candidates[i]; i++)
+    {
+        const char* rel = candidates[i];
+        if (i < 2) {
+            strncpy(scriptPath, rel, MAX_PATH - 1);
+            scriptPath[MAX_PATH - 1] = '\0';
+        } else {
+            snprintf(scriptPath, MAX_PATH, "%s\\%s", moduleDir, rel);
+        }
+
+        DWORD attrs = GetFileAttributesA(scriptPath);
+        if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            found = TRUE;
+            break;
+        }
+    }
+
+    if (!found)
+        return _strdup("Error: gif-search.js not found (expected under src/Extension/tools or src/tools)");
+
+    StrBuf cmd;
+    sb_init(&cmd, 1024);
+    sb_append(&cmd, "node \"", -1);
+    sb_append(&cmd, scriptPath, -1);
+    sb_append(&cmd, "\" \"", -1);
+    for (const char* p = query; *p; p++) {
+        if (*p == '"') sb_append(&cmd, "\\\"", 2);
+        else sb_append(&cmd, p, 1);
+    }
+    sb_append(&cmd, "\"", -1);
+
+    char* result = Tool_RunCommand(cmd.data);
+    sb_free(&cmd);
+    return result;
+}
+
 // Dispatch a single tool call
 static char* ExecuteTool(const ToolCall* tc)
 {
@@ -1159,6 +1234,8 @@ static char* ExecuteTool(const ToolCall* tc)
         return Tool_ListDir(tc->path);
     if (strcmp(tc->name, "web_search") == 0)
         return Tool_WebSearch(tc->command ? tc->command : tc->content);
+    if (strcmp(tc->name, "gif_search") == 0)
+        return Tool_GifSearch(tc->command ? tc->command : tc->content);
 
     char err[128];
     snprintf(err, sizeof(err), "Error: Unknown tool '%s'", tc->name);

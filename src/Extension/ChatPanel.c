@@ -122,6 +122,8 @@
 #define CHAT_INLINE_GIF_MAX_W    220
 #define CHAT_INLINE_GIF_MAX_H    140
 #define CHAT_INLINE_GIF_GAP        6
+#define CHAT_INLINE_GIF_FRAME_PAD  6
+#define CHAT_INLINE_GIF_FRAME_RAD  8
 #define CHAT_GIF_TIMER_ID      0x71A1
 #define CHAT_GIF_TIMER_MS         80
 
@@ -299,7 +301,10 @@ static BOOL ExtractGifUrl(const char* text, char* outUrl, int cchOut)
             while (len > 0 && (tmp[len - 1] == '.' || tmp[len - 1] == ',' || tmp[len - 1] == ';' || tmp[len - 1] == ':'))
                 tmp[--len] = '\0';
 
-            if (StrStrIA(tmp, ".gif") != NULL)
+            if (StrStrIA(tmp, ".gif") != NULL ||
+                StrStrIA(tmp, "media.tenor.com/") != NULL ||
+                StrStrIA(tmp, "i.giphy.com/") != NULL ||
+                StrStrIA(tmp, "media.giphy.com/") != NULL)
             {
                 StringCchCopyA(outUrl, cchOut, tmp);
                 return TRUE;
@@ -308,6 +313,60 @@ static BOOL ExtractGifUrl(const char* text, char* outUrl, int cchOut)
         p = end;
     }
     return FALSE;
+}
+
+static BOOL IsGifFilePath(const WCHAR* path)
+{
+    if (!path || !path[0]) return FALSE;
+    HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return FALSE;
+    BYTE hdr[6];
+    DWORD read = 0;
+    BOOL ok = ReadFile(h, hdr, sizeof(hdr), &read, NULL);
+    CloseHandle(h);
+    if (!ok || read < 6) return FALSE;
+    return (memcmp(hdr, "GIF87a", 6) == 0 || memcmp(hdr, "GIF89a", 6) == 0);
+}
+
+static BOOL LooksLikeGifProviderUrl(const char* s)
+{
+    if (!s) return FALSE;
+    return (StrStrIA(s, ".gif") != NULL ||
+            StrStrIA(s, "tenor.com/") != NULL ||
+            StrStrIA(s, "giphy.com/") != NULL);
+}
+
+static void StripGifUrlsInLine(char* s)
+{
+    if (!s || !s[0]) return;
+    char out[2048];
+    int oi = 0;
+    const char* p = s;
+    while (*p && oi < (int)sizeof(out) - 1)
+    {
+        if ((p[0] == 'h' || p[0] == 'H') &&
+            (StrCmpNIA(p, "http://", 7) == 0 || StrCmpNIA(p, "https://", 8) == 0))
+        {
+            const char* end = p;
+            while (*end && !isspace((unsigned char)*end) && *end != '"' && *end != '\'' && *end != ')' && *end != ']')
+                end++;
+            int len = (int)(end - p);
+            if (len > 0 && len < 1024)
+            {
+                char url[1024];
+                memcpy(url, p, len);
+                url[len] = '\0';
+                if (LooksLikeGifProviderUrl(url))
+                {
+                    p = end;
+                    continue;
+                }
+            }
+        }
+        out[oi++] = *p++;
+    }
+    out[oi] = '\0';
+    StringCchCopyA(s, 2048, out);
 }
 
 static BOOL LoadGifFromPath(ChatMsg* msg, const WCHAR* wszPath)
@@ -392,6 +451,7 @@ static BOOL TryAttachInlineGif(ChatMsg* msg, const char* sourceText)
     MultiByteToWideChar(CP_UTF8, 0, gifUrl, -1, wszUrl, ARRAYSIZE(wszUrl));
 
     WCHAR localPath[MAX_PATH] = L"";
+    BOOL downloaded = FALSE;
     if (StrCmpNIW(wszUrl, L"http://", 7) == 0 || StrCmpNIW(wszUrl, L"https://", 8) == 0)
     {
         if (!EnsureAttachmentTempDir())
@@ -404,10 +464,17 @@ static BOOL TryAttachInlineGif(ChatMsg* msg, const char* sourceText)
         StringCchPrintfW(localPath, MAX_PATH, L"%s.gif", tmpName);
         if (FAILED(URLDownloadToFileW(NULL, wszUrl, localPath, 0, NULL)))
             return FALSE;
+        downloaded = TRUE;
     }
     else
     {
         StringCchCopyW(localPath, MAX_PATH, wszUrl);
+    }
+
+    if (!IsGifFilePath(localPath))
+    {
+        if (downloaded) DeleteFileW(localPath);
+        return FALSE;
     }
 
     return LoadGifFromPath(msg, localPath);
@@ -456,7 +523,7 @@ static void AdvanceGifFrames(void)
 static BOOL TryAttachInlineGif(ChatMsg* msg, const char* sourceText);
 static void UpdateGifTimerState(void);
 static void AdvanceGifFrames(void);
-static char* SanitizeAIResponseForDisplay(const char* text);
+static char* SanitizeAIResponseForDisplay(const char* text, BOOL hideGifUrls);
 
 //=============================================================================
 // Class registration
@@ -875,7 +942,7 @@ static BOOL IsInternalReasoningLine(const char* line)
     return FALSE;
 }
 
-static char* SanitizeAIResponseForDisplay(const char* text)
+static char* SanitizeAIResponseForDisplay(const char* text, BOOL hideGifUrls)
 {
     if (!text) return NULL;
     int srcLen = (int)strlen(text);
@@ -920,6 +987,9 @@ static char* SanitizeAIResponseForDisplay(const char* text)
             continue;
         }
 
+        if (hideGifUrls && LooksLikeGifProviderUrl(p))
+            continue;
+
         char cleaned[2048];
         int ci = 0;
         for (const char* c = p; *c && ci < (int)sizeof(cleaned) - 1; c++)
@@ -928,6 +998,9 @@ static char* SanitizeAIResponseForDisplay(const char* text)
             cleaned[ci++] = *c;
         }
         cleaned[ci] = '\0';
+
+        if (hideGifUrls)
+            StripGifUrlsInLine(cleaned);
 
         char* finalLine = TrimLeadingSpaces(cleaned);
         TrimTrailingSpaces(finalLine);
@@ -961,6 +1034,12 @@ static char* SanitizeAIResponseForDisplay(const char* text)
     n2e_Free(tmp);
     if (outLen == 0) {
         n2e_Free(out);
+        if (hideGifUrls)
+        {
+            char* empty = (char*)n2e_Alloc(1);
+            if (empty) empty[0] = '\0';
+            return empty;
+        }
         const char* fallback = "I could not find clear results for that query. Try adding keywords like official, github, location, or industry.";
         int n = (int)strlen(fallback);
         char* msg = (char*)n2e_Alloc(n + 1);
@@ -991,9 +1070,18 @@ static void AddMessage(MsgRole role, const char* text,
     m->cachedH = -1;  // not yet measured
 
     const char* sourceText = text ? text : "";
+    BOOL hasInlineGif = FALSE;
+    BOOL hasGifUrl = FALSE;
+    char gifProbe[1024];
+    if (role == MSG_AI) {
+        hasGifUrl = ExtractGifUrl(sourceText, gifProbe, (int)ARRAYSIZE(gifProbe));
+    }
+    if (role == MSG_AI) {
+        hasInlineGif = TryAttachInlineGif(m, sourceText);
+    }
     char* sanitized = NULL;
     if (role == MSG_AI) {
-        sanitized = SanitizeAIResponseForDisplay(sourceText);
+        sanitized = SanitizeAIResponseForDisplay(sourceText, (hasInlineGif || hasGifUrl));
         if (sanitized) sourceText = sanitized;
     }
 
@@ -1013,9 +1101,6 @@ static void AddMessage(MsgRole role, const char* text,
     }
     if (sanitized)
         n2e_Free(sanitized);
-
-    // Optional inline GIF support for AI messages.
-    TryAttachInlineGif(m, text ? text : sourceText);
 
     // Copy attachments
     if (attachments && attachmentCount > 0)
@@ -1177,7 +1262,7 @@ static int MeasureMsgHeight(HDC hdc, int idx, int chatW)
     
     int gifH = 0;
     if (m->pInlineGif)
-        gifH = CHAT_INLINE_GIF_GAP + m->gifDrawH;
+        gifH = CHAT_INLINE_GIF_GAP + m->gifDrawH + CHAT_INLINE_GIF_FRAME_PAD * 2;
 
     m->cachedH = labelH + CHAT_LABEL_GAP + bubbleH + attachH + gifH;
     m->cachedW = chatW;
@@ -1277,6 +1362,10 @@ static void PaintChatView(HWND hwnd, HDC hdc, int cx, int cy)
             int bubbleW = actualTextW + 2 * CHAT_BUBBLE_PAD_H;
             int bubbleH = actualTextH + 2 * CHAT_BUBBLE_PAD_V;
             if (bubbleW > maxBubbleW) bubbleW = maxBubbleW;
+            if (m->pInlineGif) {
+                int minGifBubbleW = m->gifDrawW + 2 * CHAT_BUBBLE_PAD_H + CHAT_INLINE_GIF_FRAME_PAD * 2;
+                if (bubbleW < minGifBubbleW) bubbleW = min(maxBubbleW, minGifBubbleW);
+            }
 
             // Label
             int labelH = 14;
@@ -1338,8 +1427,15 @@ static void PaintChatView(HWND hwnd, HDC hdc, int cx, int cy)
 
             if (m->pInlineGif)
             {
-                int gifX = bubbleX + CHAT_BUBBLE_PAD_H;
-                int gifY = bubbleY + CHAT_BUBBLE_PAD_V + actualTextH + attachAreaH + CHAT_INLINE_GIF_GAP;
+                int frameX = bubbleX + CHAT_BUBBLE_PAD_H;
+                int frameY = bubbleY + CHAT_BUBBLE_PAD_V + actualTextH + attachAreaH + CHAT_INLINE_GIF_GAP;
+                int frameW = m->gifDrawW + CHAT_INLINE_GIF_FRAME_PAD * 2;
+                int frameH = m->gifDrawH + CHAT_INLINE_GIF_FRAME_PAD * 2;
+                RECT rcFrame = { frameX, frameY, frameX + frameW, frameY + frameH };
+                FillRoundRect(hdc, &rcFrame, CHAT_INLINE_GIF_FRAME_RAD, RGB(34, 34, 38), RGB(74, 74, 80));
+
+                int gifX = frameX + CHAT_INLINE_GIF_FRAME_PAD;
+                int gifY = frameY + CHAT_INLINE_GIF_FRAME_PAD;
                 Gdiplus::Graphics g(hdc);
                 g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
                 g.DrawImage(m->pInlineGif, gifX, gifY, m->gifDrawW, m->gifDrawH);
