@@ -469,6 +469,246 @@ static void BuildAuthHeaders(HINTERNET hRequest, const AIProviderConfig* cfg,
 // Response parsing (per format)
 //=============================================================================
 
+static char* ExtractOpenAIContentText(const char* jsonScope)
+{
+    if (!jsonScope) return NULL;
+
+    // 1) Classic string content: "content": "..."
+    char* text = json_extract_string(jsonScope, "content");
+    if (text && text[0]) return text;
+    if (text) free(text);
+
+    // 2) Newer shape: "content": [{ "type":"text"/"output_text", "text":"..." }, ...]
+    const char* contentVal = json_find_value(jsonScope, "content");
+    if (contentVal && (*contentVal == '[' || *contentVal == '{'))
+    {
+        text = json_extract_string(contentVal, "text");
+        if (text && text[0]) return text;
+        if (text) free(text);
+
+        // Some providers surface refusal blocks as structured content.
+        text = json_extract_string(contentVal, "refusal");
+        if (text && text[0])
+        {
+            char* full = (char*)malloc(strlen(text) + 32);
+            if (full)
+            {
+                sprintf(full, "Model refused: %s", text);
+                free(text);
+                return full;
+            }
+            return text;
+        }
+        if (text) free(text);
+    }
+
+    // 3) Some compatible providers use "text" directly.
+    text = json_extract_string(jsonScope, "text");
+    if (text && text[0]) return text;
+    if (text) free(text);
+    return NULL;
+}
+
+static const char* FindJsonObjectEnd(const char* json)
+{
+    if (!json || *json != '{') return NULL;
+    int depth = 0;
+    BOOL inString = FALSE;
+    const char* p = json;
+    while (*p)
+    {
+        if (inString)
+        {
+            if (*p == '\\' && *(p + 1)) { p += 2; continue; }
+            if (*p == '"') inString = FALSE;
+        }
+        else
+        {
+            if (*p == '"') inString = TRUE;
+            else if (*p == '{') depth++;
+            else if (*p == '}')
+            {
+                depth--;
+                if (depth == 0) return p + 1;
+            }
+        }
+        p++;
+    }
+    return NULL;
+}
+
+static const char* FindJsonArrayEnd(const char* json)
+{
+    if (!json || *json != '[') return NULL;
+    int depth = 0;
+    BOOL inString = FALSE;
+    const char* p = json;
+    while (*p)
+    {
+        if (inString)
+        {
+            if (*p == '\\' && *(p + 1)) { p += 2; continue; }
+            if (*p == '"') inString = FALSE;
+        }
+        else
+        {
+            if (*p == '"') inString = TRUE;
+            else if (*p == '[') depth++;
+            else if (*p == ']')
+            {
+                depth--;
+                if (depth == 0) return p + 1;
+            }
+        }
+        p++;
+    }
+    return NULL;
+}
+
+static char* BuildToolCallTagFromArgs(const char* toolName, const char* argsJsonOrText)
+{
+    if (!toolName || !toolName[0]) return NULL;
+
+    char* path = NULL;
+    char* content = NULL;
+    char* oldText = NULL;
+    char* newText = NULL;
+    char* command = NULL;
+
+    if (argsJsonOrText && argsJsonOrText[0] == '{')
+    {
+        path = json_extract_string(argsJsonOrText, "path");
+        if (!path) path = json_extract_string(argsJsonOrText, "file_path");
+
+        content = json_extract_string(argsJsonOrText, "content");
+        if (!content) content = json_extract_string(argsJsonOrText, "text");
+
+        oldText = json_extract_string(argsJsonOrText, "old_text");
+        newText = json_extract_string(argsJsonOrText, "new_text");
+
+        command = json_extract_string(argsJsonOrText, "command");
+        if (!command) command = json_extract_string(argsJsonOrText, "query");
+    }
+    else if (argsJsonOrText && argsJsonOrText[0])
+    {
+        // If arguments are not JSON, map best-effort based on tool name.
+        if (strcmp(toolName, "run_command") == 0 || strcmp(toolName, "web_search") == 0)
+            command = _strdup(argsJsonOrText);
+        else if (strcmp(toolName, "insert_in_editor") == 0)
+            content = _strdup(argsJsonOrText);
+        else
+            content = _strdup(argsJsonOrText);
+    }
+
+    StrBuf sb;
+    sb_init(&sb, 512);
+    sb_append(&sb, "<tool_call>{\"name\":", -1);
+    json_escape_append(&sb, toolName);
+    if (path)    { sb_append(&sb, ",\"path\":", -1);    json_escape_append(&sb, path); }
+    if (content) { sb_append(&sb, ",\"content\":", -1); json_escape_append(&sb, content); }
+    if (oldText) { sb_append(&sb, ",\"old_text\":", -1); json_escape_append(&sb, oldText); }
+    if (newText) { sb_append(&sb, ",\"new_text\":", -1); json_escape_append(&sb, newText); }
+    if (command) { sb_append(&sb, ",\"command\":", -1); json_escape_append(&sb, command); }
+    sb_append(&sb, "}</tool_call>\n", -1);
+
+    if (path) free(path);
+    if (content) free(content);
+    if (oldText) free(oldText);
+    if (newText) free(newText);
+    if (command) free(command);
+
+    return sb.data;
+}
+
+static char* ExtractOpenAIToolCallsAsTags(const char* messageScope)
+{
+    if (!messageScope) return NULL;
+
+    const char* toolCallsVal = json_find_value(messageScope, "tool_calls");
+    if (toolCallsVal && strncmp(toolCallsVal, "null", 4) == 0)
+        toolCallsVal = NULL;
+
+    if (toolCallsVal && *toolCallsVal == '[')
+    {
+        const char* endArr = FindJsonArrayEnd(toolCallsVal);
+        if (!endArr) return NULL;
+
+        StrBuf sb;
+        sb_init(&sb, 1024);
+
+        const char* p = toolCallsVal + 1;
+        while (p && p < endArr)
+        {
+            while (p < endArr && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == ','))
+                p++;
+            if (p >= endArr) break;
+            if (*p != '{') { p++; continue; }
+
+            const char* objEnd = FindJsonObjectEnd(p);
+            if (!objEnd || objEnd > endArr) break;
+
+            int objLen = (int)(objEnd - p);
+            char* obj = (char*)malloc(objLen + 1);
+            if (!obj) break;
+            memcpy(obj, p, objLen);
+            obj[objLen] = '\0';
+
+            const char* fn = json_find_value(obj, "function");
+            const char* fnScope = (fn && *fn == '{') ? fn : obj;
+
+            char* name = json_extract_string(fnScope, "name");
+            char* args = json_extract_string(fnScope, "arguments");
+            if (name && name[0])
+            {
+                char* one = BuildToolCallTagFromArgs(name, args);
+                if (one)
+                {
+                    sb_append(&sb, one, -1);
+                    free(one);
+                }
+            }
+            if (name) free(name);
+            if (args) free(args);
+            free(obj);
+
+            p = objEnd;
+        }
+
+        if (sb.len > 0)
+            return sb.data;
+        sb_free(&sb);
+        return NULL;
+    }
+
+    // Legacy format: {"function_call":{"name":"...","arguments":"{...}"}}
+    const char* fnCallVal = json_find_value(messageScope, "function_call");
+    if (fnCallVal && strncmp(fnCallVal, "null", 4) == 0)
+        fnCallVal = NULL;
+    if (fnCallVal && *fnCallVal == '{')
+    {
+        const char* endObj = FindJsonObjectEnd(fnCallVal);
+        if (!endObj) return NULL;
+        int objLen = (int)(endObj - fnCallVal);
+        char* obj = (char*)malloc(objLen + 1);
+        if (!obj) return NULL;
+        memcpy(obj, fnCallVal, objLen);
+        obj[objLen] = '\0';
+
+        char* name = json_extract_string(obj, "name");
+        char* args = json_extract_string(obj, "arguments");
+        char* one = NULL;
+        if (name && name[0])
+            one = BuildToolCallTagFromArgs(name, args);
+
+        if (name) free(name);
+        if (args) free(args);
+        free(obj);
+        return one;
+    }
+
+    return NULL;
+}
+
 static char* ParseResponse_OpenAI(const char* respJson)
 {
     // Try: choices[0].message.content
@@ -483,7 +723,7 @@ static char* ParseResponse_OpenAI(const char* respJson)
         const char* message = json_find_value(choices, "message");
         if (message)
         {
-            content = json_extract_string(message, "content");
+            content = ExtractOpenAIContentText(message);
             if (content && content[0]) return content;
             if (content) free(content);
 
@@ -501,10 +741,15 @@ static char* ParseResponse_OpenAI(const char* respJson)
                 return content;
             }
             if (content) free(content);
+
+            // Tool-call fallback: some OpenAI-compatible providers return empty content + tool_calls.
+            content = ExtractOpenAIToolCallsAsTags(message);
+            if (content && content[0]) return content;
+            if (content) free(content);
         }
 
         // Try direct content from choices array
-        content = json_extract_string(choices, "content");
+        content = ExtractOpenAIContentText(choices);
         if (content && content[0]) return content;
         if (content) free(content);
 
@@ -515,7 +760,7 @@ static char* ParseResponse_OpenAI(const char* respJson)
     }
 
     // Fallback: any "content" field at top level
-    content = json_extract_string(respJson, "content");
+    content = ExtractOpenAIContentText(respJson);
     if (content && content[0]) return content;
     if (content) free(content);
 

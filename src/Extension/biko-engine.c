@@ -534,13 +534,66 @@ static void BuildAuthHeaders(HINTERNET hRequest, const AIProviderConfig* cfg,
 //=============================================================================
 
 // Parse OpenAI-style response: choices[0].message.content
+static char* ExtractOpenAIContentText(const char* jsonScope)
+{
+    if (!jsonScope) return NULL;
+
+    char* text = json_extract_string(jsonScope, "content");
+    if (text && text[0]) return text;
+    if (text) free(text);
+
+    const char* contentVal = json_find_value(jsonScope, "content");
+    if (contentVal && (*contentVal == '[' || *contentVal == '{'))
+    {
+        text = json_extract_string(contentVal, "text");
+        if (text && text[0]) return text;
+        if (text) free(text);
+
+        text = json_extract_string(contentVal, "refusal");
+        if (text && text[0])
+        {
+            char* full = (char*)malloc(strlen(text) + 32);
+            if (full)
+            {
+                sprintf(full, "Model refused: %s", text);
+                free(text);
+                return full;
+            }
+            return text;
+        }
+        if (text) free(text);
+    }
+
+    text = json_extract_string(jsonScope, "text");
+    if (text && text[0]) return text;
+    if (text) free(text);
+
+    return NULL;
+}
+
 static char* ParseResponse_OpenAI(const char* respJson)
 {
     char* content = json_extract_nested_content(respJson, "choices", "content");
     if (content && content[0]) return content;
     if (content) free(content);
 
-    content = json_extract_string(respJson, "content");
+    const char* choices = json_find_value(respJson, "choices");
+    if (choices)
+    {
+        const char* message = json_find_value(choices, "message");
+        if (message)
+        {
+            content = ExtractOpenAIContentText(message);
+            if (content && content[0]) return content;
+            if (content) free(content);
+        }
+
+        content = ExtractOpenAIContentText(choices);
+        if (content && content[0]) return content;
+        if (content) free(content);
+    }
+
+    content = ExtractOpenAIContentText(respJson);
     if (content && content[0]) return content;
     if (content) free(content);
 

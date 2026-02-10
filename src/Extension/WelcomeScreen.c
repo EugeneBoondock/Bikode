@@ -317,7 +317,7 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         SelectObject(hm, s_hFontTagline);
         SetTextColor(hm, C(DK_TEXT2, LT_TEXT2));
         RECT rcQ = { 0, startY + 148, cx, startY + 170 };
-        DrawTextW(hm, L"\x201C" L"I write what I like\x201D", -1, &rcQ,
+        DrawTextW(hm, L"\x201C" L"I code what I like\x201D", -1, &rcQ,
                   DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
         // --- Subtle divider ---
@@ -338,7 +338,7 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         SelectObject(hm, s_hFontFooter);
         SetTextColor(hm, C(DK_MUTED, LT_MUTED));
         RECT rcF = { 0, cy - 32, cx, cy - 12 };
-        DrawTextW(hm, L"Bikode  \x2022  A text editor for those who write what they like",
+        DrawTextW(hm, L"Bikode  \x2022  A text editor for those who code what they like",
                   -1, &rcF, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
         // Blit
