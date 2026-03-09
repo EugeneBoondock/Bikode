@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 /******************************************************************************
 *
 * Biko
@@ -31,6 +31,7 @@ extern "C" {
 #define IDM_AI_NEXT_HUNK        41012
 #define IDM_AI_PREV_HUNK        41013
 #define IDM_AI_TOGGLE_HUNK      41014
+#define IDM_AI_REFINE_PATCH     41015
 
 #define IDM_AI_CANCEL           41020
 #define IDM_AI_SETTINGS         41030
@@ -38,6 +39,8 @@ extern "C" {
 #define IDM_AI_TOGGLE_CHAT      41032
 #define IDM_AI_TOGGLE_TERMINAL  41033
 #define IDM_AI_TOGGLE_MARKDOWN  41034
+#define IDM_AI_TOGGLE_PROOF     41035
+#define IDM_BIKO_COMMAND_PALETTE 41036
 
 // Dark mode
 #define IDM_VIEW_DARKMODE       41040

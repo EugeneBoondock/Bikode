@@ -1,4 +1,4 @@
-﻿/******************************************************************************
+/******************************************************************************
 *
 * Biko
 *
@@ -380,6 +380,14 @@ void DiffParse_FreePatch(AIPatch* pPatch)
     if (pPatch->pszFilePath) n2e_Free(pPatch->pszFilePath);
     if (pPatch->pszRawDiff) n2e_Free(pPatch->pszRawDiff);
     if (pPatch->pszDescription) n2e_Free(pPatch->pszDescription);
+    if (pPatch->pszProofSummary) n2e_Free(pPatch->pszProofSummary);
+    if (pPatch->pszTouchedSymbols) n2e_Free(pPatch->pszTouchedSymbols);
+    if (pPatch->pszAssumptions) n2e_Free(pPatch->pszAssumptions);
+    if (pPatch->pszValidations) n2e_Free(pPatch->pszValidations);
+    if (pPatch->pszReviewerVotes) n2e_Free(pPatch->pszReviewerVotes);
+    if (pPatch->pszResidualRisk) n2e_Free(pPatch->pszResidualRisk);
+    if (pPatch->pszRollbackFingerprint) n2e_Free(pPatch->pszRollbackFingerprint);
+    if (pPatch->pszBaseBufferHash) n2e_Free(pPatch->pszBaseBufferHash);
     if (pPatch->pHunks)
     {
         for (int i = 0; i < pPatch->iHunkCount; i++)

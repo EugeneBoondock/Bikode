@@ -7,40 +7,40 @@ extern "C" {
 
 // =============================================================================
 // Comic Theme Color Palette
-// Classic 4-color comic pop art: yellow, red, blue, black+white
+// Comic-book noir meets futuristic dev tool.
 // =============================================================================
 
 // Panel / chrome colors
-#define COMIC_BLACK        RGB(10, 10, 10)
-#define COMIC_WHITE        RGB(255, 255, 250)
-#define COMIC_PAPER        RGB(255, 252, 230)       // warm paper yellow
-#define COMIC_PANEL_BG     RGB(20, 20, 22)          // night panel dark
-#define COMIC_BORDER       RGB(10, 10, 10)          // thick ink outline
-#define COMIC_SIDEBAR_BG   RGB(28, 28, 32)
+#define COMIC_BLACK        RGB(5, 6, 8)
+#define COMIC_WHITE        RGB(243, 245, 247)
+#define COMIC_PAPER        RGB(17, 21, 28)
+#define COMIC_PANEL_BG     RGB(17, 21, 28)
+#define COMIC_BORDER       RGB(5, 6, 8)
+#define COMIC_SIDEBAR_BG   RGB(23, 28, 36)
 
 // Accent pops
-#define COMIC_YELLOW       RGB(255, 220, 0)         // POW! yellow
-#define COMIC_RED          RGB(220, 30, 30)         // BOOM! red
-#define COMIC_BLUE         RGB(30, 100, 220)        // classic blue
-#define COMIC_CYAN         RGB(0, 210, 230)
-#define COMIC_GREEN        RGB(0, 200, 100)
-#define COMIC_ORANGE       RGB(255, 120, 20)
-#define COMIC_PURPLE       RGB(160, 40, 220)
+#define COMIC_YELLOW       RGB(255, 212, 0)
+#define COMIC_RED          RGB(255, 91, 91)
+#define COMIC_BLUE         RGB(53, 224, 255)
+#define COMIC_CYAN         RGB(53, 224, 255)
+#define COMIC_GREEN        RGB(31, 227, 138)
+#define COMIC_ORANGE       RGB(255, 155, 48)
+#define COMIC_PURPLE       RGB(255, 77, 166)
 
-// Editor / code colors - on cream background
-#define COMIC_CODE_BG       RGB(252, 248, 220)      // cream paper
-#define COMIC_CODE_TEXT     RGB(10, 10, 10)         // ink black
-#define COMIC_CODE_COMMENT  RGB(100, 140, 70)       // green felt pen
-#define COMIC_CODE_KEYWORD  RGB(30, 80, 200)        // stark blue
-#define COMIC_CODE_STRING   RGB(180, 30, 30)        // red ink
-#define COMIC_CODE_NUMBER   RGB(0, 140, 60)
-#define COMIC_CODE_TYPE     RGB(150, 0, 180)        // purple
-#define COMIC_CODE_FUNC     RGB(200, 100, 0)        // orange
-#define COMIC_CODE_PREPROC  RGB(80, 40, 200)
-#define COMIC_CODE_SEL      RGB(255, 220, 0)        // yellow selection
-#define COMIC_CODE_CARET    RGB(230, 245, 255)      // very light blue caret line
-#define COMIC_CODE_LINENUM  RGB(140, 120, 60)       // muted tan
-#define COMIC_CODE_GUTTER   RGB(240, 235, 200)      // slightly darker paper
+// Editor / code colors - calmer than the shell
+#define COMIC_CODE_BG       RGB(11, 15, 20)
+#define COMIC_CODE_TEXT     RGB(243, 245, 247)
+#define COMIC_CODE_COMMENT  RGB(120, 160, 124)
+#define COMIC_CODE_KEYWORD  RGB(53, 224, 255)
+#define COMIC_CODE_STRING   RGB(255, 155, 48)
+#define COMIC_CODE_NUMBER   RGB(31, 227, 138)
+#define COMIC_CODE_TYPE     RGB(255, 77, 166)
+#define COMIC_CODE_FUNC     RGB(255, 212, 0)
+#define COMIC_CODE_PREPROC  RGB(255, 91, 91)
+#define COMIC_CODE_SEL      RGB(22, 47, 63)
+#define COMIC_CODE_CARET    RGB(16, 21, 28)
+#define COMIC_CODE_LINENUM  RGB(110, 119, 133)
+#define COMIC_CODE_GUTTER   RGB(17, 22, 29)
 
 // Status bar
 #define COMIC_STATUS_BG    COMIC_BLACK

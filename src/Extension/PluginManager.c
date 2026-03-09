@@ -12,6 +12,7 @@
 
 #include "PluginManager.h"
 #include "BikoPluginAPI.h"
+#include "ui/theme/BikodeTheme.h"
 #include "DarkMode.h"
 #include "mono_json.h"
 #include <commctrl.h>
@@ -63,6 +64,7 @@
 
 #define PM_MIN_W            620
 #define PM_MIN_H            500
+#define PM_HEADER_H          86
 
 // Plugin table columns
 #define PM_COL_NAME         0
@@ -1571,7 +1573,16 @@ static LRESULT HandlePluginListCustomDraw(NMLVCUSTOMDRAW* pcd)
     case CDDS_PREPAINT:
         return CDRF_NOTIFYITEMDRAW;
     case CDDS_ITEMPREPAINT:
+    {
+        BOOL selected = (((NMLVCUSTOMDRAW*)pcd)->nmcd.uItemState & CDIS_SELECTED) != 0;
+        pcd->clrTextBk = selected
+            ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 22)
+            : BikodeTheme_GetColor(BKCLR_SURFACE_RAISED);
+        pcd->clrText = selected
+            ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY)
+            : BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY);
         return CDRF_NOTIFYSUBITEMDRAW;
+    }
     case (CDDS_ITEMPREPAINT | CDDS_SUBITEM):
     {
         if (pcd->iSubItem != PM_COL_ACTION)
@@ -1596,18 +1607,13 @@ static LRESULT HandlePluginListCustomDraw(NMLVCUSTOMDRAW* pcd)
         buttonRc.top += 3;
         buttonRc.bottom -= 3;
 
-        const DarkModeColors* colors = DarkMode_GetColors();
-        COLORREF rowBg = GetSysColor(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW);
-        COLORREF btnFill = RGB(228, 239, 252);
-        COLORREF btnBorder = RGB(126, 170, 220);
-        COLORREF btnText = RGB(9, 79, 142);
-        if (DarkMode_IsEnabled() && colors)
-        {
-            rowBg = selected ? colors->clrSelection : colors->clrSurface;
-            btnFill = selected ? RGB(53, 94, 141) : RGB(41, 73, 111);
-            btnBorder = selected ? RGB(103, 154, 212) : RGB(82, 130, 184);
-            btnText = RGB(235, 243, 252);
-        }
+        COLORREF rowBg = selected
+            ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 22)
+            : BikodeTheme_GetColor(BKCLR_SURFACE_RAISED);
+        COLORREF btnFill = BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW),
+                                           BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 28);
+        COLORREF btnBorder = BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW);
+        COLORREF btnText = BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY);
 
         HBRUSH hRow = CreateSolidBrush(rowBg);
         FillRect(pcd->nmcd.hdc, &cell, hRow);
@@ -1647,11 +1653,11 @@ static void LayoutPluginManagerControls(HWND hwnd)
     int h = rc.bottom - rc.top;
     if (w <= 0 || h <= 0) return;
 
-    const int m = 12;
-    const int gap = 6;
-    const int labelW = 50;
-    const int editH = 24;
-    const int btnH = 28;
+    const int m = 16;
+    const int gap = 8;
+    const int labelW = 0;
+    const int editH = 30;
+    const int btnH = 34;
     const int rowGap = 8;
 
     HWND hSearch = GetDlgItem(hwnd, IDC_PM_SEARCH);
@@ -1665,7 +1671,7 @@ static void LayoutPluginManagerControls(HWND hwnd)
     HWND hStatus = GetDlgItem(hwnd, IDC_PM_STATUS);
     HWND hClose = GetDlgItem(hwnd, IDC_PM_CLOSE);
 
-    int searchY = m;
+    int searchY = PM_HEADER_H;
     int searchX = m + labelW + gap;
     int searchW = max(140, w - searchX - m);
     MoveWindow(hSearch, searchX, searchY - 2, searchW, editH, TRUE);
@@ -1726,12 +1732,10 @@ static void ApplyPluginManagerTheme(HWND hwnd)
 
 static HBRUSH GetPluginMgrBackgroundBrush(void)
 {
-    if (DarkMode_IsEnabled())
-    {
-        HBRUSH h = DarkMode_GetBackgroundBrush();
-        if (h) return h;
-    }
-    return (HBRUSH)(COLOR_WINDOW + 1);
+    static HBRUSH hBrush = NULL;
+    if (!hBrush)
+        hBrush = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_APP_BG));
+    return hBrush;
 }
 
 static void RegisterPluginMgrClass(void)
@@ -2467,6 +2471,37 @@ static LRESULT CALLBACK PluginManagerWndProc(HWND hwnd, UINT msg, WPARAM wParam,
         return 1;
     }
 
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc, hero, title, subtitle, chip;
+        GetClientRect(hwnd, &rc);
+        hero = rc;
+        hero.bottom = PM_HEADER_H - 10;
+        BikodeTheme_DrawCutCornerPanel(hdc, &hero,
+            BikodeTheme_GetColor(BKCLR_SURFACE_RAISED),
+            BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+            BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+            16, TRUE);
+        title.left = 16; title.top = 14; title.right = rc.right - 16; title.bottom = 40;
+        subtitle.left = 18; subtitle.top = 38; subtitle.right = rc.right - 16; subtitle.bottom = 60;
+        chip.left = rc.right - 158; chip.top = 16; chip.right = rc.right - 16; chip.bottom = 42;
+        SetBkMode(hdc, TRANSPARENT);
+        SelectObject(hdc, BikodeTheme_GetFont(BKFONT_DISPLAY));
+        SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+        DrawTextW(hdc, L"PLUGIN MARKET", -1, &title, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        SelectObject(hdc, BikodeTheme_GetFont(BKFONT_UI_SMALL));
+        SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
+        DrawTextW(hdc, L"Featured tools, direct installs, and lightweight extensions.", -1, &subtitle,
+            DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+        BikodeTheme_DrawChip(hdc, &chip, L"OPENVSX + NPP", BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+            BikodeTheme_GetColor(BKCLR_STROKE_SOFT), BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
+            BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE, BikodeTheme_GetColor(BKCLR_HOT_MAGENTA));
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
     case WM_CREATE:
     {
         g_hwndPluginMgr = hwnd;
@@ -2476,7 +2511,7 @@ static LRESULT CALLBACK PluginManagerWndProc(HWND hwnd, UINT msg, WPARAM wParam,
         icc.dwICC = ICC_LISTVIEW_CLASSES;
         InitCommonControlsEx(&icc);
 
-        CreateWindowExW(0, L"STATIC", L"Search:",
+        CreateWindowExW(0, L"STATIC", L"",
             WS_CHILD | WS_VISIBLE, 12, 12, 50, 20, hwnd, NULL, NULL, NULL);
         CreateWindowExW(0, L"STATIC", L"",
             WS_CHILD | WS_VISIBLE, 12, 36, 500, 20, hwnd, (HMENU)(UINT_PTR)IDC_PM_STATUS, NULL, NULL);
@@ -2489,25 +2524,25 @@ static LRESULT CALLBACK PluginManagerWndProc(HWND hwnd, UINT msg, WPARAM wParam,
         if (hList)
         {
             ListView_SetExtendedListViewStyleEx(hList, 0,
-                LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_GRIDLINES | LVS_EX_LABELTIP);
+                LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
             SetupPluginManagerListColumns(hList);
             ResizePluginManagerListColumns(hList);
         }
 
         CreateWindowExW(0, L"BUTTON", L"Add...",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP, 12, 340, 78, 28, hwnd, (HMENU)(UINT_PTR)IDC_PM_ADD, NULL, NULL);
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 12, 340, 78, 28, hwnd, (HMENU)(UINT_PTR)IDC_PM_ADD, NULL, NULL);
         CreateWindowExW(0, L"BUTTON", L"Add URL...",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP, 96, 340, 84, 28, hwnd, (HMENU)(UINT_PTR)IDC_PM_ADDURL, NULL, NULL);
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 96, 340, 84, 28, hwnd, (HMENU)(UINT_PTR)IDC_PM_ADDURL, NULL, NULL);
         CreateWindowExW(0, L"BUTTON", L"Install",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP, 186, 340, 74, 28, hwnd, (HMENU)(UINT_PTR)IDC_PM_INSTALL, NULL, NULL);
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 186, 340, 74, 28, hwnd, (HMENU)(UINT_PTR)IDC_PM_INSTALL, NULL, NULL);
         CreateWindowExW(0, L"BUTTON", L"Enable/Disable",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP, 266, 340, 108, 28, hwnd, (HMENU)(UINT_PTR)IDC_PM_TOGGLE, NULL, NULL);
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 266, 340, 108, 28, hwnd, (HMENU)(UINT_PTR)IDC_PM_TOGGLE, NULL, NULL);
         CreateWindowExW(0, L"BUTTON", L"Uninstall",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP, 380, 340, 78, 28, hwnd, (HMENU)(UINT_PTR)IDC_PM_UNINSTALL, NULL, NULL);
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 380, 340, 78, 28, hwnd, (HMENU)(UINT_PTR)IDC_PM_UNINSTALL, NULL, NULL);
         CreateWindowExW(0, L"BUTTON", L"Reload",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP, 12, 374, 70, 26, hwnd, (HMENU)(UINT_PTR)IDC_PM_RELOAD, NULL, NULL);
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 12, 374, 70, 26, hwnd, (HMENU)(UINT_PTR)IDC_PM_RELOAD, NULL, NULL);
         CreateWindowExW(0, L"BUTTON", L"Close",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP, 458, 374, 66, 26, hwnd, (HMENU)(UINT_PTR)IDC_PM_CLOSE, NULL, NULL);
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, 458, 374, 66, 26, hwnd, (HMENU)(UINT_PTR)IDC_PM_CLOSE, NULL, NULL);
 
         ApplyPluginManagerTheme(hwnd);
         LayoutPluginManagerControls(hwnd);
@@ -2540,6 +2575,22 @@ static LRESULT CALLBACK PluginManagerWndProc(HWND hwnd, UINT msg, WPARAM wParam,
     {
         HBRUSH hBr = DarkMode_HandleCtlColor((HDC)wParam);
         if (hBr) return (LRESULT)hBr;
+        break;
+    }
+
+    case WM_DRAWITEM:
+    {
+        const DRAWITEMSTRUCT* dis = (const DRAWITEMSTRUCT*)lParam;
+        if (dis && dis->CtlType == ODT_BUTTON)
+        {
+            WCHAR text[64];
+            BOOL hot = (dis->itemState & ODS_HOTLIGHT) != 0;
+            BOOL down = (dis->itemState & ODS_SELECTED) != 0;
+            GetWindowTextW(dis->hwndItem, text, ARRAYSIZE(text));
+            BikodeTheme_DrawButton(dis->hDC, &dis->rcItem, text, BKGLYPH_NONE, hot, down,
+                dis->CtlID == IDC_PM_INSTALL, FALSE);
+            return TRUE;
+        }
         break;
     }
 

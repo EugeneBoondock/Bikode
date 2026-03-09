@@ -490,9 +490,13 @@
     <ClCompile Include="src\Extension\BikoToolbar.c" />
     <ClCompile Include="src\Extension\BikoMenuBar.c" />
     <ClCompile Include="src\Extension\BikoStatusBar.c" />
+    <ClCompile Include="src\Extension\ui\theme\BikodeTheme.c" />
+    <ClCompile Include="src\Extension\ui\chrome\BikoSideRail.c" />
+    <ClCompile Include="src\Extension\ui\dialogs\BikoCommandPalette.c" />
     <ClCompile Include="src\Extension\DarkMode.c" />
     <ClCompile Include="src\Extension\GitUI.c" />
     <ClCompile Include="src\Extension\Terminal.c" />
+    <ClCompile Include="src\Extension\ProofTray.c" />
     <ClCompile Include="src\Extension\FileManager.c" />
     <ClCompile Include="src\Extension\MarkdownPreview.c" />
     <ClCompile Include="src\Extension\WelcomeScreen.c" />

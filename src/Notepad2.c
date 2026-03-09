@@ -1,4 +1,4 @@
-﻿/******************************************************************************
+/******************************************************************************
 *
 *
 * Notepad2
@@ -60,6 +60,7 @@
 #include "Extension/ChatPanel.h"
 #include "Extension/DarkMode.h"
 #include "Extension/Terminal.h"
+#include "Extension/ProofTray.h"
 #include "Extension/FileManager.h"
 #include "Extension/GitUI.h"
 #include "Extension/MarkdownPreview.h"
@@ -67,6 +68,7 @@
 #include "Extension/BikoToolbar.h"
 #include "Extension/BikoMenuBar.h"
 #include "Extension/BikoStatusBar.h"
+#include "Extension/ui/chrome/BikoSideRail.h"
 
 
 
@@ -1096,6 +1098,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
         PluginManager_Shutdown();
         BikoMenuBar_Destroy();
         BikoStatusBar_Destroy();
+        BikoSideRail_Shutdown();
         AICommands_Shutdown();
         // [/biko]
 
@@ -1894,6 +1897,7 @@ LRESULT MsgCreate(HWND hwnd, WPARAM wParam, LPARAM lParam)
   // [biko]: Create custom owner-drawn toolbar (replaces rebar for dark mode)
   BikoToolbar_Create(hwnd, hInstance);
   BikoToolbar_Show(bShowToolbar);
+  BikoSideRail_Init(hwnd);
   // Hide the old rebar — we keep it for compatibility but don't show it
   ShowWindow(hwndReBar, SW_HIDE);
 
@@ -2175,6 +2179,7 @@ void MsgThemeChanged(HWND hwnd, WPARAM wParam, LPARAM lParam)
   n2e_DestroyProgressBarInStatusBar();
   // [biko]: Destroy custom status bar so it can be recreated
   BikoStatusBar_Destroy();
+  BikoSideRail_ApplyTheme();
   // [/biko]
   CreateBars(hwnd, hInstance);
   UpdateToolbar();
@@ -2185,7 +2190,7 @@ void MsgThemeChanged(HWND hwnd, WPARAM wParam, LPARAM lParam)
 }
 
 // Statusbar
-int aWidth[7];
+int aWidth[8];
 
 // [2e]: Resize statusbar groups #304
 void UpdateStatusbarWidth(const int cx)
@@ -2198,8 +2203,9 @@ void UpdateStatusbarWidth(const int cx)
   aWidth[4] = aWidth[3] + BikoStatusBar_CalcPaneWidth(L"OVR");
   aWidth[5] = aWidth[4] + BikoStatusBar_CalcPaneWidth(L"Lexer Name");
 
-  // [biko]: Git branch pane — fills remaining space
-  aWidth[6] = -1;
+  // [biko]: Git branch pane + mission pane
+  aWidth[6] = aWidth[5] + BikoStatusBar_CalcPaneWidth(L"\xE0A0 master  +9 ~9");
+  aWidth[7] = -1;
 
   BikoStatusBar_SetParts(COUNTOF(aWidth), aWidth);
   SendMessage(hwndStatus, SB_SETPARTS, COUNTOF(aWidth), (LPARAM)aWidth);
@@ -2228,21 +2234,8 @@ void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam)
   cx = LOWORD(lParam);
   cy = HIWORD(lParam);
 
-  // [biko]: Layout custom menu bar
+  // [biko]: Layout compact top bar
   {
-    int mbH = BikoMenuBar_GetHeight();
-    if (BikoMenuBar_GetHwnd())
-    {
-      SetWindowPos(BikoMenuBar_GetHwnd(), NULL, 0, y, cx, mbH, SWP_NOZORDER);
-      y += mbH;
-      cy -= mbH;
-    }
-  }
-  // [/biko]
-
-  if (bShowToolbar)
-  {
-    // [biko]: Use custom toolbar instead of rebar
     int tbH = BikoToolbar_GetHeight();
     if (BikoToolbar_GetHwnd())
     {
@@ -2250,13 +2243,21 @@ void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam)
       y += tbH;
       cy -= tbH;
     }
-    else
-    {
-      SetWindowPos(hwndReBar, NULL, 0, 0, LOWORD(lParam), cyReBar, SWP_NOZORDER);
-      y = cyReBar + cyReBarFrame;
-      cy -= cyReBar + cyReBarFrame;
-    }
-    // [/biko]
+  }
+  // [/biko]
+
+  if (BikoMenuBar_GetHwnd())
+  {
+    int mbH = BikoMenuBar_GetHeight();
+    SetWindowPos(BikoMenuBar_GetHwnd(), NULL, 0, y, cx, mbH, SWP_NOZORDER);
+    y += mbH;
+    cy -= mbH;
+  }
+  else if (bShowToolbar)
+  {
+    SetWindowPos(hwndReBar, NULL, 0, 0, LOWORD(lParam), cyReBar, SWP_NOZORDER);
+    y = cyReBar + cyReBarFrame;
+    cy -= cyReBar + cyReBarFrame;
   }
 
   if (bShowStatusbar)
@@ -2283,11 +2284,15 @@ void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam)
     // Terminal stays at the bottom
     panelH = Terminal_Layout(hwnd, cx, y + cy);
     cy -= panelH;
+    // Proof tray sits above the terminal
+    panelH = ProofTray_Layout(hwnd, cx, y + cy);
+    cy -= panelH;
     // Right-side panels first (they use absolute coords from window right edge)
     int chatW = ChatPanel_Layout(hwnd, cx, y, cy);
     cx -= chatW;
     int mdW = MarkdownPreview_Layout(hwnd, cx, cy);
     cx -= mdW;
+    BikoSideRail_Layout(hwnd, &x, &cx, y, cy);
     // File explorer takes width from the left
     FileManager_Layout(hwnd, &x, &cx, y, cy);
   }
@@ -7728,6 +7733,12 @@ void UpdateStatusbar()
     }
   } else {
     BikoStatusBar_SetText(STATUS_GIT, L"");
+  }
+
+  {
+    WCHAR wszMission[256];
+    AICommands_GetStatusText(wszMission, COUNTOF(wszMission));
+    BikoStatusBar_SetText(STATUS_MISSION, wszMission);
   }
   // [/biko]
 

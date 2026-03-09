@@ -17,6 +17,7 @@
 ******************************************************************************/
 
 #include "FileManager.h"
+#include "ui/theme/BikodeTheme.h"
 #include "DarkMode.h"
 #include "Terminal.h"
 #include "CommonUtils.h"
@@ -42,20 +43,20 @@ extern BOOL FileLoad(BOOL, BOOL, BOOL, BOOL, LPCWSTR);
 /* ═══════════════════════════════════════════════════════════════════
  * Constants
  * ═══════════════════════════════════════════════════════════════════ */
-#define PANEL_WIDTH_DEFAULT   240
+#define PANEL_WIDTH_DEFAULT   232
 #define PANEL_WIDTH_MIN       120
 #define PANEL_WIDTH_MAX       600
 #define SPLITTER_W            3
-#define HEADER_H              28
+#define HEADER_H              30
 
 /* Dark colours */
-#define C_DKBG      RGB(25, 25, 28)
-#define C_DKHDR     RGB(30, 30, 34)
-#define C_DKSPLIT   RGB(45, 45, 50)
-#define C_DKTXT     RGB(204, 204, 204)
-#define C_DKDIM     RGB(120, 120, 128)
-#define C_DKTREE    RGB(30, 30, 34)
-#define C_DKBORD    RGB(50, 50, 55)
+#define C_DKBG      RGB(17, 21, 28)
+#define C_DKHDR     RGB(23, 28, 36)
+#define C_DKSPLIT   RGB(42, 49, 64)
+#define C_DKTXT     RGB(243, 245, 247)
+#define C_DKDIM     RGB(168, 179, 194)
+#define C_DKTREE    RGB(14, 18, 24)
+#define C_DKBORD    RGB(42, 49, 64)
 
 /* Light colours */
 #define C_LTBG      RGB(250, 250, 250)
@@ -184,7 +185,7 @@ static BOOL CreatePanel(HWND hwndParent) {
         if (!s_hwndTree) return FALSE;
 
         SendMessage(s_hwndTree, WM_SETFONT, (WPARAM)s_fontTree, TRUE);
-        TreeView_SetItemHeight(s_hwndTree, 22);
+        TreeView_SetItemHeight(s_hwndTree, 20);
 
         /* Apply dark mode explorer theme if available */
         if (DarkMode_IsEnabled()) {
@@ -573,40 +574,36 @@ static BOOL GetItemPath(HTREEITEM hItem, WCHAR *pszPath, int cch) {
  * Drawing
  * ═══════════════════════════════════════════════════════════════════ */
 static void DrawHeader(HDC hdc, RECT *prc) {
-    BOOL dk = DarkMode_IsEnabled();
-    COLORREF bgClr  = dk ? C_DKHDR  : C_LTHDR;
-    COLORREF txtClr = dk ? C_DKDIM  : C_LTDIM;
-    COLORREF brdClr = dk ? C_DKBORD : C_LTBORD;
+    RECT chip = { prc->left + 10, prc->top + 7, prc->left + 108, prc->bottom - 7 };
+    RECT pathRc = { chip.right + 8, prc->top + 6, prc->right - 8, prc->bottom - 6 };
+    WCHAR title[128];
 
-    HBRUSH hbr = CreateSolidBrush(bgClr);
-    FillRect(hdc, prc, hbr);
-    DeleteObject(hbr);
+    BikodeTheme_DrawRoundedPanel(hdc, prc,
+        BikodeTheme_GetColor(BKCLR_SURFACE_RAISED),
+        BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        0, TRUE);
+    BikodeTheme_DrawChip(hdc, &chip, L"EXPLORER",
+        BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
+        BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE, BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
 
-    /* Border at bottom */
-    HPEN pen = CreatePen(PS_SOLID, 1, brdClr);
-    HPEN old = SelectObject(hdc, pen);
-    MoveToEx(hdc, prc->left, prc->bottom - 1, NULL);
-    LineTo(hdc, prc->right, prc->bottom - 1);
-    SelectObject(hdc, old);
-    DeleteObject(pen);
+    title[0] = L'\0';
+    if (s_rootPath[0])
+        lstrcpynW(title, s_rootPath, ARRAYSIZE(title));
 
-    /* Title text */
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, txtClr);
-    HFONT oldFont = SelectObject(hdc, s_fontHdr);
-    RECT textRc = *prc;
-    textRc.left += 10;
-    textRc.right -= 4;
-
-    /* Show "EXPLORER" label in caps, minimal style */
-    DrawTextW(hdc, L"EXPLORER", -1, &textRc,
-              DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
+    HFONT oldFont = SelectObject(hdc, BikodeTheme_GetFont(BKFONT_UI_SMALL));
+    DrawTextW(hdc, title[0] ? title : L"Open a folder to map your repo", -1, &pathRc,
+              DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
     SelectObject(hdc, oldFont);
 }
 
 static void DrawSplitter(HDC hdc, RECT *prc) {
-    BOOL dk = DarkMode_IsEnabled();
-    HBRUSH hbr = CreateSolidBrush(dk ? C_DKSPLIT : C_LTSPLIT);
+    HBRUSH hbr = CreateSolidBrush(BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW),
+                                                  BikodeTheme_GetColor(BKCLR_STROKE_SOFT), 20));
     FillRect(hdc, prc, hbr);
     DeleteObject(hbr);
 }

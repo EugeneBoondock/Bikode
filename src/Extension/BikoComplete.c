@@ -5,6 +5,7 @@
 // Define max words and buffer size for completion
 #define BIKO_MAX_AUTOCOMPLETION_WORDS 1000
 #define BIKO_MAX_WORD_LENGTH 64
+#define BIKO_MAX_SCAN_BYTES (2 * 1024 * 1024)
 
 typedef struct {
     char word[BIKO_MAX_WORD_LENGTH];
@@ -19,7 +20,7 @@ void n2e_ShowAutoComplete(HWND hwndEdit) {
     int iWordStart = SendMessage(hwndEdit, SCI_WORDSTARTPOSITION, iCurPos, TRUE);
     int iWordLen = iCurPos - iWordStart;
 
-    if (iWordLen < 3) // Only trigger if they typed at least 3 chars
+    if (iWordLen < 3 || iWordLen >= BIKO_MAX_WORD_LENGTH) // Only trigger if they typed at least 3 chars
         return;
 
     char szCurrentWord[BIKO_MAX_WORD_LENGTH] = {0};
@@ -31,9 +32,16 @@ void n2e_ShowAutoComplete(HWND hwndEdit) {
 
     BikoCompletionWord* words = (BikoCompletionWord*)malloc(sizeof(BikoCompletionWord) * BIKO_MAX_AUTOCOMPLETION_WORDS);
     int wordCount = 0;
+    if (!words) {
+        return;
+    }
 
     // Collect words from the document
     int iDocLen = SendMessage(hwndEdit, SCI_GETLENGTH, 0, 0);
+    if (iDocLen <= 0 || iDocLen > BIKO_MAX_SCAN_BYTES) {
+        free(words);
+        return;
+    }
     char* docText = (char*)malloc(iDocLen + 1);
     if (!docText) { free(words); return; }
 
@@ -42,6 +50,7 @@ void n2e_ShowAutoComplete(HWND hwndEdit) {
     tr.chrg.cpMax = iDocLen;
     tr.lpstrText = docText;
     SendMessage(hwndEdit, SCI_GETTEXTRANGE, 0, (LPARAM)&tr);
+    docText[iDocLen] = '\0';
 
     char* context = NULL;
     char* token = strtok_s(docText, " \t\r\n.,;:!?()[]{}<>\"'=+-*/\\|%&^~$", &context);
@@ -81,6 +90,10 @@ void n2e_ShowAutoComplete(HWND hwndEdit) {
     // We will build a space separated list of words
     int listBufferSize = uniqueCount * (BIKO_MAX_WORD_LENGTH + 1);
     char* listBuffer = (char*)malloc(listBufferSize);
+    if (!listBuffer) {
+        free(words);
+        return;
+    }
     listBuffer[0] = '\0';
 
     for(int i=0; i<uniqueCount; i++) {

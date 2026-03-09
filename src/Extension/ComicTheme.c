@@ -220,7 +220,7 @@ void ComicTheme_ApplyToEditor(HWND hwndEdit)
 {
     if (!hwndEdit) return;
 
-    // Base styles — cream paper, ink black
+    // Base styles — calmer editor plane than the surrounding chrome
     SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_DEFAULT, COMIC_CODE_BG);
     SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_DEFAULT, COMIC_CODE_TEXT);
     SendMessage(hwndEdit, SCI_STYLECLEARALL, 0, 0);
@@ -237,32 +237,68 @@ void ComicTheme_ApplyToEditor(HWND hwndEdit)
     SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_PREPROCESSOR,   COMIC_CODE_PREPROC);
     SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_IDENTIFIER,     COMIC_CODE_TEXT);
 
-    // Selection: bright yellow highlight
+    // Selection: controlled cyan wash
     SendMessage(hwndEdit, SCI_SETSELBACK, TRUE, COMIC_CODE_SEL);
-    SendMessage(hwndEdit, SCI_SETSELFORE, TRUE, COMIC_BLACK);
+    SendMessage(hwndEdit, SCI_SETSELFORE, TRUE, COMIC_WHITE);
+    SendMessage(hwndEdit, SCI_SETSELALPHA, 96, 0);
+    SendMessage(hwndEdit, SCI_SETSELEOLFILLED, TRUE, 0);
 
     // Caret
-    SendMessage(hwndEdit, SCI_SETCARETFORE, COMIC_RED, 0);
+    SendMessage(hwndEdit, SCI_SETCARETFORE, COMIC_YELLOW, 0);
     SendMessage(hwndEdit, SCI_SETCARETWIDTH, 2, 0);
 
-    // Caret line: subtle blue wash
+    // Caret line: subtle chamber glow
     SendMessage(hwndEdit, SCI_SETCARETLINEVISIBLE, TRUE, 0);
     SendMessage(hwndEdit, SCI_SETCARETLINEBACK, COMIC_CODE_CARET, 0);
+    SendMessage(hwndEdit, SCI_SETCARETLINEBACKALPHA, 28, 0);
 
-    // Gutter / line numbers — tan on slightly darker cream
+    // Gutter / line numbers
     SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_LINENUMBER, COMIC_CODE_GUTTER);
     SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_LINENUMBER, COMIC_CODE_LINENUM);
-    SendMessage(hwndEdit, SCI_STYLESETBOLD, STYLE_LINENUMBER, TRUE);
+    SendMessage(hwndEdit, SCI_STYLESETBOLD, STYLE_LINENUMBER, FALSE);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_INDENTGUIDE, COMIC_CODE_BG);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_INDENTGUIDE, RGB(34, 40, 50));
 
     // Fold margin
     SendMessage(hwndEdit, SCI_SETFOLDMARGINCOLOUR, TRUE, COMIC_CODE_GUTTER);
     SendMessage(hwndEdit, SCI_SETFOLDMARGINHICOLOUR, TRUE, COMIC_CODE_BG);
 
-    // Edge / right column hint: subtle yellow
-    SendMessage(hwndEdit, SCI_SETEDGECOLOUR, COMIC_YELLOW, 0);
+    // Brace matches and find markers
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_BRACELIGHT, COMIC_BLACK);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_BRACELIGHT, COMIC_YELLOW);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_BRACEBAD, COMIC_WHITE);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_BRACEBAD, COMIC_RED);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_LINEINDICATOR, COMIC_BLACK);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_LINEINDICATOR, RGB(80, 54, 12));
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_LINEINDICATOR_FIRST_LAST, COMIC_WHITE);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_LINEINDICATOR_FIRST_LAST, RGB(92, 65, 18));
 
-    // Indicators: squiggles use red
+    // Edge / right column hint
+    SendMessage(hwndEdit, SCI_SETEDGECOLOUR, RGB(34, 40, 50), 0);
+    SendMessage(hwndEdit, SCI_SETWHITESPACEFORE, TRUE, RGB(28, 34, 42));
+    SendMessage(hwndEdit, SCI_SETWHITESPACEBACK, TRUE, COMIC_CODE_BG);
+
+    // Indicators: diagnostics, diffs, and AI callouts
+    SendMessage(hwndEdit, SCI_INDICSETSTYLE, 0, INDIC_SQUIGGLE);
     SendMessage(hwndEdit, SCI_INDICSETFORE, 0, COMIC_RED);
+    SendMessage(hwndEdit, SCI_INDICSETALPHA, 0, 150);
+    SendMessage(hwndEdit, SCI_INDICSETSTYLE, 28, INDIC_ROUNDBOX);
+    SendMessage(hwndEdit, SCI_INDICSETFORE, 28, COMIC_CYAN);
+    SendMessage(hwndEdit, SCI_INDICSETALPHA, 28, 55);
+    SendMessage(hwndEdit, SCI_INDICSETOUTLINEALPHA, 28, 180);
+    SendMessage(hwndEdit, SCI_INDICSETSTYLE, 29, INDIC_STRAIGHTBOX);
+    SendMessage(hwndEdit, SCI_INDICSETFORE, 29, COMIC_YELLOW);
+    SendMessage(hwndEdit, SCI_INDICSETALPHA, 29, 42);
+    SendMessage(hwndEdit, SCI_INDICSETSTYLE, 30, INDIC_STRAIGHTBOX);
+    SendMessage(hwndEdit, SCI_INDICSETFORE, 30, COMIC_PURPLE);
+    SendMessage(hwndEdit, SCI_INDICSETALPHA, 30, 42);
+    SendMessage(hwndEdit, SCI_INDICSETSTYLE, 31, INDIC_SQUIGGLE);
+    SendMessage(hwndEdit, SCI_INDICSETFORE, 31, COMIC_RED);
+
+    // Style 240 is reserved for boxed AI annotations.
+    SendMessage(hwndEdit, SCI_STYLESETFORE, 240, COMIC_WHITE);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, 240, RGB(23, 28, 36));
+    SendMessage(hwndEdit, SCI_STYLESETBOLD, 240, TRUE);
 }
 
 // =============================================================================

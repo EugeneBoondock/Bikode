@@ -10,33 +10,22 @@
 ******************************************************************************/
 
 #include "BikoMenuBar.h"
+#include "ui/theme/BikodeTheme.h"
+#include "AICommands.h"
+#include "GitUI.h"
+#include "FileManager.h"
 #include "DarkMode.h"
 #include <windowsx.h>
 #include <commctrl.h>
+#include <string.h>
 
 //=============================================================================
 // Design constants
 //=============================================================================
 
-#define BMB_HEIGHT          22
-#define BMB_PAD_X           10   // horizontal padding around each label
-#define BMB_PAD_Y            2   // vertical padding
-
-// Dark palette
-#define BMB_DK_BG           RGB(24, 24, 24)
-#define BMB_DK_TEXT         RGB(190, 190, 195)
-#define BMB_DK_TEXT_DIM     RGB(120, 120, 125)
-#define BMB_DK_HOVER        RGB(50, 50, 55)
-#define BMB_DK_PRESS        RGB(65, 65, 72)
-#define BMB_DK_HIGHLIGHT    RGB(45, 45, 50)
-
-// Light palette
-#define BMB_LT_BG           RGB(245, 245, 245)
-#define BMB_LT_TEXT         RGB(30, 30, 30)
-#define BMB_LT_TEXT_DIM     RGB(100, 100, 105)
-#define BMB_LT_HOVER        RGB(225, 225, 230)
-#define BMB_LT_PRESS        RGB(210, 210, 215)
-#define BMB_LT_HIGHLIGHT    RGB(230, 230, 235)
+#define BMB_HEIGHT          36
+#define BMB_PAD_X           10
+#define BMB_MENU_START_X    10
 
 // Maximum number of top-level menu items we support
 #define BMB_MAX_ITEMS       16
@@ -75,6 +64,7 @@ static BOOL       s_tracking   = FALSE;
 static BOOL       s_altMode    = FALSE; // keyboard alt-navigation active
 static int        s_altFocus   = -1;    // keyboard-focused item in alt mode
 static BOOL       s_popupLoop  = FALSE; // TRUE while a popup is open
+static RECT       s_rcCommandBox = { 0 };
 
 static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
@@ -90,13 +80,11 @@ static void CreateMenuFont(void)
   ncm.cbSize = sizeof(ncm);
   SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
 
-  // Use the menu font from system metrics, slightly tuned
-  ncm.lfMenuFont.lfWeight = FW_NORMAL;
+  ncm.lfMenuFont.lfWeight = FW_SEMIBOLD;
+  ncm.lfMenuFont.lfHeight = -13;
   s_hFont = CreateFontIndirectW(&ncm.lfMenuFont);
-
-  if (!s_hFont) {
-    s_hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-  }
+  if (!s_hFont)
+    s_hFont = BikodeTheme_GetFont(BKFONT_UI_BOLD);
 }
 
 //=============================================================================
@@ -115,7 +103,7 @@ static void BuildItems(void)
   HDC hdc = GetDC(s_hwnd ? s_hwnd : s_hwndParent);
   HFONT of = (HFONT)SelectObject(hdc, s_hFont);
 
-  int x = 0;
+  int x = BMB_MENU_START_X;
 
   for (int i = 0; i < count; i++) {
     MENUITEMINFOW mii;
@@ -143,11 +131,27 @@ static void BuildItems(void)
       s_items[i].szLabel[d++] = s_items[i].szRaw[s];
     }
     s_items[i].szLabel[d] = 0;
+    if (d == 0 && s_items[i].hPopup) {
+      UINT firstCmd = GetMenuItemID(s_items[i].hPopup, 0);
+      if (firstCmd == IDM_AI_TOGGLE_CHAT || firstCmd == IDM_BIKO_COMMAND_PALETTE ||
+          firstCmd == IDM_AI_TRANSFORM) {
+        lstrcpyW(s_items[i].szRaw, L"&Agents");
+        lstrcpyW(s_items[i].szLabel, L"Agents");
+        s_items[i].chMnemonic = L'a';
+        d = 6;
+      }
+      else if (firstCmd == IDM_GIT_STATUS || firstCmd == IDM_GIT_DIFF) {
+        lstrcpyW(s_items[i].szRaw, L"&Git");
+        lstrcpyW(s_items[i].szLabel, L"Git");
+        s_items[i].chMnemonic = L'g';
+        d = 3;
+      }
+    }
 
     // Measure text width
     SIZE sz;
     GetTextExtentPoint32W(hdc, s_items[i].szLabel, d, &sz);
-    s_items[i].width = sz.cx + BMB_PAD_X * 2;
+    s_items[i].width = sz.cx + BMB_PAD_X * 2 + 6;
     s_items[i].x = x;
     x += s_items[i].width;
 
@@ -201,52 +205,71 @@ static void DrawMenuText(HDC hdc, const WCHAR *szRaw, RECT *prc,
   DrawTextW(hdc, szRaw, -1, prc, dtFlags);
 }
 
+static void BuildWorkspaceLabel(WCHAR* wszBuf, int cchBuf)
+{
+  const WCHAR* root = FileManager_GetRootPath();
+  const WCHAR* leaf = NULL;
+  if (!wszBuf || cchBuf <= 0) return;
+  wszBuf[0] = L'\0';
+  if (!root || !*root) {
+    lstrcpynW(wszBuf, L"No workspace", cchBuf);
+    return;
+  }
+  leaf = wcsrchr(root, L'\\');
+  if (leaf && leaf[1]) leaf++;
+  else leaf = root;
+  lstrcpynW(wszBuf, leaf, cchBuf);
+}
+
 static void Paint(HWND hwnd, HDC hdc)
 {
   RECT rc;
   GetClientRect(hwnd, &rc);
   if (rc.right <= 0 || rc.bottom <= 0) return;
 
-  BOOL dk = DarkMode_IsEnabled();
-  COLORREF cBg   = dk ? BMB_DK_BG      : BMB_LT_BG;
-  COLORREF cText = dk ? BMB_DK_TEXT     : BMB_LT_TEXT;
-  COLORREF cHov  = dk ? BMB_DK_HOVER   : BMB_LT_HOVER;
-  COLORREF cPrs  = dk ? BMB_DK_PRESS   : BMB_LT_PRESS;
-
-  // Double-buffer
   HDC mem = CreateCompatibleDC(hdc);
   HBITMAP bm = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
   HBITMAP obm = (HBITMAP)SelectObject(mem, bm);
-
-  // Background
-  HBRUSH bg = CreateSolidBrush(cBg);
-  FillRect(mem, &rc, bg);
-  DeleteObject(bg);
-
   HFONT of = (HFONT)SelectObject(mem, s_hFont);
+
+  SetBkMode(mem, TRANSPARENT);
+  BikodeTheme_FillHalftone(mem, &rc, BikodeTheme_GetColor(BKCLR_SURFACE_MAIN));
+
+  {
+    HPEN hOuter = CreatePen(PS_SOLID, 1, BikodeTheme_GetColor(BKCLR_STROKE_DARK));
+    HPEN hInner = CreatePen(PS_SOLID, 1, BikodeTheme_GetColor(BKCLR_STROKE_SOFT));
+    HPEN hOld = (HPEN)SelectObject(mem, hOuter);
+    MoveToEx(mem, rc.left, rc.bottom - 2, NULL);
+    LineTo(mem, rc.right, rc.bottom - 2);
+    SelectObject(mem, hInner);
+    MoveToEx(mem, rc.left, rc.bottom - 1, NULL);
+    LineTo(mem, rc.right, rc.bottom - 1);
+    SelectObject(mem, hOld);
+    DeleteObject(hOuter);
+    DeleteObject(hInner);
+  }
+
+  SetRectEmpty(&s_rcCommandBox);
 
   for (int i = 0; i < s_itemCount; i++) {
     RECT ir = ItemRect(i);
-
-    // Determine background state
-    COLORREF itemBg = cBg;
-    if (i == s_open)                          itemBg = cPrs;
-    else if (i == s_hover)                    itemBg = cHov;
-    else if (s_altMode && i == s_altFocus)    itemBg = cHov;
-
-    if (itemBg != cBg) {
-      HBRUSH hb = CreateSolidBrush(itemBg);
-      FillRect(mem, &ir, hb);
-      DeleteObject(hb);
+    ir.top += 5;
+    ir.bottom -= 5;
+    if (i == s_open || i == s_hover || (s_altMode && i == s_altFocus)) {
+      BikodeTheme_DrawRoundedPanel(mem, &ir,
+          (i == s_open)
+              ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 18)
+              : BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 14),
+          BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+          (i == s_open) ? BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW) : BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+          8, FALSE);
     }
-
-    // Text
-    COLORREF tc = cText;
-    DrawMenuText(mem, s_items[i].szRaw, &ir, tc, (i == s_open));
+    DrawMenuText(mem, s_items[i].szRaw, &ir,
+        (i == s_open) ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY) : BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
+        (i == s_open));
   }
 
   SelectObject(mem, of);
-
   BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
   SelectObject(mem, obm);
   DeleteObject(bm);

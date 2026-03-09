@@ -18,6 +18,7 @@
 ******************************************************************************/
 
 #include "Terminal.h"
+#include "ui/theme/BikodeTheme.h"
 #include "DarkMode.h"
 #include "CommonUtils.h"
 #include <uxtheme.h>
@@ -45,7 +46,7 @@ static BOOL g_havePTY = FALSE;
 /* ═══════════════════════════════════════════════════════════════════
  * Constants
  * ═══════════════════════════════════════════════════════════════════ */
-#define PANEL_HEIGHT_DEFAULT  220
+#define PANEL_HEIGHT_DEFAULT  180
 #define SPLITTER_H            3
 #define HEADER_H              32
 #define TIMER_HEALTH          1
@@ -53,15 +54,15 @@ static BOOL g_havePTY = FALSE;
 #define WM_TERMDATA           (WM_USER + 200)
 
 /* colours */
-#define C_DKBG     RGB(12,12,12)
-#define C_DKFG     RGB(204,204,204)
-#define C_DKHDR    RGB(25,25,28)
-#define C_DKSPLIT  RGB(45,45,50)
-#define C_DKTXT    RGB(204,204,204)
-#define C_DKDIM    RGB(120,120,128)
-#define C_DKBTN    RGB(50,50,56)
-#define C_DKBORD   RGB(50,50,55)
-#define C_DKDROP   RGB(40,40,44)
+#define C_DKBG     RGB(9,12,17)
+#define C_DKFG     RGB(243,245,247)
+#define C_DKHDR    RGB(23,28,36)
+#define C_DKSPLIT  RGB(42,49,64)
+#define C_DKTXT    RGB(243,245,247)
+#define C_DKDIM    RGB(168,179,194)
+#define C_DKBTN    RGB(29,36,48)
+#define C_DKBORD   RGB(42,49,64)
+#define C_DKDROP   RGB(17,21,28)
 
 #define C_LTBG     RGB(255,255,255)
 #define C_LTFG     RGB(17,24,39)
@@ -1387,67 +1388,77 @@ static void ShowShellMenu(HWND hwnd) {
  * Header painting
  * ═══════════════════════════════════════════════════════════════════ */
 static void CalcBtns(int w) {
-    int bs = 22, by = SPLITTER_H + (HEADER_H - 22) / 2;
+    int bs = 20, by = SPLITTER_H + (HEADER_H - 20) / 2;
     g_rcClose.left = w - bs - 8; g_rcClose.top = by;
     g_rcClose.right = g_rcClose.left + bs; g_rcClose.bottom = by + bs;
     g_rcNew.left = g_rcClose.left - bs - 4; g_rcNew.top = by;
     g_rcNew.right = g_rcNew.left + bs; g_rcNew.bottom = by + bs;
-    g_rcDrop.left = 10; g_rcDrop.top = SPLITTER_H + (HEADER_H - 22) / 2;
-    g_rcDrop.right = 10 + 140; g_rcDrop.bottom = g_rcDrop.top + 22;
+    g_rcDrop.left = 10; g_rcDrop.top = SPLITTER_H + (HEADER_H - 20) / 2;
+    g_rcDrop.right = 10 + 118; g_rcDrop.bottom = g_rcDrop.top + 20;
 }
 
 static void PaintHeader(HWND hwnd, HDC dc, RECT *rc) {
-    BOOL dk = DarkMode_IsEnabled();
+    WCHAR cwd[MAX_PATH] = L"";
+    RECT deck, shellChip, cwdChip, stateChip;
+    WCHAR runState[32] = L"IDLE";
+    COLORREF stateAccent = BikodeTheme_GetColor(BKCLR_TEXT_MUTED);
     int W = rc->right;
     CalcBtns(W);
+    GetCurrentDirectoryW(MAX_PATH, cwd);
+    if (g_term && InterlockedCompareExchange(&g_term->alive, 0, 0)) {
+        lstrcpyW(runState, L"RUNNING");
+        stateAccent = BikodeTheme_GetColor(BKCLR_SUCCESS_GREEN);
+    }
 
-    RECT rH = { 0, SPLITTER_H, W, SPLITTER_H + HEADER_H };
-    HBRUSH hb = CreateSolidBrush(dk ? C_DKHDR : C_LTHDR);
-    FillRect(dc, &rH, hb); DeleteObject(hb);
-    RECT rB = rH; rB.top = rB.bottom - 1;
-    hb = CreateSolidBrush(dk ? C_DKBORD : C_LTBORD);
-    FillRect(dc, &rB, hb); DeleteObject(hb);
+    deck.left = 0;
+    deck.top = SPLITTER_H;
+    deck.right = W;
+    deck.bottom = SPLITTER_H + HEADER_H;
+    BikodeTheme_DrawRoundedPanel(dc, &deck,
+        BikodeTheme_GetColor(BKCLR_SURFACE_RAISED),
+        BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        0, TRUE);
 
     SetBkMode(dc, TRANSPARENT);
-
-    /* Dropdown */
-    { HBRUSH bg = CreateSolidBrush(dk ? C_DKDROP : C_LTDROP);
-      HPEN pe = CreatePen(PS_SOLID, 1, dk ? C_DKBORD : C_LTBORD);
-      HBRUSH ob = SelectObject(dc, bg); HPEN op = SelectObject(dc, pe);
-      RoundRect(dc, g_rcDrop.left, g_rcDrop.top, g_rcDrop.right, g_rcDrop.bottom, 6, 6);
-      SelectObject(dc, ob); SelectObject(dc, op);
-      DeleteObject(bg); DeleteObject(pe); }
-    if (g_fontDrop) SelectObject(dc, g_fontDrop);
-    SetTextColor(dc, dk ? C_DKTXT : C_LTTXT);
-    RECT rl = g_rcDrop; rl.left += 8; rl.right -= 18;
-    DrawTextW(dc, g_shells[g_curShell].label, -1, &rl, DT_SINGLELINE|DT_VCENTER|DT_LEFT|DT_NOPREFIX);
-    SetTextColor(dc, dk ? C_DKDIM : C_LTDIM);
-    RECT rv = g_rcDrop; rv.left = rv.right - 18;
-    DrawTextW(dc, L"\x25BC", 1, &rv, DT_SINGLELINE|DT_VCENTER|DT_CENTER);
+    shellChip.left = 10;
+    shellChip.top = deck.top + 6;
+    shellChip.right = 106;
+    shellChip.bottom = deck.bottom - 6;
+    stateChip.right = g_rcNew.left - 10;
+    stateChip.left = stateChip.right - 86;
+    stateChip.top = shellChip.top;
+    stateChip.bottom = shellChip.bottom;
+    cwdChip.left = shellChip.right + 8;
+    cwdChip.top = shellChip.top;
+    cwdChip.right = stateChip.left - 8;
+    cwdChip.bottom = shellChip.bottom;
+    BikodeTheme_DrawChip(dc, &shellChip, g_shells[g_curShell].label,
+        BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
+        BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE, BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+    if (cwdChip.right > cwdChip.left + 40) {
+        BikodeTheme_DrawChip(dc, &cwdChip, cwd,
+            BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+            BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+            BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
+            BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE, BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN));
+    }
+    BikodeTheme_DrawChip(dc, &stateChip, runState,
+        BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
+        BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE, stateAccent);
 
     /* Close button */
-    if (g_hoverClose) {
-        HBRUSH h2 = CreateSolidBrush(dk ? C_DKBTN : C_LTBTN);
-        HPEN p2 = CreatePen(PS_SOLID, 1, dk ? C_DKBTN : C_LTBTN);
-        HBRUSH o2 = SelectObject(dc, h2); HPEN o3 = SelectObject(dc, p2);
-        RoundRect(dc, g_rcClose.left, g_rcClose.top, g_rcClose.right, g_rcClose.bottom, 4, 4);
-        SelectObject(dc, o2); SelectObject(dc, o3);
-        DeleteObject(h2); DeleteObject(p2);
-    }
-    SetTextColor(dc, dk ? C_DKDIM : C_LTDIM);
-    if (g_fontDrop) SelectObject(dc, g_fontDrop);
+    BikodeTheme_DrawButton(dc, &g_rcClose, L"", BKGLYPH_NONE, g_hoverClose, FALSE, FALSE, FALSE);
+    SetTextColor(dc, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
     DrawTextW(dc, L"\x2715", 1, &g_rcClose, DT_SINGLELINE|DT_VCENTER|DT_CENTER);
 
     /* New button */
-    if (g_hoverNew) {
-        HBRUSH h2 = CreateSolidBrush(dk ? C_DKBTN : C_LTBTN);
-        HPEN p2 = CreatePen(PS_SOLID, 1, dk ? C_DKBTN : C_LTBTN);
-        HBRUSH o2 = SelectObject(dc, h2); HPEN o3 = SelectObject(dc, p2);
-        RoundRect(dc, g_rcNew.left, g_rcNew.top, g_rcNew.right, g_rcNew.bottom, 4, 4);
-        SelectObject(dc, o2); SelectObject(dc, o3);
-        DeleteObject(h2); DeleteObject(p2);
-    }
-    SetTextColor(dc, dk ? C_DKDIM : C_LTDIM);
+    BikodeTheme_DrawButton(dc, &g_rcNew, L"", BKGLYPH_TERMINAL, g_hoverNew, FALSE, FALSE, FALSE);
+    SetTextColor(dc, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
     DrawTextW(dc, L"+", 1, &g_rcNew, DT_SINGLELINE|DT_VCENTER|DT_CENTER);
 }
 

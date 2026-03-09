@@ -1,4 +1,4 @@
-﻿/******************************************************************************
+/******************************************************************************
 *
 * Biko
 *
@@ -9,6 +9,8 @@
 
 #include "AIContext.h"
 #include "CommonUtils.h"
+#include "FileManager.h"
+#include "GitUI.h"
 #include "SciCall.h"
 #include "Scintilla.h"
 #include <Shlwapi.h>
@@ -99,6 +101,125 @@ static const char* GetLanguageFromExtension(LPCWSTR wszPath)
     if (_wcsicmp(ext, L"makefile") == 0) return "makefile";
 
     return "text";
+}
+
+static char* ai_ctx_strdup(const char* s)
+{
+    if (!s) return NULL;
+    int len = (int)strlen(s);
+    char* p = (char*)n2e_Alloc(len + 1);
+    if (p)
+        memcpy(p, s, len + 1);
+    return p;
+}
+
+static char* AIContext_Utf8FromWide(LPCWSTR wszText)
+{
+    if (!wszText || !wszText[0]) return NULL;
+    int needed = WideCharToMultiByte(CP_UTF8, 0, wszText, -1, NULL, 0, NULL, NULL);
+    if (needed <= 0) return NULL;
+    char* p = (char*)n2e_Alloc(needed);
+    if (p)
+        WideCharToMultiByte(CP_UTF8, 0, wszText, -1, p, needed, NULL, NULL);
+    return p;
+}
+
+static unsigned __int64 AIContext_Fnv1a64(const char* s)
+{
+    const unsigned char* p = (const unsigned char*)(s ? s : "");
+    unsigned __int64 h = 1469598103934665603ULL;
+    while (*p)
+    {
+        h ^= (unsigned __int64)(*p++);
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+static char* AIContext_BuildBufferHash(const char* pszContent)
+{
+    char buf[32];
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%016llx", AIContext_Fnv1a64(pszContent));
+    return ai_ctx_strdup(buf);
+}
+
+static BOOL AIContext_PathHasLeaf(LPCWSTR wszDir, LPCWSTR wszLeaf)
+{
+    if (!wszDir || !wszDir[0] || !wszLeaf || !wszLeaf[0]) return FALSE;
+    WCHAR wszPath[MAX_PATH];
+    _snwprintf_s(wszPath, _countof(wszPath), _TRUNCATE, L"%s\\%s", wszDir, wszLeaf);
+    return PathFileExistsW(wszPath);
+}
+
+static char* AIContext_BuildActiveFilesList(void)
+{
+    if (!szCurFile[0]) return NULL;
+    return AIContext_Utf8FromWide(szCurFile);
+}
+
+static char* AIContext_BuildHotZones(HWND hwndScintilla, const char* pszSelection)
+{
+    char buf[512];
+    buf[0] = '\0';
+
+    if (pszSelection && pszSelection[0])
+    {
+        const char* end = pszSelection;
+        while (*end && *end != '\r' && *end != '\n')
+            end++;
+        int len = (int)(end - pszSelection);
+        if (len > 180) len = 180;
+        if (len > 0)
+        {
+            memcpy(buf, pszSelection, len);
+            buf[len] = '\0';
+            return ai_ctx_strdup(buf);
+        }
+    }
+
+    int pos = (int)SendMessage(hwndScintilla, SCI_GETCURRENTPOS, 0, 0);
+    int line = (int)SendMessage(hwndScintilla, SCI_LINEFROMPOSITION, (WPARAM)pos, 0);
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%s:%d", szCurFile[0] ? "(current file)" : "(buffer)", line + 1);
+    return ai_ctx_strdup(buf);
+}
+
+static char* AIContext_BuildDiagnosticsSummary(void)
+{
+    return ai_ctx_strdup("No structured editor diagnostics captured for this mission.");
+}
+
+static char* AIContext_BuildAtlasSummary(const char* pszLanguage,
+                                         const char* pszProjectRoot,
+                                         const char* pszGitSummary,
+                                         const char* pszHotZones)
+{
+    char buf[1024];
+    _snprintf_s(buf, sizeof(buf), _TRUNCATE,
+                "file=%s | lang=%s | project=%s | git=%s | hot=%s",
+                szCurFile[0] ? "<current>" : "<untitled>",
+                pszLanguage ? pszLanguage : "text",
+                pszProjectRoot ? pszProjectRoot : "(none)",
+                pszGitSummary ? pszGitSummary : "(no git summary)",
+                pszHotZones ? pszHotZones : "(none)");
+    return ai_ctx_strdup(buf);
+}
+
+static char* AIContext_InferBuildCommandUtf8(LPCWSTR wszProjectRoot)
+{
+    if (!wszProjectRoot || !wszProjectRoot[0]) return NULL;
+    if (AIContext_PathHasLeaf(wszProjectRoot, L"do_build.cmd"))
+        return ai_ctx_strdup("cmd /c do_build.cmd");
+    if (AIContext_PathHasLeaf(wszProjectRoot, L"Notepad2e.vcxproj"))
+        return ai_ctx_strdup("msbuild Notepad2e.vcxproj /t:Build /p:Configuration=Debug /p:Platform=x64");
+    return NULL;
+}
+
+static char* AIContext_InferTestCommandUtf8(LPCWSTR wszProjectRoot)
+{
+    if (!wszProjectRoot || !wszProjectRoot[0]) return NULL;
+    if (AIContext_PathHasLeaf(wszProjectRoot, L"test\\Extension\\Notepad2eTests.vcxproj"))
+        return ai_ctx_strdup("msbuild test\\Extension\\Notepad2eTests.vcxproj /t:Build /p:Configuration=Debug /p:Platform=x64");
+    return NULL;
 }
 
 //=============================================================================
@@ -239,15 +360,7 @@ BOOL AIContext_FillRequest(AIRequest* pReq, HWND hwndScintilla)
 
     // File path (convert WCHAR to UTF-8)
     if (szCurFile[0])
-    {
-        int needed = WideCharToMultiByte(CP_UTF8, 0, szCurFile, -1, NULL, 0, NULL, NULL);
-        if (needed > 0)
-        {
-            pReq->pszFilePath = (char*)n2e_Alloc(needed);
-            if (pReq->pszFilePath)
-                WideCharToMultiByte(CP_UTF8, 0, szCurFile, -1, pReq->pszFilePath, needed, NULL, NULL);
-        }
-    }
+        pReq->pszFilePath = AIContext_Utf8FromWide(szCurFile);
 
     // Language
     const char* lang = AIContext_GetLanguageId();
@@ -259,6 +372,8 @@ BOOL AIContext_FillRequest(AIRequest* pReq, HWND hwndScintilla)
     // File content
     int contentLen = 0;
     pReq->pszFileContent = AIContext_GetFileContent(hwndScintilla, &contentLen);
+    pReq->uBufferVersion = pReq->uRequestId;
+    pReq->pszBufferHash = AIContext_BuildBufferHash(pReq->pszFileContent);
 
     // Selection
     int selLen = 0;
@@ -278,6 +393,35 @@ BOOL AIContext_FillRequest(AIRequest* pReq, HWND hwndScintilla)
     // Viewport
     AIContext_GetViewport(hwndScintilla,
         &pReq->iFirstVisibleLine, &pReq->iLastVisibleLine);
+
+    // Project root / atlas-lite
+    WCHAR wszProjectRoot[MAX_PATH] = L"";
+    BOOL bHasProjectRoot = FALSE;
+    if (szCurFile[0])
+        bHasProjectRoot = AIContext_GetProjectRoot(szCurFile, wszProjectRoot, COUNTOF(wszProjectRoot));
+    if ((!bHasProjectRoot || !wszProjectRoot[0]) && FileManager_GetRootPath()[0])
+        lstrcpynW(wszProjectRoot, FileManager_GetRootPath(), COUNTOF(wszProjectRoot));
+
+    if (wszProjectRoot[0])
+        pReq->pszProjectRoot = AIContext_Utf8FromWide(wszProjectRoot);
+
+    pReq->pszActiveFiles = AIContext_BuildActiveFilesList();
+    pReq->pszDiagnostics = AIContext_BuildDiagnosticsSummary();
+    pReq->pszHotZones = AIContext_BuildHotZones(hwndScintilla, pReq->pszSelectedText);
+    pReq->pszBuildCommand = AIContext_InferBuildCommandUtf8(wszProjectRoot);
+    pReq->pszTestCommand = AIContext_InferTestCommandUtf8(wszProjectRoot);
+
+    {
+        const WCHAR* wszGitSummary = GitUI_GetStatusSummary();
+        if (wszGitSummary && wszGitSummary[0])
+            pReq->pszGitSummary = AIContext_Utf8FromWide(wszGitSummary);
+    }
+
+    pReq->pszAtlasSummary = AIContext_BuildAtlasSummary(
+        pReq->pszLanguage,
+        pReq->pszProjectRoot,
+        pReq->pszGitSummary,
+        pReq->pszHotZones);
 
     return TRUE;
 }

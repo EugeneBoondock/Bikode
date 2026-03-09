@@ -1,4 +1,4 @@
-﻿/******************************************************************************
+/******************************************************************************
 *
 * Biko
 *
@@ -364,6 +364,14 @@ void AIBridge_FreeResponse(AIResponse* pResp)
             if (p->pszFilePath) n2e_Free(p->pszFilePath);
             if (p->pszRawDiff) n2e_Free(p->pszRawDiff);
             if (p->pszDescription) n2e_Free(p->pszDescription);
+            if (p->pszProofSummary) n2e_Free(p->pszProofSummary);
+            if (p->pszTouchedSymbols) n2e_Free(p->pszTouchedSymbols);
+            if (p->pszAssumptions) n2e_Free(p->pszAssumptions);
+            if (p->pszValidations) n2e_Free(p->pszValidations);
+            if (p->pszReviewerVotes) n2e_Free(p->pszReviewerVotes);
+            if (p->pszResidualRisk) n2e_Free(p->pszResidualRisk);
+            if (p->pszRollbackFingerprint) n2e_Free(p->pszRollbackFingerprint);
+            if (p->pszBaseBufferHash) n2e_Free(p->pszBaseBufferHash);
             if (p->pHunks)
             {
                 for (int j = 0; j < p->iHunkCount; j++)
@@ -381,6 +389,15 @@ void AIBridge_FreeResponse(AIResponse* pResp)
     if (pResp->pszExplanation) n2e_Free(pResp->pszExplanation);
     if (pResp->pszExplanationDetails) n2e_Free(pResp->pszExplanationDetails);
     if (pResp->pszChatResponse) n2e_Free(pResp->pszChatResponse);
+    if (pResp->pszMissionId) n2e_Free(pResp->pszMissionId);
+    if (pResp->pszMissionPhase) n2e_Free(pResp->pszMissionPhase);
+    if (pResp->pszMissionSummary) n2e_Free(pResp->pszMissionSummary);
+    if (pResp->pszMissionQueue) n2e_Free(pResp->pszMissionQueue);
+    if (pResp->pszAtlasSummary) n2e_Free(pResp->pszAtlasSummary);
+    if (pResp->pszProofSummary) n2e_Free(pResp->pszProofSummary);
+    if (pResp->pszBuildCommand) n2e_Free(pResp->pszBuildCommand);
+    if (pResp->pszTestCommand) n2e_Free(pResp->pszTestCommand);
+    if (pResp->pszScratchpadSummary) n2e_Free(pResp->pszScratchpadSummary);
     if (pResp->pszErrorCode) n2e_Free(pResp->pszErrorCode);
     if (pResp->pszErrorMessage) n2e_Free(pResp->pszErrorMessage);
     if (pResp->pszModel) n2e_Free(pResp->pszModel);
@@ -413,6 +430,15 @@ void AIBridge_FreeRequest(AIRequest* pReq)
     if (pReq->pszFileContent) n2e_Free(pReq->pszFileContent);
     if (pReq->pszLanguage) n2e_Free(pReq->pszLanguage);
     if (pReq->pszSelectedText) n2e_Free(pReq->pszSelectedText);
+    if (pReq->pszProjectRoot) n2e_Free(pReq->pszProjectRoot);
+    if (pReq->pszActiveFiles) n2e_Free(pReq->pszActiveFiles);
+    if (pReq->pszGitSummary) n2e_Free(pReq->pszGitSummary);
+    if (pReq->pszDiagnostics) n2e_Free(pReq->pszDiagnostics);
+    if (pReq->pszAtlasSummary) n2e_Free(pReq->pszAtlasSummary);
+    if (pReq->pszBuildCommand) n2e_Free(pReq->pszBuildCommand);
+    if (pReq->pszTestCommand) n2e_Free(pReq->pszTestCommand);
+    if (pReq->pszHotZones) n2e_Free(pReq->pszHotZones);
+    if (pReq->pszBufferHash) n2e_Free(pReq->pszBufferHash);
     if (pReq->pszChatMessage) n2e_Free(pReq->pszChatMessage);
     n2e_Free(pReq);
 }
@@ -819,6 +845,35 @@ static const char* ai_scopeStr(EAIScope s)
     }
 }
 
+static void JsonWriter_StringArrayFromLines(JsonWriter* pW, const char* pszLines)
+{
+    JsonWriter_BeginArray(pW);
+    if (pszLines && pszLines[0])
+    {
+        const char* p = pszLines;
+        while (*p)
+        {
+            const char* end = p;
+            while (*end && *end != '\r' && *end != '\n')
+                end++;
+            if (end > p)
+            {
+                int len = (int)(end - p);
+                char line[1024];
+                if (len >= (int)sizeof(line))
+                    len = (int)sizeof(line) - 1;
+                memcpy(line, p, len);
+                line[len] = '\0';
+                JsonWriter_StringValue(pW, line);
+            }
+            while (*end == '\r' || *end == '\n')
+                end++;
+            p = end;
+        }
+    }
+    JsonWriter_EndArray(pW);
+}
+
 static char* AIBridge_SerializeRequest(const AIRequest* pReq, int* piLen)
 {
     JsonWriter w;
@@ -831,7 +886,7 @@ static char* AIBridge_SerializeRequest(const AIRequest* pReq, int* piLen)
     sprintf(reqId, "req_%u", pReq->uRequestId);
     JsonWriter_String(&w, "id", reqId);
     JsonWriter_String(&w, "type", ai_reqTypeStr(pReq->eType));
-    JsonWriter_Int(&w, "version", 1);
+    JsonWriter_Int(&w, "version", 2);
 
     // Context
     if (pReq->eType == AI_REQ_PATCH || pReq->eType == AI_REQ_HINT ||
@@ -876,12 +931,73 @@ static char* AIBridge_SerializeRequest(const AIRequest* pReq, int* piLen)
             JsonWriter_Int(&w, "firstVisibleLine", pReq->iFirstVisibleLine);
             JsonWriter_Int(&w, "lastVisibleLine", pReq->iLastVisibleLine);
             JsonWriter_EndObject(&w);
+
+            // Project / repo atlas-lite
+            JsonWriter_Key(&w, "project");
+            JsonWriter_BeginObject(&w);
+            if (pReq->pszProjectRoot)
+                JsonWriter_String(&w, "root", pReq->pszProjectRoot);
+            JsonWriter_Key(&w, "activeFiles");
+            JsonWriter_StringArrayFromLines(&w, pReq->pszActiveFiles);
+            JsonWriter_EndObject(&w);
+
+            JsonWriter_Key(&w, "repo");
+            JsonWriter_BeginObject(&w);
+            if (pReq->pszGitSummary)
+                JsonWriter_String(&w, "gitSummary", pReq->pszGitSummary);
+            if (pReq->pszDiagnostics)
+                JsonWriter_String(&w, "diagnostics", pReq->pszDiagnostics);
+            if (pReq->pszBuildCommand)
+                JsonWriter_String(&w, "buildCommand", pReq->pszBuildCommand);
+            if (pReq->pszTestCommand)
+                JsonWriter_String(&w, "testCommand", pReq->pszTestCommand);
+            JsonWriter_Key(&w, "hotZones");
+            JsonWriter_StringArrayFromLines(&w, pReq->pszHotZones);
+            JsonWriter_EndObject(&w);
+
+            JsonWriter_Key(&w, "atlas");
+            JsonWriter_BeginObject(&w);
+            if (pReq->pszAtlasSummary)
+                JsonWriter_String(&w, "summary", pReq->pszAtlasSummary);
+            if (pReq->pszBufferHash)
+                JsonWriter_String(&w, "bufferHash", pReq->pszBufferHash);
+            JsonWriter_Int(&w, "bufferVersion", (int)pReq->uBufferVersion);
+            JsonWriter_EndObject(&w);
         }
         JsonWriter_EndObject(&w);
+
+        // Flat compatibility fields for the current engine parser.
+        if (pReq->pszFilePath)
+            JsonWriter_String(&w, "filePath", pReq->pszFilePath);
+        if (pReq->pszLanguage)
+            JsonWriter_String(&w, "language", pReq->pszLanguage);
+        if (pReq->pszFileContent)
+            JsonWriter_String(&w, "fileContent", pReq->pszFileContent);
+        if (pReq->pszSelectedText)
+            JsonWriter_String(&w, "selection", pReq->pszSelectedText);
+        if (pReq->pszProjectRoot)
+            JsonWriter_String(&w, "projectRoot", pReq->pszProjectRoot);
+        if (pReq->pszActiveFiles)
+            JsonWriter_String(&w, "activeFilesText", pReq->pszActiveFiles);
+        if (pReq->pszGitSummary)
+            JsonWriter_String(&w, "gitSummary", pReq->pszGitSummary);
+        if (pReq->pszDiagnostics)
+            JsonWriter_String(&w, "diagnostics", pReq->pszDiagnostics);
+        if (pReq->pszAtlasSummary)
+            JsonWriter_String(&w, "atlasSummary", pReq->pszAtlasSummary);
+        if (pReq->pszBuildCommand)
+            JsonWriter_String(&w, "buildCommand", pReq->pszBuildCommand);
+        if (pReq->pszTestCommand)
+            JsonWriter_String(&w, "testCommand", pReq->pszTestCommand);
+        if (pReq->pszHotZones)
+            JsonWriter_String(&w, "hotZonesText", pReq->pszHotZones);
+        if (pReq->pszBufferHash)
+            JsonWriter_String(&w, "bufferHash", pReq->pszBufferHash);
+        JsonWriter_Int(&w, "bufferVersion", (int)pReq->uBufferVersion);
     }
 
     // Intent
-    if (pReq->eType == AI_REQ_PATCH || pReq->eType == AI_REQ_HINT)
+    if (pReq->eType == AI_REQ_PATCH || pReq->eType == AI_REQ_HINT || pReq->eType == AI_REQ_EXPLAIN)
     {
         JsonWriter_Key(&w, "intent");
         JsonWriter_BeginObject(&w);
@@ -890,12 +1006,18 @@ static char* AIBridge_SerializeRequest(const AIRequest* pReq, int* piLen)
             JsonWriter_String(&w, "instruction", pReq->pszInstruction);
         JsonWriter_String(&w, "scope", ai_scopeStr(pReq->eScope));
         JsonWriter_EndObject(&w);
+
+        JsonWriter_String(&w, "action", ai_actionStr(pReq->eAction));
+        if (pReq->pszInstruction)
+            JsonWriter_String(&w, "instruction", pReq->pszInstruction);
+        JsonWriter_String(&w, "scope", ai_scopeStr(pReq->eScope));
     }
 
     // Chat message
     if (pReq->eType == AI_REQ_CHAT && pReq->pszChatMessage)
     {
         JsonWriter_String(&w, "message", pReq->pszChatMessage);
+        JsonWriter_String(&w, "chatMessage", pReq->pszChatMessage);
     }
 
     // Provider override (include active provider config for per-request routing)
@@ -1000,6 +1122,32 @@ static AIResponse* AIBridge_DeserializeResponse(const char* pJson, int iJsonLen)
                                 patches[count].pszRawDiff = ai_strdup(JsonReader_GetString(&r));
                             else if (strcmp(pkey, "description") == 0)
                                 patches[count].pszDescription = ai_strdup(JsonReader_GetString(&r));
+                            else if (strcmp(pkey, "proofSummary") == 0)
+                                patches[count].pszProofSummary = ai_strdup(JsonReader_GetString(&r));
+                            else if (strcmp(pkey, "touchedSymbols") == 0)
+                                patches[count].pszTouchedSymbols = ai_strdup(JsonReader_GetString(&r));
+                            else if (strcmp(pkey, "assumptions") == 0)
+                                patches[count].pszAssumptions = ai_strdup(JsonReader_GetString(&r));
+                            else if (strcmp(pkey, "validations") == 0)
+                                patches[count].pszValidations = ai_strdup(JsonReader_GetString(&r));
+                            else if (strcmp(pkey, "reviewerVotes") == 0)
+                                patches[count].pszReviewerVotes = ai_strdup(JsonReader_GetString(&r));
+                            else if (strcmp(pkey, "residualRisk") == 0)
+                                patches[count].pszResidualRisk = ai_strdup(JsonReader_GetString(&r));
+                            else if (strcmp(pkey, "rollbackFingerprint") == 0)
+                                patches[count].pszRollbackFingerprint = ai_strdup(JsonReader_GetString(&r));
+                            else if (strcmp(pkey, "baseBufferHash") == 0)
+                                patches[count].pszBaseBufferHash = ai_strdup(JsonReader_GetString(&r));
+                            else if (strcmp(pkey, "confidence") == 0)
+                                patches[count].dConfidence = JsonReader_GetDouble(&r);
+                            else if (strcmp(pkey, "baseBufferVersion") == 0)
+                                patches[count].uBaseBufferVersion = (UINT)JsonReader_GetInt(&r);
+                            else if (strcmp(pkey, "candidateRank") == 0)
+                                patches[count].iCandidateRank = JsonReader_GetInt(&r);
+                            else if (strcmp(pkey, "ghostLayer") == 0)
+                                patches[count].bGhostLayer = JsonReader_GetBool(&r);
+                            else if (strcmp(pkey, "stale") == 0)
+                                patches[count].bStale = JsonReader_GetBool(&r);
                             else
                                 JsonReader_SkipValue(&r);
                         }
@@ -1056,11 +1204,60 @@ static AIResponse* AIBridge_DeserializeResponse(const char* pJson, int iJsonLen)
                         JsonReader_SkipValue(&r);
                 }
             }
+            else if (tok == JSON_STRING)
+            {
+                pResp->pszExplanation = ai_strdup(JsonReader_GetString(&r));
+            }
         }
-        else if (strcmp(key, "chat_response") == 0)
+        else if (strcmp(key, "chat_response") == 0 || strcmp(key, "chatResponse") == 0)
         {
             JsonReader_Next(&r);
             pResp->pszChatResponse = ai_strdup(JsonReader_GetString(&r));
+        }
+        else if (strcmp(key, "missionId") == 0)
+        {
+            JsonReader_Next(&r);
+            pResp->pszMissionId = ai_strdup(JsonReader_GetString(&r));
+        }
+        else if (strcmp(key, "missionPhase") == 0)
+        {
+            JsonReader_Next(&r);
+            pResp->pszMissionPhase = ai_strdup(JsonReader_GetString(&r));
+        }
+        else if (strcmp(key, "missionSummary") == 0)
+        {
+            JsonReader_Next(&r);
+            pResp->pszMissionSummary = ai_strdup(JsonReader_GetString(&r));
+        }
+        else if (strcmp(key, "missionQueue") == 0)
+        {
+            JsonReader_Next(&r);
+            pResp->pszMissionQueue = ai_strdup(JsonReader_GetString(&r));
+        }
+        else if (strcmp(key, "atlasSummary") == 0)
+        {
+            JsonReader_Next(&r);
+            pResp->pszAtlasSummary = ai_strdup(JsonReader_GetString(&r));
+        }
+        else if (strcmp(key, "proofSummary") == 0)
+        {
+            JsonReader_Next(&r);
+            pResp->pszProofSummary = ai_strdup(JsonReader_GetString(&r));
+        }
+        else if (strcmp(key, "buildCommand") == 0)
+        {
+            JsonReader_Next(&r);
+            pResp->pszBuildCommand = ai_strdup(JsonReader_GetString(&r));
+        }
+        else if (strcmp(key, "testCommand") == 0)
+        {
+            JsonReader_Next(&r);
+            pResp->pszTestCommand = ai_strdup(JsonReader_GetString(&r));
+        }
+        else if (strcmp(key, "scratchpadSummary") == 0)
+        {
+            JsonReader_Next(&r);
+            pResp->pszScratchpadSummary = ai_strdup(JsonReader_GetString(&r));
         }
         else if (strcmp(key, "chunk") == 0)
         {

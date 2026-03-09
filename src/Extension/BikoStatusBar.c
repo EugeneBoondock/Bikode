@@ -9,6 +9,7 @@
 ******************************************************************************/
 
 #include "BikoStatusBar.h"
+#include "ui/theme/BikodeTheme.h"
 #include "DarkMode.h"
 #include <windowsx.h>
 #include <commctrl.h>
@@ -17,22 +18,10 @@
 // Design constants
 //=============================================================================
 
-#define BSB_HEIGHT          22
-#define BSB_PAD_X            8   // horizontal text padding per pane
+#define BSB_HEIGHT          24
+#define BSB_PAD_X           8
 #define BSB_MAX_PARTS       8
 #define BSB_MAX_TEXT       256
-
-// COMIC BOOK STATUS BAR PALETTE
-#define BSB_DK_BG          RGB(10, 10, 12)      // near-black ink
-#define BSB_DK_TEXT        RGB(255, 215, 0)     // POW! yellow text
-#define BSB_DK_SEP         RGB(80, 72, 10)      // dark yellow separator
-#define BSB_DK_HOVER       RGB(30, 28, 5)       // subtle yellow hover glow
-
-// Light palette (not used in comic mode)
-#define BSB_LT_BG          RGB(245, 245, 245)
-#define BSB_LT_TEXT        RGB(30, 30, 30)
-#define BSB_LT_SEP         RGB(210, 210, 215)
-#define BSB_LT_HOVER       RGB(230, 230, 235)
 
 //=============================================================================
 // State
@@ -59,17 +48,7 @@ static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
 static void CreateStatusFont(void)
 {
-  if (s_hFont) DeleteObject(s_hFont);
-
-  // Comic-book: bold Impact-style status font
-  s_hFont = CreateFontW(
-      -13, 0, 0, 0,
-      FW_BOLD, FALSE, FALSE, FALSE,
-      ANSI_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-      FIXED_PITCH | FF_SWISS, L"Consolas");
-
-  if (!s_hFont)
-    s_hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+  s_hFont = BikodeTheme_GetFont(BKFONT_MONO_SMALL);
 }
 
 //=============================================================================
@@ -109,74 +88,43 @@ static void Paint(HWND hwnd, HDC hdc)
   GetClientRect(hwnd, &rc);
   if (rc.right <= 0 || rc.bottom <= 0) return;
 
-  BOOL dk = DarkMode_IsEnabled();
-  COLORREF cBg   = dk ? BSB_DK_BG   : BSB_LT_BG;
-  COLORREF cText = dk ? BSB_DK_TEXT : BSB_LT_TEXT;
-  COLORREF cSep  = dk ? BSB_DK_SEP  : BSB_LT_SEP;
-  COLORREF cHov  = dk ? BSB_DK_HOVER: BSB_LT_HOVER;
-
   // Double-buffer
   HDC mem = CreateCompatibleDC(hdc);
   HBITMAP bm = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
   HBITMAP obm = (HBITMAP)SelectObject(mem, bm);
 
-  // Background fill — ink black
-  HBRUSH bg = CreateSolidBrush(cBg);
-  FillRect(mem, &rc, bg);
-  DeleteObject(bg);
-
-  // Comic top border — bold yellow rule
-  if (dk) {
-    HPEN topPen = CreatePen(PS_SOLID, 2, RGB(255, 215, 0));
-    HPEN oTPen = (HPEN)SelectObject(mem, topPen);
-    MoveToEx(mem, 0,        0, NULL);
-    LineTo  (mem, rc.right, 0);
-    SelectObject(mem, oTPen);
-    DeleteObject(topPen);
-  }
-
-  HPEN sepPen = CreatePen(PS_SOLID, 1, cSep);
-  HPEN oPen = (HPEN)SelectObject(mem, sepPen);
+  BikodeTheme_DrawRoundedPanel(mem, &rc,
+      BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+      BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+      BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+      0, TRUE);
 
   HFONT of = (HFONT)SelectObject(mem, s_hFont);
   SetBkMode(mem, TRANSPARENT);
 
   for (int i = 0; i < s_nParts; i++) {
     RECT pr = PaneRect(i, &rc);
-    pr.top = 2;  // leave room for top border
+    InflateRect(&pr, -2, -3);
+    BikodeTheme_DrawRoundedPanel(mem, &pr,
+        (i == s_hover)
+            ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 26)
+            : BikodeTheme_GetColor(BKCLR_SURFACE_RAISED),
+        BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+        (i == s_hover) ? BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN) : BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        8, FALSE);
 
-    // Hover highlight — subtle yellow glow
-    if (i == s_hover) {
-      HBRUSH hb = CreateSolidBrush(cHov);
-      FillRect(mem, &pr, hb);
-      DeleteObject(hb);
-    }
-
-    // Separator between panes
-    if (i > 0) {
-      // Comic-style: vertical yellow tick
-      HPEN sepYellow = CreatePen(PS_SOLID, 1, RGB(80, 72, 10));
-      HPEN oSY = (HPEN)SelectObject(mem, sepYellow);
-      MoveToEx(mem, pr.left, pr.top + 4, NULL);
-      LineTo(mem, pr.left, pr.bottom - 4);
-      SelectObject(mem, oSY);
-      DeleteObject(sepYellow);
-    }
-
-    // Text — bold yellow
     if (s_text[i][0]) {
       RECT tr = pr;
       tr.left  += BSB_PAD_X;
       tr.right -= BSB_PAD_X;
-      SetTextColor(mem, cText);
+      SetTextColor(mem,
+          (i == s_nParts - 1) ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY) : BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
       DrawTextW(mem, s_text[i], -1, &tr,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
     }
   }
 
   SelectObject(mem, of);
-  SelectObject(mem, oPen);
-  DeleteObject(sepPen);
 
   BitBlt(hdc, 0, 0, rc.right, rc.bottom, mem, 0, 0, SRCCOPY);
   SelectObject(mem, obm);
@@ -295,10 +243,7 @@ HWND BikoStatusBar_Create(HWND hwndParent, HINSTANCE hInst)
 
 void BikoStatusBar_Destroy(void)
 {
-  if (s_hFont && s_hFont != GetStockObject(DEFAULT_GUI_FONT)) {
-    DeleteObject(s_hFont);
-    s_hFont = NULL;
-  }
+  s_hFont = NULL;
   if (s_hwnd) {
     DestroyWindow(s_hwnd);
     s_hwnd = NULL;

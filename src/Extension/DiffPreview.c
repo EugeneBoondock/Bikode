@@ -1,4 +1,4 @@
-﻿/******************************************************************************
+/******************************************************************************
 *
 * Biko
 *
@@ -26,6 +26,48 @@ static int          s_iCurrentHunk = 0;
 static int          s_iTotalHunks = 0;
 static HWND         s_hwndSci = NULL;
 static BOOL         s_bWasReadOnly = FALSE;
+
+static unsigned __int64 dp_hash64(const char* s)
+{
+    const unsigned char* p = (const unsigned char*)(s ? s : "");
+    unsigned __int64 h = 1469598103934665603ULL;
+    while (*p)
+    {
+        h ^= (unsigned __int64)(*p++);
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+static void dp_hash_hex(unsigned __int64 h, char* out, int cchOut)
+{
+    _snprintf_s(out, cchOut, _TRUNCATE, "%016llx", h);
+}
+
+static BOOL DiffPreview_IsFreshAgainstBuffer(HWND hwndScintilla)
+{
+    if (!s_pPatches || s_iPatchCount <= 0) return TRUE;
+    if (!s_pPatches[0].pszBaseBufferHash || !s_pPatches[0].pszBaseBufferHash[0])
+        return TRUE;
+
+    int len = (int)SendMessage(hwndScintilla, SCI_GETLENGTH, 0, 0);
+    char* pBuf = (char*)n2e_Alloc(len + 1);
+    if (!pBuf) return TRUE;
+    SendMessage(hwndScintilla, SCI_GETTEXT, (WPARAM)(len + 1), (LPARAM)pBuf);
+    pBuf[len] = '\0';
+
+    char currentHash[32];
+    dp_hash_hex(dp_hash64(pBuf), currentHash, sizeof(currentHash));
+    n2e_Free(pBuf);
+
+    return strcmp(currentHash, s_pPatches[0].pszBaseBufferHash) == 0;
+}
+
+static void DiffPreview_MarkStale(void)
+{
+    for (int i = 0; i < s_iPatchCount; i++)
+        s_pPatches[i].bStale = TRUE;
+}
 
 //=============================================================================
 // Internal: Scintilla indicator/annotation setup
@@ -215,6 +257,21 @@ BOOL DiffPreview_Enter(HWND hwndScintilla, AIPatch* pPatches, int iPatchCount)
     if (s_bActive) DiffPreview_Exit(hwndScintilla);
     if (!pPatches || iPatchCount <= 0) return FALSE;
 
+    if (pPatches[0].pszBaseBufferHash && pPatches[0].pszBaseBufferHash[0])
+    {
+        s_pPatches = pPatches;
+        s_iPatchCount = iPatchCount;
+        if (!DiffPreview_IsFreshAgainstBuffer(hwndScintilla))
+        {
+            DiffPreview_MarkStale();
+            s_pPatches = NULL;
+            s_iPatchCount = 0;
+            return FALSE;
+        }
+        s_pPatches = NULL;
+        s_iPatchCount = 0;
+    }
+
     s_hwndSci = hwndScintilla;
     s_pPatches = pPatches;
     s_iPatchCount = iPatchCount;
@@ -332,6 +389,12 @@ void DiffPreview_ToggleHunk(HWND hwndScintilla)
 BOOL DiffPreview_ApplySelected(HWND hwndScintilla)
 {
     if (!s_bActive) return FALSE;
+    if (!DiffPreview_IsFreshAgainstBuffer(hwndScintilla))
+    {
+        DiffPreview_MarkStale();
+        MessageBeep(MB_ICONWARNING);
+        return FALSE;
+    }
 
     // Exit preview mode first (clears decorations, restores editability)
     AIPatch* patches = s_pPatches;

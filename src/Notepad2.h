@@ -79,6 +79,7 @@ typedef struct np2params {
 #define STATUS_OVRMODE   4
 #define STATUS_LEXER     5
 #define STATUS_GIT       6
+#define STATUS_MISSION   7
 #define STATUS_HELP    255
 
 

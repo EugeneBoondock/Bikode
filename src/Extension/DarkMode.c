@@ -1,4 +1,4 @@
-﻿/******************************************************************************
+/******************************************************************************
 *
 * Biko
 *
@@ -15,6 +15,7 @@
 #include "BikoToolbar.h"
 #include "CommonUtils.h"
 #include "ComicTheme.h"
+#include "ui/theme/BikodeTheme.h"
 #include "Scintilla.h"
 #include <dwmapi.h>
 #include <uxtheme.h>
@@ -29,24 +30,24 @@
 //=============================================================================
 
 static const DarkModeColors s_darkColors = {
-    .clrBackground  = RGB(30, 30, 30),      // Editor background
-    .clrSurface     = RGB(37, 37, 38),      // Panels, sidebars
-    .clrText        = RGB(212, 212, 212),   // Default text
-    .clrTextDim     = RGB(128, 128, 128),   // Dimmed text
-    .clrBorder      = RGB(60, 60, 60),      // Borders
-    .clrAccent      = RGB(0, 122, 204),     // Accent blue
-    .clrSelection   = RGB(38, 79, 120),     // Selection background
-    .clrCaretLine   = RGB(40, 40, 40),      // Current line highlight
-    .clrLineNumber  = RGB(90, 90, 90),      // Line number gutter
-    .clrIndentGuide = RGB(50, 50, 50),      // Indent guides
-    .clrComment     = RGB(106, 153, 85),    // Comments - green
-    .clrKeyword     = RGB(86, 156, 214),    // Keywords - blue
-    .clrString      = RGB(206, 145, 120),   // Strings - orange
-    .clrNumber      = RGB(181, 206, 168),   // Numbers - light green
-    .clrOperator    = RGB(212, 212, 212),   // Operators
-    .clrType        = RGB(78, 201, 176),    // Types - teal
-    .clrFunction    = RGB(220, 220, 170),   // Functions - yellow
-    .clrPreprocessor = RGB(155, 155, 255),  // Preprocessor - lavender
+    .clrBackground  = RGB(9, 12, 17),
+    .clrSurface     = RGB(23, 28, 36),
+    .clrText        = RGB(243, 245, 247),
+    .clrTextDim     = RGB(110, 119, 133),
+    .clrBorder      = RGB(42, 49, 64),
+    .clrAccent      = RGB(53, 224, 255),
+    .clrSelection   = RGB(27, 60, 82),
+    .clrCaretLine   = RGB(17, 24, 34),
+    .clrLineNumber  = RGB(110, 119, 133),
+    .clrIndentGuide = RGB(42, 49, 64),
+    .clrComment     = RGB(120, 160, 124),
+    .clrKeyword     = RGB(53, 224, 255),
+    .clrString      = RGB(255, 155, 48),
+    .clrNumber      = RGB(31, 227, 138),
+    .clrOperator    = RGB(243, 245, 247),
+    .clrType        = RGB(255, 77, 166),
+    .clrFunction    = RGB(255, 212, 0),
+    .clrPreprocessor = RGB(255, 91, 91),
 };
 
 static const DarkModeColors s_lightColors = {
@@ -230,6 +231,7 @@ void DarkMode_Init(HWND hwndMain)
     s_bInitialized = TRUE;
 
     // [biko]: Initialize the Comic Theme
+    BikodeTheme_Init();
     ComicTheme_Init();
 }
 
@@ -251,6 +253,7 @@ void DarkMode_Shutdown(void)
         DeleteObject(s_hBackgroundBrush);
         s_hBackgroundBrush = NULL;
     }
+    BikodeTheme_Shutdown();
     s_bInitialized = FALSE;
 }
 

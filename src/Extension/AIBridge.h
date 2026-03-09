@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 /******************************************************************************
 *
 * Biko
@@ -109,6 +109,18 @@ typedef struct TAIRequest
     int         iFirstVisibleLine;
     int         iLastVisibleLine;
 
+    // Repo atlas / mission context
+    char*       pszProjectRoot;      // detected project root (UTF-8)
+    char*       pszActiveFiles;      // newline-delimited active/relevant files
+    char*       pszGitSummary;       // short git summary for atlas
+    char*       pszDiagnostics;      // lightweight diagnostics summary
+    char*       pszAtlasSummary;     // compact atlas card summary
+    char*       pszBuildCommand;     // remembered or inferred build command
+    char*       pszTestCommand;      // remembered or inferred test command
+    char*       pszHotZones;         // newline-delimited hot zones / likely symbols
+    char*       pszBufferHash;       // hash of current buffer content
+    UINT        uBufferVersion;      // lightweight version tag for freshness checks
+
     // Chat-specific
     char*       pszChatMessage;   // user chat message (UTF-8)
 } AIRequest;
@@ -139,6 +151,19 @@ typedef struct TAIPatch
     char*           pszFilePath;    // target file (UTF-8)
     char*           pszRawDiff;     // full unified diff text
     char*           pszDescription; // AI-provided description
+    char*           pszProofSummary;
+    char*           pszTouchedSymbols;
+    char*           pszAssumptions;
+    char*           pszValidations;
+    char*           pszReviewerVotes;
+    char*           pszResidualRisk;
+    char*           pszRollbackFingerprint;
+    char*           pszBaseBufferHash;
+    double          dConfidence;
+    UINT            uBaseBufferVersion;
+    int             iCandidateRank;
+    BOOL            bGhostLayer;
+    BOOL            bStale;
     AIPatchHunk*    pHunks;
     int             iHunkCount;
     BOOL            bSelected;      // user toggle for multi-file
@@ -170,6 +195,17 @@ typedef struct TAIResponse
 
     // Chat response
     char*       pszChatResponse;
+
+    // Mission / proof metadata
+    char*       pszMissionId;
+    char*       pszMissionPhase;
+    char*       pszMissionSummary;
+    char*       pszMissionQueue;
+    char*       pszAtlasSummary;
+    char*       pszProofSummary;
+    char*       pszBuildCommand;
+    char*       pszTestCommand;
+    char*       pszScratchpadSummary;
 
     // Error
     char*       pszErrorCode;

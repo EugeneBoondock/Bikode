@@ -1,4 +1,4 @@
-﻿/******************************************************************************
+/******************************************************************************
 *
 * Biko
 *
@@ -17,9 +17,11 @@
 #include "ChatPanel.h"
 #include "DarkMode.h"
 #include "GitUI.h"
+#include "ProofTray.h"
 #include "Terminal.h"
 #include "MarkdownPreview.h"
 #include "FileManager.h"
+#include "ui/dialogs/BikoCommandPalette.h"
 #include "CommonUtils.h"
 #include "SciCall.h"
 #include <string.h>
@@ -35,6 +37,7 @@ extern HWND  hwndMain;
 extern HWND  hwndToolbar;
 extern HWND  hwndStatus;
 extern HWND  hwndReBar;
+void UpdateStatusbar(void);
 
 //=============================================================================
 // Internal state
@@ -44,6 +47,8 @@ static HWND  s_hwndMain = NULL;
 static HWND  s_hwndEdit = NULL;
 static HMENU s_hAIMenu = NULL;
 static AIConfig s_aiConfig;
+static WCHAR s_wszMissionStatus[256] = L"AI: idle";
+static char* s_pszRefineNotes = NULL;
 
 // Current pending response data
 static AIPatch*  s_pCurrentPatches = NULL;
@@ -57,11 +62,64 @@ static void AICmd_DoTransform(HWND hwndParent);
 static void AICmd_DoRefactor(void);
 static void AICmd_DoExplain(void);
 static void AICmd_DoFix(void);
+static void AICmd_DoRefineCurrent(void);
 static void AICmd_HandleResponse(UINT uRequestId);
 static void AICmd_HandlePatchResponse(AIResponse* pResp);
 static void AICmd_HandleExplainResponse(AIResponse* pResp);
 static void AICmd_HandleChatResponse(AIResponse* pResp);
 static void AICmd_ShowSettingsDialog(HWND hwndParent);
+static char* AICmd_StrDup(const char* pszText);
+static void AICmd_CopyPatchMeta(AIPatch* pDst, const AIPatch* pSrc);
+static void AICmd_UpdateMissionStatus(const AIResponse* pResp, BOOL bPreviewActive);
+
+static char* AICmd_StrDup(const char* pszText)
+{
+    if (!pszText) return NULL;
+    int cch = (int)strlen(pszText);
+    char* pszCopy = (char*)n2e_Alloc(cch + 1);
+    if (pszCopy)
+        memcpy(pszCopy, pszText, cch + 1);
+    return pszCopy;
+}
+
+static void AICmd_CopyPatchMeta(AIPatch* pDst, const AIPatch* pSrc)
+{
+    if (!pDst || !pSrc) return;
+    pDst->pszDescription = AICmd_StrDup(pSrc->pszDescription);
+    pDst->pszProofSummary = AICmd_StrDup(pSrc->pszProofSummary);
+    pDst->pszTouchedSymbols = AICmd_StrDup(pSrc->pszTouchedSymbols);
+    pDst->pszAssumptions = AICmd_StrDup(pSrc->pszAssumptions);
+    pDst->pszValidations = AICmd_StrDup(pSrc->pszValidations);
+    pDst->pszReviewerVotes = AICmd_StrDup(pSrc->pszReviewerVotes);
+    pDst->pszResidualRisk = AICmd_StrDup(pSrc->pszResidualRisk);
+    pDst->pszRollbackFingerprint = AICmd_StrDup(pSrc->pszRollbackFingerprint);
+    pDst->pszBaseBufferHash = AICmd_StrDup(pSrc->pszBaseBufferHash);
+    pDst->dConfidence = pSrc->dConfidence;
+    pDst->uBaseBufferVersion = pSrc->uBaseBufferVersion;
+    pDst->iCandidateRank = pSrc->iCandidateRank;
+    pDst->bGhostLayer = pSrc->bGhostLayer;
+    pDst->bStale = pSrc->bStale;
+}
+
+static void AICmd_UpdateMissionStatus(const AIResponse* pResp, BOOL bPreviewActive)
+{
+    if (pResp && pResp->pszMissionSummary)
+    {
+        MultiByteToWideChar(CP_UTF8, 0, pResp->pszMissionSummary, -1,
+                            s_wszMissionStatus, COUNTOF(s_wszMissionStatus));
+    }
+    else if (bPreviewActive)
+    {
+        lstrcpynW(s_wszMissionStatus, L"Ghost layer ready", COUNTOF(s_wszMissionStatus));
+    }
+    else
+    {
+        lstrcpynW(s_wszMissionStatus, AIBridge_GetStatusText(), COUNTOF(s_wszMissionStatus));
+    }
+    ProofTray_SetMissionStatus(s_wszMissionStatus);
+    if (s_hwndMain)
+        UpdateStatusbar();
+}
 
 //=============================================================================
 // Initialization
@@ -82,6 +140,7 @@ void AICommands_Init(HWND hwnd, HWND hwndEd)
     GitUI_Init(hwnd);
     Terminal_Init(hwnd);
     FileManager_Init(hwnd);
+    ProofTray_Init(hwnd);
 }
 
 void AICommands_Shutdown(void)
@@ -93,7 +152,13 @@ void AICommands_Shutdown(void)
         s_pCurrentPatches = NULL;
         s_iCurrentPatchCount = 0;
     }
+    if (s_pszRefineNotes)
+    {
+        n2e_Free(s_pszRefineNotes);
+        s_pszRefineNotes = NULL;
+    }
 
+    ProofTray_Shutdown();
     FileManager_Shutdown();
     Terminal_Shutdown();
     GitUI_Shutdown();
@@ -163,9 +228,17 @@ BOOL AICommands_HandleCommand(HWND hwnd, UINT cmd)
             DiffPreview_ToggleHunk(s_hwndEdit);
         return TRUE;
 
+    case IDM_AI_REFINE_PATCH:
+        AICmd_DoRefineCurrent();
+        return TRUE;
+
     // Engine management
     case IDM_AI_SETTINGS:
         AICmd_ShowSettingsDialog(hwnd);
+        return TRUE;
+
+    case IDM_BIKO_COMMAND_PALETTE:
+        BikoCommandPalette_Show(hwnd);
         return TRUE;
 
     case IDM_AI_RESTART_ENGINE:
@@ -176,6 +249,12 @@ BOOL AICommands_HandleCommand(HWND hwnd, UINT cmd)
     case IDM_VIEW_DARKMODE:
         DarkMode_Toggle();
         DarkMode_ApplyAll(hwnd, s_hwndEdit, hwndToolbar, hwndStatus, hwndReBar);
+        ProofTray_ApplyDarkMode();
+        BikoCommandPalette_ApplyTheme();
+        return TRUE;
+
+    case IDM_AI_TOGGLE_PROOF:
+        ProofTray_Toggle(hwnd);
         return TRUE;
 
     // Git commands
@@ -263,17 +342,23 @@ BOOL AICommands_HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
     case WM_AI_STATUS:
         // Status changed â€” update status bar (trigger repaint)
+        lstrcpynW(s_wszMissionStatus, AIBridge_GetStatusText(), COUNTOF(s_wszMissionStatus));
+        ProofTray_SetMissionStatus(s_wszMissionStatus);
         InvalidateRect(hwnd, NULL, FALSE);
         return TRUE;
 
     case WM_AI_CONNECTED:
         // Engine connected
+        lstrcpynW(s_wszMissionStatus, L"AI: ready", COUNTOF(s_wszMissionStatus));
+        ProofTray_SetMissionStatus(s_wszMissionStatus);
         return TRUE;
 
     case WM_AI_DISCONNECTED:
         // Engine disconnected
         if (DiffPreview_IsActive())
             DiffPreview_Exit(s_hwndEdit);
+        lstrcpynW(s_wszMissionStatus, L"AI: disconnected", COUNTOF(s_wszMissionStatus));
+        ProofTray_SetMissionStatus(s_wszMissionStatus);
         return TRUE;
 
     case WM_AI_CHUNK:
@@ -333,14 +418,37 @@ void AICommands_CreateMenu(HMENU hMainMenu)
                     L"Open Folder...");
         AppendMenuW(hView, MF_STRING, IDM_AI_TOGGLE_CHAT,
                     L"Chat Panel\tCtrl+Shift+C");
+        AppendMenuW(hView, MF_STRING, IDM_BIKO_COMMAND_PALETTE,
+                    L"Command Palette...");
+        AppendMenuW(hView, MF_STRING, IDM_AI_TOGGLE_PROOF,
+                    L"Proof Tray");
         AppendMenuW(hView, MF_STRING, IDM_TERMINAL_TOGGLE,
                     L"Terminal\tCtrl+`");
         AppendMenuW(hView, MF_STRING, IDM_MARKDOWN_PREVIEW,
                     L"Markdown Preview\tCtrl+Shift+M");
         AppendMenuW(hView, MF_STRING, IDM_VIEW_DARKMODE,
                     L"Dark Mode\tCtrl+Shift+D");
+    }
 
-        // Git submenu under View
+    // ── Agents menu: first-class AI actions ──
+    {
+        HMENU hAgentsMenu = CreatePopupMenu();
+        AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_TOGGLE_CHAT, L"Chat Panel\tCtrl+Shift+C");
+        AppendMenuW(hAgentsMenu, MF_STRING, IDM_BIKO_COMMAND_PALETTE, L"Command Palette...");
+        AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_TOGGLE_PROOF, L"Proof Tray");
+        AppendMenuW(hAgentsMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_TRANSFORM, L"AI Transform...\tCtrl+Shift+T");
+        AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_REFACTOR, L"AI Refactor\tCtrl+Shift+R");
+        AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_EXPLAIN, L"AI Explain\tCtrl+Shift+E");
+        AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_FIX, L"AI Fix\tCtrl+Shift+F");
+        AppendMenuW(hAgentsMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_SETTINGS, L"AI Settings...");
+        AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_RESTART_ENGINE, L"Restart AI Engine");
+        InsertMenuW(hMainMenu, 3, MF_BYPOSITION | MF_POPUP, (UINT_PTR)hAgentsMenu, L"Agents");
+    }
+
+    // ── Git menu: first-class repo controls ──
+    {
         HMENU hGitMenu = CreatePopupMenu();
         AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_STATUS,  L"Status");
         AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_DIFF,    L"Diff Current File");
@@ -354,7 +462,7 @@ void AICommands_CreateMenu(HMENU hMainMenu)
         AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_STASH,   L"Stash List");
         AppendMenuW(hGitMenu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_TOGGLE_PANEL, L"Toggle Git Panel");
-        AppendMenuW(hView, MF_POPUP, (UINT_PTR)hGitMenu, L"Git");
+        InsertMenuW(hMainMenu, 4, MF_BYPOSITION | MF_POPUP, (UINT_PTR)hGitMenu, L"Git");
     }
 
     // ── Settings menu: AI configuration ──
@@ -405,14 +513,18 @@ void AICommands_GetStatusText(WCHAR* wszBuf, int cchBuf)
     {
         WCHAR wszSummary[64];
         DiffPreview_GetSummary(wszSummary, 64);
-        swprintf(wszBuf, cchBuf, L"AI: patch %s [%d/%d]",
+        swprintf(wszBuf, cchBuf, L"%s | %s [%d/%d]",
+                 s_wszMissionStatus,
                  wszSummary,
                  DiffPreview_GetCurrentHunk() + 1,
                  DiffPreview_GetHunkCount());
     }
     else
     {
-        lstrcpynW(wszBuf, AIBridge_GetStatusText(), cchBuf);
+        if (s_wszMissionStatus[0] && lstrcmpiW(s_wszMissionStatus, L"AI: idle") != 0)
+            lstrcpynW(wszBuf, s_wszMissionStatus, cchBuf);
+        else
+            lstrcpynW(wszBuf, AIBridge_GetStatusText(), cchBuf);
     }
 }
 
@@ -439,6 +551,8 @@ static void AICmd_SendAction(EAIRequestType eType, EAIAction eAction,
     }
 
     AIBridge_SendRequest(pReq);
+    lstrcpynW(s_wszMissionStatus, L"Mission planning...", COUNTOF(s_wszMissionStatus));
+    ProofTray_SetMissionStatus(s_wszMissionStatus);
     AIBridge_FreeRequest(pReq);
 }
 
@@ -473,6 +587,18 @@ static void AICmd_DoFix(void)
     AICmd_SendAction(AI_REQ_PATCH, AI_ACTION_FIX, NULL);
 }
 
+static void AICmd_DoRefineCurrent(void)
+{
+    char szInstruction[1024];
+    const char* pszNotes = (s_pszRefineNotes && s_pszRefineNotes[0])
+        ? s_pszRefineNotes
+        : "Tighten the current candidate patch, preserve the original intent, and reduce residual risk.";
+    _snprintf_s(szInstruction, sizeof(szInstruction), _TRUNCATE,
+                "Refine the current candidate patch. Preserve the original goal, keep the change set minimal, and address these proof notes: %s",
+                pszNotes);
+    AICmd_SendAction(AI_REQ_PATCH, AI_ACTION_TRANSFORM, szInstruction);
+}
+
 //=============================================================================
 // Internal: Response handling
 //=============================================================================
@@ -486,6 +612,9 @@ static void AICmd_HandleResponse(UINT uRequestId)
     {
         // Show error in status bar (no modal dialog)
         // The WM_AI_STATUS handler already updates the UI
+        MultiByteToWideChar(CP_UTF8, 0, pResp->pszErrorMessage, -1,
+                            s_wszMissionStatus, COUNTOF(s_wszMissionStatus));
+        ProofTray_SetMissionStatus(s_wszMissionStatus);
         AIBridge_FreeResponse(pResp);
         return;
     }
@@ -514,6 +643,11 @@ static void AICmd_HandlePatchResponse(AIResponse* pResp)
     {
         DiffParse_FreePatches(s_pCurrentPatches, s_iCurrentPatchCount);
     }
+    if (s_pszRefineNotes)
+    {
+        n2e_Free(s_pszRefineNotes);
+        s_pszRefineNotes = NULL;
+    }
 
     // Parse the raw diffs into structured hunks
     s_iCurrentPatchCount = pResp->iPatchCount;
@@ -527,6 +661,7 @@ static void AICmd_HandlePatchResponse(AIResponse* pResp)
             DiffParse_Parse(pResp->pPatches[i].pszRawDiff,
                            (int)strlen(pResp->pPatches[i].pszRawDiff),
                            &s_pCurrentPatches[i]);
+            AICmd_CopyPatchMeta(&s_pCurrentPatches[i], &pResp->pPatches[i]);
         }
         else
         {
@@ -547,7 +682,12 @@ static void AICmd_HandlePatchResponse(AIResponse* pResp)
     }
 
     // Enter preview mode
-    DiffPreview_Enter(s_hwndEdit, s_pCurrentPatches, s_iCurrentPatchCount);
+    BOOL bPreviewActive = DiffPreview_Enter(s_hwndEdit, s_pCurrentPatches, s_iCurrentPatchCount);
+    AICmd_UpdateMissionStatus(pResp, bPreviewActive);
+    ProofTray_Publish(pResp, s_pCurrentPatches, s_iCurrentPatchCount, bPreviewActive);
+
+    if (s_iCurrentPatchCount > 0)
+        s_pszRefineNotes = AICmd_StrDup(s_pCurrentPatches[0].pszResidualRisk);
 }
 
 static void AICmd_HandleExplainResponse(AIResponse* pResp)
@@ -558,15 +698,20 @@ static void AICmd_HandleExplainResponse(AIResponse* pResp)
     int curLine = 0, curCol = 0;
     AIContext_GetCursorPos(s_hwndEdit, &curLine, &curCol);
 
+    SendMessage(s_hwndEdit, SCI_ANNOTATIONSETSTYLE, (WPARAM)curLine, 240);
     SendMessage(s_hwndEdit, SCI_ANNOTATIONSETTEXT,
                 (WPARAM)curLine, (LPARAM)pResp->pszExplanation);
     SendMessage(s_hwndEdit, SCI_ANNOTATIONSETVISIBLE, 2 /* ANNOTATION_BOXED */, 0);
+    AICmd_UpdateMissionStatus(pResp, FALSE);
+    ProofTray_Publish(pResp, NULL, 0, FALSE);
 }
 
 static void AICmd_HandleChatResponse(AIResponse* pResp)
 {
     if (!pResp->pszChatResponse) return;
     ChatPanel_AppendResponse(pResp->pszChatResponse);
+    AICmd_UpdateMissionStatus(pResp, FALSE);
+    ProofTray_Publish(pResp, NULL, 0, FALSE);
 }
 
 //=============================================================================

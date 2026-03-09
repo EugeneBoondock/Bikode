@@ -13,6 +13,7 @@
 #include <commctrl.h>
 #include <stdio.h>
 #include "WelcomeScreen.h"
+#include "ui/theme/BikodeTheme.h"
 #include "DarkMode.h"
 #include "CommonUtils.h"
 #include "Terminal.h"
@@ -82,6 +83,12 @@ static WelcomeButton s_buttons[NUM_BUTTONS] = {
     { IDC_BTN_CHAT,     L"Bikode AI",          L"Chat with the AI assistant",        L""        },
 };
 
+#define WELCOME_HERO_TEXT       L"Start a mission, open a repo, or drop straight into the console deck."
+#define WELCOME_HERO_TOP        186
+#define WELCOME_HERO_MIN_HEIGHT 48
+#define WELCOME_HERO_PAD_X      18
+#define WELCOME_HERO_PAD_Y      10
+
 //=============================================================================
 // State
 //=============================================================================
@@ -110,48 +117,53 @@ static BOOL     s_bClassRegistered = FALSE;
 static void EnsureFonts(void)
 {
     if (s_hFontTitle) return;
-
-    s_hFontTitle = CreateFontW(-44, 0, 0, 0, FW_LIGHT, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI Light");
-    if (!s_hFontTitle)
-        s_hFontTitle = CreateFontW(-44, 0, 0, 0, FW_THIN, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-
-    s_hFontTagline = CreateFontW(-15, 0, 0, 0, FW_NORMAL, TRUE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-
-    s_hFontBtnLabel = CreateFontW(-14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI Semibold");
-    if (!s_hFontBtnLabel)
-        s_hFontBtnLabel = CreateFontW(-14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-
-    s_hFontBtnDesc = CreateFontW(-12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-
-    s_hFontShortcut = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Consolas");
-
-    s_hFontFooter = CreateFontW(-11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    s_hFontTitle = BikodeTheme_GetFont(BKFONT_DISPLAY);
+    s_hFontTagline = BikodeTheme_GetFont(BKFONT_UI);
+    s_hFontBtnLabel = BikodeTheme_GetFont(BKFONT_UI_BOLD);
+    s_hFontBtnDesc = BikodeTheme_GetFont(BKFONT_UI_SMALL);
+    s_hFontShortcut = BikodeTheme_GetFont(BKFONT_MONO_SMALL);
+    s_hFontFooter = BikodeTheme_GetFont(BKFONT_UI_SMALL);
 }
 
 static void DestroyFonts(void)
 {
-    if (s_hFontTitle)    { DeleteObject(s_hFontTitle);    s_hFontTitle = NULL; }
-    if (s_hFontTagline)  { DeleteObject(s_hFontTagline);  s_hFontTagline = NULL; }
-    if (s_hFontBtnLabel) { DeleteObject(s_hFontBtnLabel); s_hFontBtnLabel = NULL; }
-    if (s_hFontBtnDesc)  { DeleteObject(s_hFontBtnDesc);  s_hFontBtnDesc = NULL; }
-    if (s_hFontShortcut) { DeleteObject(s_hFontShortcut); s_hFontShortcut = NULL; }
-    if (s_hFontFooter)   { DeleteObject(s_hFontFooter);   s_hFontFooter = NULL; }
+    s_hFontTitle = NULL;
+    s_hFontTagline = NULL;
+    s_hFontBtnLabel = NULL;
+    s_hFontBtnDesc = NULL;
+    s_hFontShortcut = NULL;
+    s_hFontFooter = NULL;
+}
+
+static int MeasureHeroCardHeight(int cardWidth)
+{
+    RECT rcText;
+    HWND hwndDC = s_hwndWelcome ? s_hwndWelcome : hwndMain;
+    HDC hdc = GetDC(hwndDC);
+    HFONT hOld = NULL;
+    int textWidth;
+    int textHeight;
+
+    EnsureFonts();
+    textWidth = max(140, cardWidth - (WELCOME_HERO_PAD_X * 2));
+    rcText.left = 0;
+    rcText.top = 0;
+    rcText.right = textWidth;
+    rcText.bottom = 0;
+
+    if (hdc) {
+        hOld = (HFONT)SelectObject(hdc, BikodeTheme_GetFont(BKFONT_UI_BOLD));
+        DrawTextW(hdc, WELCOME_HERO_TEXT, -1, &rcText,
+                  DT_CALCRECT | DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+        if (hOld)
+            SelectObject(hdc, hOld);
+        ReleaseDC(hwndDC, hdc);
+    } else {
+        rcText.bottom = 28;
+    }
+
+    textHeight = rcText.bottom - rcText.top;
+    return max(WELCOME_HERO_MIN_HEIGHT, textHeight + (WELCOME_HERO_PAD_Y * 2));
 }
 
 //=============================================================================
@@ -174,34 +186,36 @@ static void FillRoundRect(HDC hdc, const RECT* rc, int r, COLORREF fill, COLORRE
 static void DrawButtonCard(HDC hdc, WelcomeButton* btn)
 {
     BOOL h = btn->bHover;
-    COLORREF bg = h ? C(DK_SURFACE_HOV, LT_SURFACE_HOV) : C(DK_SURFACE, LT_SURFACE);
-    COLORREF bd = h ? C(DK_BORDER_HOV, LT_BORDER_HOV) : C(DK_BORDER, LT_BORDER);
+    COLORREF fill = h
+        ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), BikodeTheme_GetColor(BKCLR_SURFACE_ELEVATED), 24)
+        : BikodeTheme_GetColor(BKCLR_SURFACE_RAISED);
+    COLORREF accent = (btn->id == IDC_BTN_CHAT)
+        ? BikodeTheme_GetColor(BKCLR_HOT_MAGENTA)
+        : BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW);
 
-    // Card
-    FillRoundRect(hdc, &btn->rcBtn, 8, bg, bd);
+    BikodeTheme_DrawRoundedPanel(hdc, &btn->rcBtn, fill,
+        BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+        h ? BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN) : BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        12, FALSE);
 
-    // Left accent stripe on hover
-    if (h)
-    {
-        HBRUSH hAcc = CreateSolidBrush(C(DK_ACCENT, LT_ACCENT));
-        RECT rcStripe = { btn->rcBtn.left + 1, btn->rcBtn.top + 10,
-                          btn->rcBtn.left + 4, btn->rcBtn.bottom - 10 };
-        FillRect(hdc, &rcStripe, hAcc);
-        DeleteObject(hAcc);
-    }
+    RECT rcStripe = { btn->rcBtn.left + 1, btn->rcBtn.top + 10,
+                      btn->rcBtn.left + 6, btn->rcBtn.bottom - 10 };
+    HBRUSH hAcc = CreateSolidBrush(accent);
+    FillRect(hdc, &rcStripe, hAcc);
+    DeleteObject(hAcc);
 
-    int pad = 18;
+    int pad = 22;
 
     // Label
     HFONT hOld = (HFONT)SelectObject(hdc, s_hFontBtnLabel);
-    SetTextColor(hdc, h ? C(DK_ACCENT_HOV, LT_ACCENT_HOV) : C(DK_TEXT1, LT_TEXT1));
+    SetTextColor(hdc, h ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY) : BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
     RECT rcL = { btn->rcBtn.left + pad, btn->rcBtn.top + 10,
                  btn->rcBtn.right - 90, btn->rcBtn.top + 28 };
     DrawTextW(hdc, btn->label, -1, &rcL, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
     // Description
     SelectObject(hdc, s_hFontBtnDesc);
-    SetTextColor(hdc, C(DK_TEXT2, LT_TEXT2));
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
     RECT rcD = { btn->rcBtn.left + pad, btn->rcBtn.top + 30,
                  btn->rcBtn.right - 90, btn->rcBtn.bottom - 6 };
     DrawTextW(hdc, btn->description, -1, &rcD, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
@@ -217,9 +231,11 @@ static void DrawButtonCard(HDC hdc, WelcomeButton* btn)
         int bx = btn->rcBtn.right - bw - 14;
         int by = btn->rcBtn.top + (btn->rcBtn.bottom - btn->rcBtn.top - bh) / 2;
         RECT rcBadge = { bx, by, bx + bw, by + bh };
-        FillRoundRect(hdc, &rcBadge, 4, C(DK_BADGE_BG, LT_BADGE_BG), C(DK_BADGE_BD, LT_BADGE_BD));
-        SetTextColor(hdc, C(DK_MUTED, LT_MUTED));
-        DrawTextW(hdc, btn->shortcut, -1, &rcBadge, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+        BikodeTheme_DrawChip(hdc, &rcBadge, btn->shortcut,
+            BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+            BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+            BikodeTheme_GetColor(BKCLR_TEXT_MUTED),
+            s_hFontShortcut, FALSE, 0);
     }
 
     SelectObject(hdc, hOld);
@@ -231,12 +247,15 @@ static void DrawButtonCard(HDC hdc, WelcomeButton* btn)
 
 static void CalcLayout(int cx, int cy)
 {
-    int btnW = 360;
-    int btnH = 52;
-    int btnGap = 6;
+    int btnW = 430;
+    int btnH = 62;
+    int btnGap = 10;
+    int heroH;
+    int logoH;
     if (btnW > cx - 60) btnW = cx - 60;
 
-    int logoH = 190;   // icon + title + tagline + divider
+    heroH = MeasureHeroCardHeight(btnW);
+    logoH = WELCOME_HERO_TOP + heroH + 10;
     int cardsH = NUM_BUTTONS * (btnH + btnGap) - btnGap;
     int gapBetween = 28;
     int totalH = logoH + gapBetween + cardsH;
@@ -282,19 +301,21 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 
         EnsureFonts();
 
-        // Background
-        HBRUSH hBg = CreateSolidBrush(C(DK_BG, LT_BG));
-        FillRect(hm, &rc, hBg);
-        DeleteObject(hBg);
+        BikodeTheme_FillHalftone(hm, &rc, BikodeTheme_GetColor(BKCLR_APP_BG));
 
         SetBkMode(hm, TRANSPARENT);
 
         // Layout metrics
-        int btnW = 360;
+        int btnW = 430;
+        int heroH;
+        int logoH;
+        int heroW;
         if (btnW > cx - 60) btnW = cx - 60;
-        int logoH = 190;
-        int cardsH = NUM_BUTTONS * (52 + 6) - 6;
-        int totalH = logoH + 28 + cardsH;
+        heroW = btnW;
+        heroH = MeasureHeroCardHeight(heroW);
+        logoH = WELCOME_HERO_TOP + heroH + 10;
+        int cardsH = NUM_BUTTONS * (62 + 10) - 10;
+        int totalH = logoH + 34 + cardsH;
         int startY = (cy - totalH) / 2;
         if (startY < 30) startY = 30;
         int centerX = cx / 2;
@@ -307,27 +328,51 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                        iconSz, iconSz, 0, NULL, DI_NORMAL);
         }
 
+        // Chapter chip
+        {
+            RECT rcChip = { centerX - 112, startY + 2, centerX + 112, startY + 28 };
+            BikodeTheme_DrawChip(hm, &rcChip, L"ISSUE 01  COMIC CONTROL ROOM",
+                BikodeTheme_GetColor(BKCLR_SURFACE_ELEVATED),
+                BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+                BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
+                BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE, BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+        }
+
         // --- Title ---
         SelectObject(hm, s_hFontTitle);
-        SetTextColor(hm, C(DK_TEXT1, LT_TEXT1));
-        RECT rcT = { 0, startY + 96, cx, startY + 146 };
+        SetTextColor(hm, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+        RECT rcT = { 0, startY + 92, cx, startY + 146 };
         DrawTextW(hm, L"Bikode", -1, &rcT, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
         // --- Tagline ---
         SelectObject(hm, s_hFontTagline);
-        SetTextColor(hm, C(DK_TEXT2, LT_TEXT2));
-        RECT rcQ = { 0, startY + 148, cx, startY + 170 };
-        DrawTextW(hm, L"\x201C" L"I code what I like\x201D", -1, &rcQ,
+        SetTextColor(hm, BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
+        RECT rcQ = { centerX - 230, startY + 148, centerX + 230, startY + 184 };
+        DrawTextW(hm, L"Comic-book noir shell. Native speed. Serious code.", -1, &rcQ,
                   DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
-        // --- Subtle divider ---
+        // --- Hero card ---
         {
-            int dw = 50;
-            RECT rcDiv = { centerX - dw, startY + logoH - 6,
-                           centerX + dw, startY + logoH - 5 };
-            HBRUSH hDiv = CreateSolidBrush(C(DK_DIVIDER, LT_DIVIDER));
-            FillRect(hm, &rcDiv, hDiv);
-            DeleteObject(hDiv);
+            RECT rcHero = {
+                centerX - (heroW / 2),
+                startY + WELCOME_HERO_TOP,
+                centerX + (heroW / 2),
+                startY + WELCOME_HERO_TOP + heroH
+            };
+            RECT rcHeroText = rcHero;
+            rcHeroText.left += WELCOME_HERO_PAD_X;
+            rcHeroText.right -= WELCOME_HERO_PAD_X;
+            rcHeroText.top += WELCOME_HERO_PAD_Y;
+            rcHeroText.bottom -= WELCOME_HERO_PAD_Y;
+            BikodeTheme_DrawCutCornerPanel(hm, &rcHero,
+                BikodeTheme_GetColor(BKCLR_SURFACE_RAISED),
+                BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+                BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+                12, TRUE);
+            SelectObject(hm, BikodeTheme_GetFont(BKFONT_UI_BOLD));
+            SetTextColor(hm, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+            DrawTextW(hm, WELCOME_HERO_TEXT,
+                -1, &rcHeroText, DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
         }
 
         // --- Button cards ---
@@ -336,9 +381,9 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
 
         // --- Footer ---
         SelectObject(hm, s_hFontFooter);
-        SetTextColor(hm, C(DK_MUTED, LT_MUTED));
+        SetTextColor(hm, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
         RECT rcF = { 0, cy - 32, cx, cy - 12 };
-        DrawTextW(hm, L"Bikode  \x2022  A text editor for those who code what they like",
+        DrawTextW(hm, L"Bikode  •  Native editor core  •  Mission control shell",
                   -1, &rcF, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
         // Blit

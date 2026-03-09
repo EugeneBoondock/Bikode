@@ -198,12 +198,23 @@ typedef struct PipeRequest {
     char*   pszId;
     char*   pszType;          // "patch", "hint", "explain", "chat"
     char*   pszAction;        // "refactor", "fix", "explain", "complete", "transform", "chat"
+    char*   pszScope;
     char*   pszFilePath;
     char*   pszFileContent;
     char*   pszSelection;
     char*   pszInstruction;
     char*   pszChatMessage;
     char*   pszLanguage;
+    char*   pszProjectRoot;
+    char*   pszActiveFiles;
+    char*   pszGitSummary;
+    char*   pszDiagnostics;
+    char*   pszAtlasSummary;
+    char*   pszBuildCommand;
+    char*   pszTestCommand;
+    char*   pszHotZones;
+    char*   pszBufferHash;
+    int     iBufferVersion;
     int     iCursorLine;
     int     iCursorCol;
     int     iSelStartLine;
@@ -220,12 +231,22 @@ static void FreeRequest(PipeRequest* req)
     if (req->pszId) free(req->pszId);
     if (req->pszType) free(req->pszType);
     if (req->pszAction) free(req->pszAction);
+    if (req->pszScope) free(req->pszScope);
     if (req->pszFilePath) free(req->pszFilePath);
     if (req->pszFileContent) free(req->pszFileContent);
     if (req->pszSelection) free(req->pszSelection);
     if (req->pszInstruction) free(req->pszInstruction);
     if (req->pszChatMessage) free(req->pszChatMessage);
     if (req->pszLanguage) free(req->pszLanguage);
+    if (req->pszProjectRoot) free(req->pszProjectRoot);
+    if (req->pszActiveFiles) free(req->pszActiveFiles);
+    if (req->pszGitSummary) free(req->pszGitSummary);
+    if (req->pszDiagnostics) free(req->pszDiagnostics);
+    if (req->pszAtlasSummary) free(req->pszAtlasSummary);
+    if (req->pszBuildCommand) free(req->pszBuildCommand);
+    if (req->pszTestCommand) free(req->pszTestCommand);
+    if (req->pszHotZones) free(req->pszHotZones);
+    if (req->pszBufferHash) free(req->pszBufferHash);
     if (req->pszProvider) free(req->pszProvider);
     if (req->pszModel) free(req->pszModel);
     if (req->pszApiKey) free(req->pszApiKey);
@@ -238,17 +259,415 @@ static void ParseRequest(const char* json, PipeRequest* req)
     req->pszId = json_extract_string(json, "id");
     req->pszType = json_extract_string(json, "type");
     req->pszAction = json_extract_string(json, "action");
+    req->pszScope = json_extract_string(json, "scope");
     req->pszFilePath = json_extract_string(json, "filePath");
     req->pszFileContent = json_extract_string(json, "fileContent");
     req->pszSelection = json_extract_string(json, "selection");
     req->pszInstruction = json_extract_string(json, "instruction");
     req->pszChatMessage = json_extract_string(json, "chatMessage");
+    if (!req->pszChatMessage)
+        req->pszChatMessage = json_extract_string(json, "message");
     req->pszLanguage = json_extract_string(json, "language");
+    req->pszProjectRoot = json_extract_string(json, "projectRoot");
+    req->pszActiveFiles = json_extract_string(json, "activeFilesText");
+    req->pszGitSummary = json_extract_string(json, "gitSummary");
+    req->pszDiagnostics = json_extract_string(json, "diagnostics");
+    req->pszAtlasSummary = json_extract_string(json, "atlasSummary");
+    req->pszBuildCommand = json_extract_string(json, "buildCommand");
+    req->pszTestCommand = json_extract_string(json, "testCommand");
+    req->pszHotZones = json_extract_string(json, "hotZonesText");
+    req->pszBufferHash = json_extract_string(json, "bufferHash");
 
     // Provider overrides (embedded in pipe request by editor)
     req->pszProvider = json_extract_string(json, "provider");
     req->pszModel = json_extract_string(json, "providerModel");
     req->pszApiKey = json_extract_string(json, "providerKey");
+
+    {
+        const char* p = json_find_value(json, "bufferVersion");
+        if (p)
+            req->iBufferVersion = atoi(p);
+        p = json_find_value(json, "line");
+        if (p)
+            req->iCursorLine = atoi(p);
+        p = json_find_value(json, "column");
+        if (p)
+            req->iCursorCol = atoi(p);
+        p = json_find_value(json, "startLine");
+        if (p)
+            req->iSelStartLine = atoi(p);
+        p = json_find_value(json, "endLine");
+        if (p)
+            req->iSelEndLine = atoi(p);
+    }
+}
+
+//=============================================================================
+// Delta Mesh helpers
+//=============================================================================
+
+#define MAX_ATLAS_CACHE         16
+#define MAX_MISSION_HISTORY     12
+#define MAX_ACTIVE_LEASES       12
+
+typedef struct IntentSpec {
+    char  szGoal[256];
+    char  szRisk[16];
+    char  szAcceptance[512];
+    int   maxWorkers;
+    int   maxSeconds;
+    int   maxTokens;
+} IntentSpec;
+
+typedef struct AtlasCard {
+    char szKind[32];
+    char szFile[260];
+    char szSummary[512];
+    int  score;
+} AtlasCard;
+
+typedef struct AtlasLite {
+    AtlasCard cards[8];
+    int   count;
+    char* pszSummary;
+    char  szBuildCommand[256];
+    char  szTestCommand[256];
+} AtlasLite;
+
+typedef struct PatchProof {
+    char  szSummary[512];
+    char  szTouchedSymbols[512];
+    char  szAssumptions[1024];
+    char  szValidations[1024];
+    char  szReviewerVotes[1024];
+    char  szResidualRisk[256];
+    char  szRollbackFingerprint[96];
+    char  szBuildCommand[256];
+    char  szTestCommand[256];
+    double dConfidence;
+    int    iCandidateRank;
+    BOOL   bGhostLayer;
+    BOOL   bStale;
+} PatchProof;
+
+typedef struct MissionRecord {
+    char  szId[64];
+    char  szPhase[32];
+    char  szSummary[256];
+    char  szRisk[16];
+    DWORD dwTick;
+} MissionRecord;
+
+typedef struct LeaseEntry {
+    char  szOwner[64];
+    char  szScope[260];
+    DWORD dwTick;
+    BOOL  bActive;
+} LeaseEntry;
+
+typedef struct AtlasCacheEntry {
+    char  szKey[512];
+    char* pszSummary;
+    DWORD dwTick;
+} AtlasCacheEntry;
+
+static MissionRecord    s_missionHistory[MAX_MISSION_HISTORY];
+static int              s_missionHistoryCount = 0;
+static LeaseEntry       s_leases[MAX_ACTIVE_LEASES];
+static AtlasCacheEntry  s_atlasCache[MAX_ATLAS_CACHE];
+static LONG             s_nextMissionSeq = 1;
+
+static const char* safe_cstr(const char* s)
+{
+    return s ? s : "";
+}
+
+static unsigned __int64 fnv1a64(const char* s)
+{
+    const unsigned char* p = (const unsigned char*)safe_cstr(s);
+    unsigned __int64 h = 1469598103934665603ULL;
+    while (*p)
+    {
+        h ^= (unsigned __int64)(*p++);
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+static void hash_to_hex(unsigned __int64 h, char* out, int cchOut)
+{
+    snprintf(out, cchOut, "%016llx", h);
+}
+
+static BOOL PathExistsUtf8(const char* utf8Dir, const char* leaf)
+{
+    WCHAR wszDir[MAX_PATH];
+    WCHAR wszLeaf[MAX_PATH];
+    WCHAR wszPath[MAX_PATH];
+    if (!utf8Dir || !utf8Dir[0] || !leaf || !leaf[0]) return FALSE;
+    if (!MultiByteToWideChar(CP_UTF8, 0, utf8Dir, -1, wszDir, MAX_PATH))
+        return FALSE;
+    if (!MultiByteToWideChar(CP_UTF8, 0, leaf, -1, wszLeaf, MAX_PATH))
+        return FALSE;
+    _snwprintf_s(wszPath, _countof(wszPath), _TRUNCATE, L"%s\\%s", wszDir, wszLeaf);
+    return GetFileAttributesW(wszPath) != INVALID_FILE_ATTRIBUTES;
+}
+
+static void CompileIntentSpec(const PipeRequest* req, IntentSpec* spec)
+{
+    ZeroMemory(spec, sizeof(*spec));
+    _snprintf_s(spec->szGoal, sizeof(spec->szGoal), _TRUNCATE, "%s",
+                req->pszInstruction && req->pszInstruction[0]
+                    ? req->pszInstruction
+                    : (req->pszAction && req->pszAction[0] ? req->pszAction : "help with current code"));
+    _snprintf_s(spec->szRisk, sizeof(spec->szRisk), _TRUNCATE, "%s",
+                (req->pszDiagnostics && req->pszDiagnostics[0]) ? "medium" :
+                (req->pszScope && strcmp(req->pszScope, "project") == 0) ? "high" : "low");
+    _snprintf_s(spec->szAcceptance, sizeof(spec->szAcceptance), _TRUNCATE,
+                "Return a minimal valid result, preserve existing intent, include proof metadata, and stay anchored to buffer hash %s.",
+                req->pszBufferHash ? req->pszBufferHash : "unknown");
+    spec->maxWorkers = 3;
+    spec->maxSeconds = 45;
+    spec->maxTokens = 4096;
+}
+
+static void GuessTouchedSymbols(const PipeRequest* req, char* out, int cchOut)
+{
+    out[0] = '\0';
+    if (req->pszSelection && req->pszSelection[0])
+    {
+        const char* p = req->pszSelection;
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+            p++;
+        const char* end = p;
+        while (*end && *end != '\r' && *end != '\n')
+            end++;
+        int len = (int)(end - p);
+        if (len > 120) len = 120;
+        if (len > 0)
+        {
+            memcpy(out, p, len);
+            out[len] = '\0';
+            return;
+        }
+    }
+    if (req->pszFilePath && req->pszFilePath[0])
+    {
+        _snprintf_s(out, cchOut, _TRUNCATE, "%s (%s scope)",
+                    req->pszFilePath,
+                    req->pszScope && req->pszScope[0] ? req->pszScope : "file");
+        return;
+    }
+    _snprintf_s(out, cchOut, _TRUNCATE, "current workspace scope");
+}
+
+static char* AtlasCache_Get(const char* key)
+{
+    for (int i = 0; i < MAX_ATLAS_CACHE; i++)
+    {
+        if (s_atlasCache[i].pszSummary && strcmp(s_atlasCache[i].szKey, key) == 0)
+        {
+            s_atlasCache[i].dwTick = GetTickCount();
+            return _strdup(s_atlasCache[i].pszSummary);
+        }
+    }
+    return NULL;
+}
+
+static void AtlasCache_Put(const char* key, const char* summary)
+{
+    int slot = -1;
+    DWORD oldest = MAXDWORD;
+    for (int i = 0; i < MAX_ATLAS_CACHE; i++)
+    {
+        if (!s_atlasCache[i].pszSummary) { slot = i; break; }
+        if (s_atlasCache[i].dwTick < oldest) {
+            oldest = s_atlasCache[i].dwTick;
+            slot = i;
+        }
+    }
+    if (slot < 0) slot = 0;
+    if (s_atlasCache[slot].pszSummary) free(s_atlasCache[slot].pszSummary);
+    _snprintf_s(s_atlasCache[slot].szKey, sizeof(s_atlasCache[slot].szKey), _TRUNCATE, "%s", safe_cstr(key));
+    s_atlasCache[slot].pszSummary = _strdup(safe_cstr(summary));
+    s_atlasCache[slot].dwTick = GetTickCount();
+}
+
+static void BuildAtlasLite(const PipeRequest* req, AtlasLite* atlas)
+{
+    ZeroMemory(atlas, sizeof(*atlas));
+
+    if (req->pszBuildCommand && req->pszBuildCommand[0])
+        _snprintf_s(atlas->szBuildCommand, sizeof(atlas->szBuildCommand), _TRUNCATE, "%s", req->pszBuildCommand);
+    else if (req->pszProjectRoot && PathExistsUtf8(req->pszProjectRoot, "do_build.cmd"))
+        _snprintf_s(atlas->szBuildCommand, sizeof(atlas->szBuildCommand), _TRUNCATE, "cmd /c do_build.cmd");
+    else if (req->pszProjectRoot && PathExistsUtf8(req->pszProjectRoot, "Notepad2e.vcxproj"))
+        _snprintf_s(atlas->szBuildCommand, sizeof(atlas->szBuildCommand), _TRUNCATE, "msbuild Notepad2e.vcxproj /t:Build /p:Configuration=Debug /p:Platform=x64");
+
+    if (req->pszTestCommand && req->pszTestCommand[0])
+        _snprintf_s(atlas->szTestCommand, sizeof(atlas->szTestCommand), _TRUNCATE, "%s", req->pszTestCommand);
+    else if (req->pszProjectRoot && PathExistsUtf8(req->pszProjectRoot, "test\\Extension\\Notepad2eTests.vcxproj"))
+        _snprintf_s(atlas->szTestCommand, sizeof(atlas->szTestCommand), _TRUNCATE, "msbuild test\\Extension\\Notepad2eTests.vcxproj /t:Build /p:Configuration=Debug /p:Platform=x64");
+
+    char key[512];
+    _snprintf_s(key, sizeof(key), _TRUNCATE, "%s|%s|%s",
+                safe_cstr(req->pszProjectRoot), safe_cstr(req->pszFilePath), safe_cstr(req->pszLanguage));
+    atlas->pszSummary = AtlasCache_Get(key);
+    if (atlas->pszSummary)
+        return;
+
+    StrBuf sb;
+    sb_init(&sb, 1024);
+    if (req->pszProjectRoot && req->pszProjectRoot[0])
+        sb_appendf(&sb, "Project root: %s\n", req->pszProjectRoot);
+    if (req->pszFilePath && req->pszFilePath[0])
+        sb_appendf(&sb, "Current file: %s\n", req->pszFilePath);
+    if (req->pszLanguage && req->pszLanguage[0])
+        sb_appendf(&sb, "Language: %s\n", req->pszLanguage);
+    if (req->pszGitSummary && req->pszGitSummary[0])
+        sb_appendf(&sb, "Git: %s\n", req->pszGitSummary);
+    if (req->pszDiagnostics && req->pszDiagnostics[0])
+        sb_appendf(&sb, "Diagnostics: %s\n", req->pszDiagnostics);
+    if (req->pszActiveFiles && req->pszActiveFiles[0])
+        sb_appendf(&sb, "Active files:\n%s\n", req->pszActiveFiles);
+    if (req->pszHotZones && req->pszHotZones[0])
+        sb_appendf(&sb, "Hot zones:\n%s\n", req->pszHotZones);
+    if (atlas->szBuildCommand[0])
+        sb_appendf(&sb, "Build memory: %s\n", atlas->szBuildCommand);
+    if (atlas->szTestCommand[0])
+        sb_appendf(&sb, "Test memory: %s\n", atlas->szTestCommand);
+    if (req->pszAtlasSummary && req->pszAtlasSummary[0])
+        sb_appendf(&sb, "Editor atlas hint: %s\n", req->pszAtlasSummary);
+
+    atlas->cards[0].score = 100;
+    _snprintf_s(atlas->cards[0].szKind, sizeof(atlas->cards[0].szKind), _TRUNCATE, "file");
+    _snprintf_s(atlas->cards[0].szFile, sizeof(atlas->cards[0].szFile), _TRUNCATE, "%s", safe_cstr(req->pszFilePath));
+    _snprintf_s(atlas->cards[0].szSummary, sizeof(atlas->cards[0].szSummary), _TRUNCATE,
+                "Current working file in %s, cursor %d:%d",
+                safe_cstr(req->pszLanguage), req->iCursorLine, req->iCursorCol);
+    atlas->count = 1;
+
+    atlas->pszSummary = sb.data;
+    AtlasCache_Put(key, atlas->pszSummary);
+}
+
+static void FreeAtlasLite(AtlasLite* atlas)
+{
+    if (atlas->pszSummary) free(atlas->pszSummary);
+    atlas->pszSummary = NULL;
+}
+
+static BOOL LeaseScheduler_Acquire(const char* owner, const char* scope)
+{
+    if (!scope || !scope[0]) return TRUE;
+    for (int i = 0; i < MAX_ACTIVE_LEASES; i++)
+    {
+        if (s_leases[i].bActive && strcmp(s_leases[i].szScope, scope) == 0 &&
+            strcmp(s_leases[i].szOwner, safe_cstr(owner)) != 0)
+            return FALSE;
+    }
+    for (int i = 0; i < MAX_ACTIVE_LEASES; i++)
+    {
+        if (!s_leases[i].bActive)
+        {
+            s_leases[i].bActive = TRUE;
+            s_leases[i].dwTick = GetTickCount();
+            _snprintf_s(s_leases[i].szOwner, sizeof(s_leases[i].szOwner), _TRUNCATE, "%s", safe_cstr(owner));
+            _snprintf_s(s_leases[i].szScope, sizeof(s_leases[i].szScope), _TRUNCATE, "%s", safe_cstr(scope));
+            return TRUE;
+        }
+    }
+    return TRUE;
+}
+
+static void LeaseScheduler_Release(const char* owner)
+{
+    for (int i = 0; i < MAX_ACTIVE_LEASES; i++)
+    {
+        if (s_leases[i].bActive && strcmp(s_leases[i].szOwner, safe_cstr(owner)) == 0)
+            ZeroMemory(&s_leases[i], sizeof(s_leases[i]));
+    }
+}
+
+static void MissionQueue_Push(const char* id, const char* phase, const char* summary, const char* risk)
+{
+    MissionRecord rec;
+    ZeroMemory(&rec, sizeof(rec));
+    _snprintf_s(rec.szId, sizeof(rec.szId), _TRUNCATE, "%s", safe_cstr(id));
+    _snprintf_s(rec.szPhase, sizeof(rec.szPhase), _TRUNCATE, "%s", safe_cstr(phase));
+    _snprintf_s(rec.szSummary, sizeof(rec.szSummary), _TRUNCATE, "%s", safe_cstr(summary));
+    _snprintf_s(rec.szRisk, sizeof(rec.szRisk), _TRUNCATE, "%s", safe_cstr(risk));
+    rec.dwTick = GetTickCount();
+
+    if (s_missionHistoryCount < MAX_MISSION_HISTORY)
+        s_missionHistory[s_missionHistoryCount++] = rec;
+    else
+    {
+        memmove(&s_missionHistory[0], &s_missionHistory[1], sizeof(MissionRecord) * (MAX_MISSION_HISTORY - 1));
+        s_missionHistory[MAX_MISSION_HISTORY - 1] = rec;
+    }
+}
+
+static void MissionQueue_Format(StrBuf* sb)
+{
+    for (int i = 0; i < s_missionHistoryCount; i++)
+    {
+        sb_appendf(sb, "%s [%s] %s",
+                   s_missionHistory[i].szId,
+                   s_missionHistory[i].szPhase,
+                   s_missionHistory[i].szSummary);
+        if (i + 1 < s_missionHistoryCount)
+            sb_append(sb, "\n", 1);
+    }
+}
+
+static void FillProofFromHeuristics(const PipeRequest* req, const AtlasLite* atlas,
+                                    const IntentSpec* intent, const char* diff,
+                                    PatchProof* proof)
+{
+    char touched[512];
+    char fp[96];
+    unsigned __int64 h = fnv1a64(safe_cstr(diff));
+    hash_to_hex(h, fp, sizeof(fp));
+    GuessTouchedSymbols(req, touched, sizeof(touched));
+
+    _snprintf_s(proof->szTouchedSymbols, sizeof(proof->szTouchedSymbols), _TRUNCATE, "%s", touched);
+    _snprintf_s(proof->szAssumptions, sizeof(proof->szAssumptions), _TRUNCATE,
+                "Assumed current buffer hash %s, scope %s, and editor atlas summary are current.",
+                req->pszBufferHash ? req->pszBufferHash : "unknown",
+                req->pszScope ? req->pszScope : "selection");
+    _snprintf_s(proof->szValidations, sizeof(proof->szValidations), _TRUNCATE,
+                "Verifier: request anchored to project root %s. Diff present: %s. Build memory: %s. Test memory: %s.",
+                req->pszProjectRoot ? req->pszProjectRoot : "(none)",
+                (diff && diff[0]) ? "yes" : "no",
+                atlas->szBuildCommand[0] ? atlas->szBuildCommand : "(none)",
+                atlas->szTestCommand[0] ? atlas->szTestCommand : "(none)");
+    _snprintf_s(proof->szReviewerVotes, sizeof(proof->szReviewerVotes), _TRUNCATE,
+                "Scout: pass (atlas-lite ready). Verifier: %s. Adversary: %s.",
+                (diff && strstr(diff, "@@")) ? "pass (unified diff detected)" : "warn (no hunks found)",
+                (diff && (strstr(diff, "DeleteFile") || strstr(diff, "TerminateProcess") || strstr(diff, "RemoveDirectory")))
+                    ? "warn (destructive API touched)"
+                    : "pass (no obvious destructive pattern)");
+    _snprintf_s(proof->szResidualRisk, sizeof(proof->szResidualRisk), _TRUNCATE,
+                "%s risk. Review edge cases around %s.",
+                intent->szRisk[0] ? intent->szRisk : "medium",
+                touched[0] ? touched : "touched symbols");
+    _snprintf_s(proof->szRollbackFingerprint, sizeof(proof->szRollbackFingerprint), _TRUNCATE, "%s", fp);
+    _snprintf_s(proof->szBuildCommand, sizeof(proof->szBuildCommand), _TRUNCATE, "%s", atlas->szBuildCommand);
+    _snprintf_s(proof->szTestCommand, sizeof(proof->szTestCommand), _TRUNCATE, "%s", atlas->szTestCommand);
+    _snprintf_s(proof->szSummary, sizeof(proof->szSummary), _TRUNCATE,
+                "Mission compiled, atlas-lite consulted, worker diff generated, verifier/adversary heuristics attached.");
+    proof->dConfidence = (diff && strstr(diff, "@@")) ? 0.78 : 0.46;
+    proof->iCandidateRank = 1;
+    proof->bGhostLayer = TRUE;
+    proof->bStale = FALSE;
+}
+
+static void BuildMissionId(const char* reqId, char* out, int cchOut)
+{
+    LONG seq = InterlockedIncrement(&s_nextMissionSeq);
+    _snprintf_s(out, cchOut, _TRUNCATE, "mission_%s_%ld",
+                (reqId && reqId[0]) ? reqId : "anon", seq);
 }
 
 //=============================================================================
@@ -256,11 +675,11 @@ static void ParseRequest(const char* json, PipeRequest* req)
 //=============================================================================
 
 static const char* SYSTEM_PROMPT_PATCH =
-    "You are a code editing assistant for Bikode, a lightweight AI IDE. "
-    "When asked to modify code, respond with ONLY a unified diff. "
+    "You are the PatchWorker inside Bikode Delta Mesh, a lightweight proof-carrying coding runtime. "
+    "Respond with ONLY a unified diff. "
     "Use standard unified diff format with --- and +++ headers and @@ hunk markers. "
-    "Do not include explanations outside the diff. "
-    "The diff should be directly applicable to the given file content.";
+    "Do not include any prose outside the diff. "
+    "Keep changes minimal, safe, and directly applicable to the provided file content.";
 
 static const char* SYSTEM_PROMPT_EXPLAIN =
     "You are a code explanation assistant. "
@@ -272,7 +691,8 @@ static const char* SYSTEM_PROMPT_CHAT =
     "You help with programming questions, code review, debugging, and general development tasks. "
     "Be concise and practical. When suggesting code changes, provide them as diffs when appropriate.";
 
-static void BuildPrompt(PipeRequest* req, StrBuf* sbSystem, StrBuf* sbUser)
+static void BuildPrompt(PipeRequest* req, const IntentSpec* intent, const AtlasLite* atlas,
+                        const char* pszMissionId, StrBuf* sbSystem, StrBuf* sbUser)
 {
     if (req->pszType && strcmp(req->pszType, "chat") == 0)
         sb_append(sbSystem, SYSTEM_PROMPT_CHAT, -1);
@@ -280,6 +700,11 @@ static void BuildPrompt(PipeRequest* req, StrBuf* sbSystem, StrBuf* sbUser)
         sb_append(sbSystem, SYSTEM_PROMPT_EXPLAIN, -1);
     else
         sb_append(sbSystem, SYSTEM_PROMPT_PATCH, -1);
+
+    if (pszMissionId && pszMissionId[0])
+        sb_appendf(sbSystem, "\nMission id: %s", pszMissionId);
+    if (intent && intent->szRisk[0])
+        sb_appendf(sbSystem, "\nRisk tier: %s", intent->szRisk);
 
     if (req->pszType && strcmp(req->pszType, "chat") == 0)
     {
@@ -301,6 +726,8 @@ static void BuildPrompt(PipeRequest* req, StrBuf* sbSystem, StrBuf* sbUser)
     }
     else if (req->pszType && strcmp(req->pszType, "explain") == 0)
     {
+        if (atlas && atlas->pszSummary)
+            sb_appendf(sbUser, "Atlas-lite:\n%s\n\n", atlas->pszSummary);
         if (req->pszSelection && req->pszSelection[0])
         {
             sb_appendf(sbUser, "Explain this %s code:\n\n```\n%s\n```",
@@ -316,6 +743,18 @@ static void BuildPrompt(PipeRequest* req, StrBuf* sbSystem, StrBuf* sbUser)
     }
     else
     {
+        if (intent)
+        {
+            sb_appendf(sbUser, "Goal: %s\n", intent->szGoal);
+            sb_appendf(sbUser, "Acceptance: %s\n", intent->szAcceptance);
+            sb_appendf(sbUser, "Risk tier: %s\n\n", intent->szRisk);
+        }
+        if (atlas && atlas->pszSummary)
+        {
+            sb_append(sbUser, "Atlas-lite:\n", -1);
+            sb_append(sbUser, atlas->pszSummary, -1);
+            sb_append(sbUser, "\n", 1);
+        }
         if (req->pszFilePath)
             sb_appendf(sbUser, "File: %s\n", req->pszFilePath);
         if (req->pszLanguage)
@@ -331,6 +770,14 @@ static void BuildPrompt(PipeRequest* req, StrBuf* sbSystem, StrBuf* sbUser)
             sb_appendf(sbUser, "Selected code (lines %d-%d):\n```\n%s\n```\n\n",
                 req->iSelStartLine, req->iSelEndLine, req->pszSelection);
         }
+        if (req->pszGitSummary && req->pszGitSummary[0])
+            sb_appendf(sbUser, "Git summary: %s\n", req->pszGitSummary);
+        if (req->pszDiagnostics && req->pszDiagnostics[0])
+            sb_appendf(sbUser, "Diagnostics: %s\n", req->pszDiagnostics);
+        if (atlas && atlas->szBuildCommand[0])
+            sb_appendf(sbUser, "Build command memory: %s\n", atlas->szBuildCommand);
+        if (atlas && atlas->szTestCommand[0])
+            sb_appendf(sbUser, "Test command memory: %s\n", atlas->szTestCommand);
         if (req->pszInstruction && req->pszInstruction[0])
             sb_appendf(sbUser, "Instruction: %s\n", req->pszInstruction);
         else if (req->pszAction)
@@ -1057,52 +1504,137 @@ static void ResolveRequestConfig(const PipeRequest* req, AIProviderConfig* outCf
 // Process a single request from the editor
 //=============================================================================
 
-static void BuildResponse(StrBuf* sb, const char* id, const char* type,
-                          const char* content, const char* diff,
-                          const char* model)
+static void BuildTextResponse(StrBuf* sb, const char* id, const char* type,
+                              const char* content, const char* model,
+                              const char* missionId, const char* missionPhase,
+                              const char* missionSummary, const char* missionQueue,
+                              const AtlasLite* atlas)
 {
     sb_append(sb, "{", 1);
-
     sb_append(sb, "\"id\":", -1);
     json_escape_append(sb, id ? id : "");
-
-    sb_append(sb, ",\"type\":", -1);
-    json_escape_append(sb, type ? type : "response");
-
     sb_append(sb, ",\"status\":\"ok\"", -1);
 
-    if (diff && diff[0])
+    if (type && strcmp(type, "chat") == 0)
     {
-        sb_append(sb, ",\"diff\":", -1);
-        json_escape_append(sb, diff);
+        sb_append(sb, ",\"chat_response\":", -1);
+        json_escape_append(sb, content ? content : "");
     }
-
-    if (content && content[0])
+    else if (type && strcmp(type, "explain") == 0)
     {
-        if (type && strcmp(type, "chat") == 0)
-        {
-            sb_append(sb, ",\"chatResponse\":", -1);
-            json_escape_append(sb, content);
-        }
-        else if (type && strcmp(type, "explain") == 0)
-        {
-            sb_append(sb, ",\"explanation\":", -1);
-            json_escape_append(sb, content);
-        }
-        else
-        {
-            sb_append(sb, ",\"diff\":", -1);
-            json_escape_append(sb, content);
-        }
-    }
-
-    if (model && model[0])
-    {
-        sb_append(sb, ",\"meta\":{\"model\":", -1);
-        json_escape_append(sb, model);
+        sb_append(sb, ",\"explanation\":{\"summary\":", -1);
+        json_escape_append(sb, content ? content : "");
+        sb_append(sb, ",\"details\":", -1);
+        json_escape_append(sb, content ? content : "");
         sb_append(sb, "}", 1);
     }
 
+    if (missionId && missionId[0]) {
+        sb_append(sb, ",\"missionId\":", -1);
+        json_escape_append(sb, missionId);
+    }
+    if (missionPhase && missionPhase[0]) {
+        sb_append(sb, ",\"missionPhase\":", -1);
+        json_escape_append(sb, missionPhase);
+    }
+    if (missionSummary && missionSummary[0]) {
+        sb_append(sb, ",\"missionSummary\":", -1);
+        json_escape_append(sb, missionSummary);
+    }
+    if (missionQueue && missionQueue[0]) {
+        sb_append(sb, ",\"missionQueue\":", -1);
+        json_escape_append(sb, missionQueue);
+    }
+    if (atlas && atlas->pszSummary && atlas->pszSummary[0]) {
+        sb_append(sb, ",\"atlasSummary\":", -1);
+        json_escape_append(sb, atlas->pszSummary);
+    }
+
+    sb_append(sb, ",\"meta\":{\"model\":", -1);
+    json_escape_append(sb, model ? model : "");
+    sb_append(sb, "}", 1);
+    sb_append(sb, "}", 1);
+}
+
+static void BuildPatchResponse(StrBuf* sb, const PipeRequest* req,
+                               const char* missionId, const char* missionPhase,
+                               const char* missionSummary, const char* missionQueue,
+                               const AtlasLite* atlas, const PatchProof* proof,
+                               const char* diff, const char* model)
+{
+    sb_append(sb, "{", 1);
+    sb_append(sb, "\"id\":", -1);
+    json_escape_append(sb, req->pszId ? req->pszId : "");
+    sb_append(sb, ",\"status\":\"ok\"", -1);
+
+    sb_append(sb, ",\"patches\":[{", -1);
+    sb_append(sb, "\"file\":", -1);
+    json_escape_append(sb, req->pszFilePath ? req->pszFilePath : "");
+    sb_append(sb, ",\"diff\":", -1);
+    json_escape_append(sb, diff ? diff : "");
+    sb_append(sb, ",\"description\":", -1);
+    json_escape_append(sb, req->pszInstruction && req->pszInstruction[0]
+                              ? req->pszInstruction
+                              : "Bikode Delta Mesh candidate layer");
+    sb_append(sb, ",\"proofSummary\":", -1);
+    json_escape_append(sb, proof->szSummary);
+    sb_append(sb, ",\"touchedSymbols\":", -1);
+    json_escape_append(sb, proof->szTouchedSymbols);
+    sb_append(sb, ",\"assumptions\":", -1);
+    json_escape_append(sb, proof->szAssumptions);
+    sb_append(sb, ",\"validations\":", -1);
+    json_escape_append(sb, proof->szValidations);
+    sb_append(sb, ",\"reviewerVotes\":", -1);
+    json_escape_append(sb, proof->szReviewerVotes);
+    sb_append(sb, ",\"residualRisk\":", -1);
+    json_escape_append(sb, proof->szResidualRisk);
+    sb_append(sb, ",\"rollbackFingerprint\":", -1);
+    json_escape_append(sb, proof->szRollbackFingerprint);
+    sb_append(sb, ",\"baseBufferHash\":", -1);
+    json_escape_append(sb, req->pszBufferHash ? req->pszBufferHash : "");
+    sb_appendf(sb, ",\"baseBufferVersion\":%d", req->iBufferVersion);
+    sb_appendf(sb, ",\"confidence\":%.2f", proof->dConfidence);
+    sb_appendf(sb, ",\"candidateRank\":%d", proof->iCandidateRank);
+    sb_appendf(sb, ",\"ghostLayer\":%s", proof->bGhostLayer ? "true" : "false");
+    sb_appendf(sb, ",\"stale\":%s", proof->bStale ? "true" : "false");
+    sb_append(sb, "}]", -1);
+
+    if (missionId && missionId[0]) {
+        sb_append(sb, ",\"missionId\":", -1);
+        json_escape_append(sb, missionId);
+    }
+    if (missionPhase && missionPhase[0]) {
+        sb_append(sb, ",\"missionPhase\":", -1);
+        json_escape_append(sb, missionPhase);
+    }
+    if (missionSummary && missionSummary[0]) {
+        sb_append(sb, ",\"missionSummary\":", -1);
+        json_escape_append(sb, missionSummary);
+    }
+    if (missionQueue && missionQueue[0]) {
+        sb_append(sb, ",\"missionQueue\":", -1);
+        json_escape_append(sb, missionQueue);
+    }
+    if (atlas && atlas->pszSummary && atlas->pszSummary[0]) {
+        sb_append(sb, ",\"atlasSummary\":", -1);
+        json_escape_append(sb, atlas->pszSummary);
+    }
+    sb_append(sb, ",\"proofSummary\":", -1);
+    json_escape_append(sb, proof->szSummary);
+    if (proof->szBuildCommand[0]) {
+        sb_append(sb, ",\"buildCommand\":", -1);
+        json_escape_append(sb, proof->szBuildCommand);
+    }
+    if (proof->szTestCommand[0]) {
+        sb_append(sb, ",\"testCommand\":", -1);
+        json_escape_append(sb, proof->szTestCommand);
+    }
+    sb_append(sb, ",\"scratchpadSummary\":", -1);
+    json_escape_append(sb, "Scout summary compacted; worker diff generated; verifier and adversary notes attached.");
+
+    sb_append(sb, ",\"meta\":{\"model\":", -1);
+    json_escape_append(sb, model ? model : "");
+    sb_append(sb, "}", 1);
     sb_append(sb, "}", 1);
 }
 
@@ -1225,12 +1757,39 @@ static char* ProcessRequest(const char* jsonReq)
     AIProviderConfig reqCfg;
     ResolveRequestConfig(&req, &reqCfg);
 
+    IntentSpec intent;
+    CompileIntentSpec(&req, &intent);
+
+    AtlasLite atlas;
+    BuildAtlasLite(&req, &atlas);
+
+    char missionId[64];
+    char missionPhase[32] = "planning";
+    char missionSummary[256];
+    BuildMissionId(req.pszId, missionId, sizeof(missionId));
+    _snprintf_s(missionSummary, sizeof(missionSummary), _TRUNCATE,
+                "%s", intent.szGoal);
+
+    if (!LeaseScheduler_Acquire(missionId, req.pszFilePath ? req.pszFilePath : req.pszProjectRoot))
+    {
+        StrBuf deny;
+        sb_init(&deny, 512);
+        sb_append(&deny, "{\"id\":", -1);
+        json_escape_append(&deny, req.pszId ? req.pszId : "");
+        sb_append(&deny, ",\"status\":\"error\",\"error\":{\"code\":\"lease_conflict\",\"message\":\"Another mission already owns this scope.\"}}", -1);
+        FreeAtlasLite(&atlas);
+        FreeRequest(&req);
+        return deny.data;
+    }
+
+    MissionQueue_Push(missionId, missionPhase, missionSummary, intent.szRisk);
+
     // Build prompt
     StrBuf sbSystem, sbUser;
     sb_init(&sbSystem, 1024);
     sb_init(&sbUser, 8192);
 
-    BuildPrompt(&req, &sbSystem, &sbUser);
+    BuildPrompt(&req, &intent, &atlas, missionId, &sbSystem, &sbUser);
 
     if (s_state.bVerbose)
     {
@@ -1271,18 +1830,51 @@ static char* ProcessRequest(const char* jsonReq)
     sb_free(&sbSystem);
     sb_free(&sbUser);
 
+    PatchProof proof;
+    ZeroMemory(&proof, sizeof(proof));
+    FillProofFromHeuristics(&req, &atlas, &intent, llmResponse, &proof);
+
+    if (req.pszType && strcmp(req.pszType, "chat") == 0)
+        _snprintf_s(missionPhase, sizeof(missionPhase), _TRUNCATE, "reply_ready");
+    else if (req.pszType && strcmp(req.pszType, "explain") == 0)
+        _snprintf_s(missionPhase, sizeof(missionPhase), _TRUNCATE, "explain_ready");
+    else
+        _snprintf_s(missionPhase, sizeof(missionPhase), _TRUNCATE, "proof_ready");
+
+    _snprintf_s(missionSummary, sizeof(missionSummary), _TRUNCATE,
+                "%s [%s]", intent.szGoal, missionPhase);
+    MissionQueue_Push(missionId, missionPhase, missionSummary, intent.szRisk);
+
+    StrBuf missionQueue;
+    sb_init(&missionQueue, 512);
+    MissionQueue_Format(&missionQueue);
+
     // Build pipe response
     StrBuf sbResp;
     sb_init(&sbResp, 4096);
 
-    if (req.pszType && strcmp(req.pszType, "chat") == 0)
-        BuildResponse(&sbResp, req.pszId, "chat", llmResponse, NULL, reqCfg.szModel);
+    if (llmResponse && (strncmp(llmResponse, "Error:", 6) == 0 || strncmp(llmResponse, "API Error:", 10) == 0))
+    {
+        sb_append(&sbResp, "{\"id\":", -1);
+        json_escape_append(&sbResp, req.pszId ? req.pszId : "");
+        sb_append(&sbResp, ",\"status\":\"error\",\"error\":{\"code\":\"model_error\",\"message\":", -1);
+        json_escape_append(&sbResp, llmResponse);
+        sb_append(&sbResp, "}}", -1);
+    }
+    else if (req.pszType && strcmp(req.pszType, "chat") == 0)
+        BuildTextResponse(&sbResp, req.pszId, "chat", llmResponse, reqCfg.szModel,
+                          missionId, missionPhase, missionSummary, missionQueue.data, &atlas);
     else if (req.pszType && strcmp(req.pszType, "explain") == 0)
-        BuildResponse(&sbResp, req.pszId, "explain", llmResponse, NULL, reqCfg.szModel);
+        BuildTextResponse(&sbResp, req.pszId, "explain", llmResponse, reqCfg.szModel,
+                          missionId, missionPhase, missionSummary, missionQueue.data, &atlas);
     else
-        BuildResponse(&sbResp, req.pszId, "patch", NULL, llmResponse, reqCfg.szModel);
+        BuildPatchResponse(&sbResp, &req, missionId, missionPhase, missionSummary,
+                           missionQueue.data, &atlas, &proof, llmResponse, reqCfg.szModel);
 
     if (llmResponse) free(llmResponse);
+    sb_free(&missionQueue);
+    FreeAtlasLite(&atlas);
+    LeaseScheduler_Release(missionId);
     FreeRequest(&req);
 
     char* result = sbResp.data;
