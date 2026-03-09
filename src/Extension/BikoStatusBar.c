@@ -22,17 +22,17 @@
 #define BSB_MAX_PARTS       8
 #define BSB_MAX_TEXT       256
 
-// Dark palette
-#define BSB_DK_BG          RGB(24, 24, 24)
-#define BSB_DK_TEXT         RGB(180, 180, 185)
-#define BSB_DK_SEP          RGB(55, 55, 60)
-#define BSB_DK_HOVER        RGB(40, 40, 45)
+// COMIC BOOK STATUS BAR PALETTE
+#define BSB_DK_BG          RGB(10, 10, 12)      // near-black ink
+#define BSB_DK_TEXT        RGB(255, 215, 0)     // POW! yellow text
+#define BSB_DK_SEP         RGB(80, 72, 10)      // dark yellow separator
+#define BSB_DK_HOVER       RGB(30, 28, 5)       // subtle yellow hover glow
 
-// Light palette
+// Light palette (not used in comic mode)
 #define BSB_LT_BG          RGB(245, 245, 245)
-#define BSB_LT_TEXT         RGB(30, 30, 30)
-#define BSB_LT_SEP          RGB(210, 210, 215)
-#define BSB_LT_HOVER        RGB(230, 230, 235)
+#define BSB_LT_TEXT        RGB(30, 30, 30)
+#define BSB_LT_SEP         RGB(210, 210, 215)
+#define BSB_LT_HOVER       RGB(230, 230, 235)
 
 //=============================================================================
 // State
@@ -61,11 +61,12 @@ static void CreateStatusFont(void)
 {
   if (s_hFont) DeleteObject(s_hFont);
 
-  NONCLIENTMETRICSW ncm;
-  ncm.cbSize = sizeof(ncm);
-  SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
-  ncm.lfStatusFont.lfWeight = FW_NORMAL;
-  s_hFont = CreateFontIndirectW(&ncm.lfStatusFont);
+  // Comic-book: bold Impact-style status font
+  s_hFont = CreateFontW(
+      -13, 0, 0, 0,
+      FW_BOLD, FALSE, FALSE, FALSE,
+      ANSI_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+      FIXED_PITCH | FF_SWISS, L"Consolas");
 
   if (!s_hFont)
     s_hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
@@ -110,7 +111,7 @@ static void Paint(HWND hwnd, HDC hdc)
 
   BOOL dk = DarkMode_IsEnabled();
   COLORREF cBg   = dk ? BSB_DK_BG   : BSB_LT_BG;
-  COLORREF cText = dk ? BSB_DK_TEXT  : BSB_LT_TEXT;
+  COLORREF cText = dk ? BSB_DK_TEXT : BSB_LT_TEXT;
   COLORREF cSep  = dk ? BSB_DK_SEP  : BSB_LT_SEP;
   COLORREF cHov  = dk ? BSB_DK_HOVER: BSB_LT_HOVER;
 
@@ -119,10 +120,20 @@ static void Paint(HWND hwnd, HDC hdc)
   HBITMAP bm = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
   HBITMAP obm = (HBITMAP)SelectObject(mem, bm);
 
-  // Background fill
+  // Background fill — ink black
   HBRUSH bg = CreateSolidBrush(cBg);
   FillRect(mem, &rc, bg);
   DeleteObject(bg);
+
+  // Comic top border — bold yellow rule
+  if (dk) {
+    HPEN topPen = CreatePen(PS_SOLID, 2, RGB(255, 215, 0));
+    HPEN oTPen = (HPEN)SelectObject(mem, topPen);
+    MoveToEx(mem, 0,        0, NULL);
+    LineTo  (mem, rc.right, 0);
+    SelectObject(mem, oTPen);
+    DeleteObject(topPen);
+  }
 
   HPEN sepPen = CreatePen(PS_SOLID, 1, cSep);
   HPEN oPen = (HPEN)SelectObject(mem, sepPen);
@@ -132,23 +143,27 @@ static void Paint(HWND hwnd, HDC hdc)
 
   for (int i = 0; i < s_nParts; i++) {
     RECT pr = PaneRect(i, &rc);
-    // Offset below the top border line
-    pr.top = 1;
+    pr.top = 2;  // leave room for top border
 
-    // Hover highlight
+    // Hover highlight — subtle yellow glow
     if (i == s_hover) {
       HBRUSH hb = CreateSolidBrush(cHov);
       FillRect(mem, &pr, hb);
       DeleteObject(hb);
     }
 
-    // Separator line between panes (except before first)
+    // Separator between panes
     if (i > 0) {
-      MoveToEx(mem, pr.left, pr.top + 3, NULL);
-      LineTo(mem, pr.left, pr.bottom - 3);
+      // Comic-style: vertical yellow tick
+      HPEN sepYellow = CreatePen(PS_SOLID, 1, RGB(80, 72, 10));
+      HPEN oSY = (HPEN)SelectObject(mem, sepYellow);
+      MoveToEx(mem, pr.left, pr.top + 4, NULL);
+      LineTo(mem, pr.left, pr.bottom - 4);
+      SelectObject(mem, oSY);
+      DeleteObject(sepYellow);
     }
 
-    // Text
+    // Text — bold yellow
     if (s_text[i][0]) {
       RECT tr = pr;
       tr.left  += BSB_PAD_X;
