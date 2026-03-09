@@ -1,0 +1,15 @@
+#pragma once
+#include "Notepad2.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void WebViewUI_Initialize(HWND hwndParent);
+void WebViewUI_NavigateTo(LPCWSTR url);
+void WebViewUI_Resize(RECT* prect);
+void WebViewUI_Destroy();
+
+#ifdef __cplusplus
+}
+#endif

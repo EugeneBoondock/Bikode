@@ -1,0 +1,226 @@
+﻿MSBuild version 17.14.40+3e7442088 for .NET Framework
+
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Microsoft\VC\v170\Microsoft.CppBuild.targets(538,5): warning MSB8028: The intermediate directory (c:\Users\USER\Projects\Bikode\bin\obj\x64\Debug\) contains files shared from another project (Notepad2e.vcxproj).  This can lead to incorrect clean and rebuild behavior. [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+  UTF8DocumentIterator.cxx
+  LexA68k.cxx
+  LexAbaqus.cxx
+  LexAda.cxx
+  LexAHK.cxx
+  LexAPDL.cxx
+  LexAsn1.cxx
+  LexASY.cxx
+  LexAU3.cxx
+  LexAVE.cxx
+  LexAVS.cxx
+  LexBaan.cxx
+  LexBash.cxx
+  LexBasic.cxx
+  LexBatch.cxx
+  LexBibTeX.cxx
+  LexBullant.cxx
+  LexCaml.cxx
+  LexCLW.cxx
+  LexCmake.cxx
+  Generating Code...
+  Compiling...
+  LexCOBOL.cxx
+  LexCoffeeScript.cxx
+  LexCrontab.cxx
+  LexCsound.cxx
+  LexD.cxx
+  LexDiff.cxx
+  LexDMAP.cxx
+  LexDMIS.cxx
+  LexECL.cxx
+  LexEiffel.cxx
+  LexErlang.cxx
+  LexErrorList.cxx
+  LexEScript.cxx
+  LexFlagship.cxx
+  LexForth.cxx
+  LexFortran.cxx
+  LexGAP.cxx
+  LexGui4Cli.cxx
+  LexHaskell.cxx
+  LexHex.cxx
+  Generating Code...
+  Compiling...
+  LexInno.cxx
+  LexJSON.cxx
+  LexKix.cxx
+  LexKVIrc.cxx
+  LexLaTeX.cxx
+  LexLisp.cxx
+  LexLout.cxx
+  LexLPeg.cxx
+  LexLua.cxx
+  LexMagik.cxx
+  LexMake.cxx
+  LexMarkdown.cxx
+  LexMatlab.cxx
+  LexMetapost.cxx
+  LexMMIXAL.cxx
+  LexModula.cxx
+  LexMPT.cxx
+  LexMSSQL.cxx
+  LexMySQL.cxx
+  LexNimrod.cxx
+  Generating Code...
+  Compiling...
+  LexNsis.cxx
+  LexNull.cxx
+  LexOpal.cxx
+  LexOScript.cxx
+  LexPB.cxx
+  LexPLM.cxx
+  LexPO.cxx
+  LexPOV.cxx
+  LexPowerPro.cxx
+  LexProgress.cxx
+  LexProps.cxx
+  LexPS.cxx
+  LexR.cxx
+  LexRebol.cxx
+  LexRegistry.cxx
+  LexRuby.cxx
+  LexRust.cxx
+  LexScriptol.cxx
+  LexSmalltalk.cxx
+  LexSML.cxx
+  Generating Code...
+  Compiling...
+  LexSorcus.cxx
+  LexSpecman.cxx
+  LexSpice.cxx
+  LexSTTXT.cxx
+  LexTACL.cxx
+  LexTADS3.cxx
+  LexTAL.cxx
+  LexTCL.cxx
+  LexTCMD.cxx
+  LexTeX.cxx
+  LexTxt2tags.cxx
+  LexVerilog.cxx
+  LexVHDL.cxx
+  LexVisualProlog.cxx
+  LexYAML.cxx
+  CharacterCategory.cxx
+  DefaultLexer.cxx
+  LexerNoExceptions.cxx
+  CaseConvert.cxx
+  CaseFolder.cxx
+  Generating Code...
+  Compiling...
+  DBCS.cxx
+  EditModel.cxx
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244: 'return': conversion from 'const _Ty' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:         with [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:         [ [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:             _Ty=Sci::Line [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:         ] [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+  (compiling source file 'scintilla/src/EditModel.cxx')
+  
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244: 'return': conversion from 'const _Ty' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:         with [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:         [ [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:             _Ty=Sci::Line [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:         ] [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+  (compiling source file 'scintilla/src/EditModel.cxx')
+  
+  EditView.cxx
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244: 'return': conversion from 'const _Ty' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:         with [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:         [ [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:             _Ty=Sci::Line [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:         ] [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+  (compiling source file 'scintilla/src/EditView.cxx')
+  
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244: 'return': conversion from 'const _Ty' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:         with [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:         [ [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:             _Ty=Sci::Line [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:         ] [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+  (compiling source file 'scintilla/src/EditView.cxx')
+  
+  MarginView.cxx
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244: 'return': conversion from 'const _Ty' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:         with [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:         [ [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:             _Ty=Sci::Line [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(73,48): warning C4244:         ] [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+  (compiling source file 'scintilla/src/MarginView.cxx')
+  
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244: 'return': conversion from 'const _Ty' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:         with [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:         [ [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:             _Ty=Sci::Line [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\scintilla\src\EditModel.h(74,51): warning C4244:         ] [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+  (compiling source file 'scintilla/src/MarginView.cxx')
+  
+  UniqueString.cxx
+  HanjaDic.cxx
+  CALWImpl.cpp
+c:\Users\USER\Projects\Bikode\src\Extension\CALWImpl.cpp(120,25): warning C4244: 'return': conversion from '__int64' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\src\Extension\CALWImpl.cpp(128,25): warning C4244: 'return': conversion from '__int64' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\src\Extension\CALWImpl.cpp(200,23): warning C4267: 'return': conversion from 'size_t' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\src\Extension\CALWImpl.cpp(246,51): warning C4267: '=': conversion from 'size_t' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+  CALWInterface.cpp
+  DPIHelper.cpp
+  EditHelperEx.cpp
+c:\Users\USER\Projects\Bikode\src\Extension\EditHelperEx.cpp(144,5): warning C4996: 'GetVersionExW': was declared deprecated [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\src\Extension\EditHelperEx.cpp(350,25): warning C4244: 'return': conversion from '__int64' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\tuple(614,76): warning C4244: '=': conversion from '_Ty' to '_Ty', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\tuple(614,76): warning C4244:         with [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\tuple(614,76): warning C4244:         [ [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\tuple(614,76): warning C4244:             _Ty=LRESULT [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\tuple(614,76): warning C4244:         ] [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\tuple(614,76): warning C4244:         and [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\tuple(614,76): warning C4244:         [ [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\tuple(614,76): warning C4244:             _Ty=int [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\tuple(614,76): warning C4244:         ] [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+  (compiling source file 'src/Extension/EditHelperEx.cpp')
+      C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include\tuple(614,76):
+      the template instantiation context (the oldest one first) is
+          c:\Users\USER\Projects\Bikode\src\Extension\EditHelperEx.cpp(275,29):
+          see reference to function template instantiation 'std::tuple<int,int,int,int,int> &std::tuple<int,int,int,int,int>::operator =<__int64,__int64,int,__int64,__int64,0>(std::tuple<__int64,__int64,int,__int64,__int64> &&) noexcept' being compiled
+              c:\Users\USER\Projects\Bikode\src\Extension\EditHelperEx.cpp(275,29):
+              see the first reference to 'std::tuple<int,int,int,int,int>::operator =' in 'n2e_SaveViewState'
+  
+  SplitterWnd.cpp
+  ChatPanel.c
+  Print.cpp
+c:\Users\USER\Projects\Bikode\src\Print.cpp(132,25): warning C4244: '=': conversion from 'LRESULT' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\src\Print.cpp(133,23): warning C4244: '=': conversion from 'LRESULT' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\src\Print.cpp(298,26): warning C4244: '=': conversion from 'LRESULT' to 'LONG', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\src\Print.cpp(389,32): warning C4244: '=': conversion from 'LRESULT' to 'LONG', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\src\Print.cpp(513,19): warning C4244: 'initializing': conversion from 'LRESULT' to 'LONG', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\src\Print.cpp(519,42): warning C4244: '=': conversion from 'LRESULT' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\src\Print.cpp(520,42): warning C4244: '=': conversion from 'LRESULT' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+c:\Users\USER\Projects\Bikode\src\Print.cpp(521,42): warning C4244: '=': conversion from 'LRESULT' to 'int', possible loss of data [c:\Users\USER\Projects\Bikode\Notepad2e.vcxproj]
+  LexAsm.cxx
+  LexCPP.cxx
+  LexCSS.cxx
+  LexConf.cxx
+  LexHTML.cxx
+  LexPascal.cxx
+  LexPerl.cxx
+  Generating Code...
+  Compiling...
+  LexPowerShell.cxx
+  LexPython.cxx
+  LexSQL.cxx
+  LexVB.cxx
+  Accessor.cxx
+  CharacterSet.cxx
+  LexerBase.cxx
+  LexerModule.cxx
+  LexerSimple.cxx
+  PropSetSimple.cxx
+  StyleContext.cxx
+  WordList.cxx
+  AutoComplete.cxx
+  CallTip.cxx
+  Catalogue.cxx
+  CellBuffer.cxx
+  CharClassify.cxx
+  ContractionState.cxx

@@ -14,6 +14,7 @@
 #include "Terminal.h"
 #include "BikoToolbar.h"
 #include "CommonUtils.h"
+#include "ComicTheme.h"
 #include "Scintilla.h"
 #include <dwmapi.h>
 #include <uxtheme.h>
@@ -227,6 +228,9 @@ void DarkMode_Init(HWND hwndMain)
 
     UpdateBackgroundBrush();
     s_bInitialized = TRUE;
+
+    // [biko]: Initialize the Comic Theme
+    ComicTheme_Init();
 }
 
 static void DarkMode_UpdateIcon(void)
@@ -307,6 +311,9 @@ void DarkMode_ApplyAll(HWND hwndMain, HWND hwndEdit,
         InvalidateRect(hwndReBar, NULL, TRUE);
     }
 
+    // [biko]: Apply Comic Theme to editor, toolbar, status
+    ComicTheme_ApplyAll(hwndMain, hwndEdit, hwndToolbar, hwndStatus);
+
     // Refresh Chat Panel dark mode
     ChatPanel_ApplyDarkMode();
 
@@ -358,51 +365,14 @@ void DarkMode_ApplyToEditor(HWND hwndEdit)
 {
     if (!hwndEdit) return;
 
-    const DarkModeColors* pColors = &s_darkColors;
+    // [biko]: Delegate entirely to the Comic Theme
+    ComicTheme_ApplyToEditor(hwndEdit);
 
-    // [biko]: Dark scrollbar — apply DarkMode_Explorer theme to Scintilla
-    if (s_bSupported)
-    {
-        if (s_pfnAllowDark)
-            s_pfnAllowDark(hwndEdit, TRUE);
-        SetWindowTheme(hwndEdit, L"DarkMode_Explorer", NULL);
-    }
-
-    // [biko]: Strip any remaining light-mode border
+    // Remove any Win32 theme border on the editor
     SetWindowLongPtr(hwndEdit, GWL_EXSTYLE,
         GetWindowLongPtr(hwndEdit, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
     SetWindowPos(hwndEdit, NULL, 0, 0, 0, 0,
         SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
-
-    // Default style colors
-    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_DEFAULT, pColors->clrBackground);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_DEFAULT, pColors->clrText);
-    SendMessage(hwndEdit, SCI_STYLECLEARALL, 0, 0);
-
-    // Caret
-    SendMessage(hwndEdit, SCI_SETCARETFORE, pColors->clrText, 0);
-
-    // Selection
-    SendMessage(hwndEdit, SCI_SETSELBACK, TRUE, pColors->clrSelection);
-    SendMessage(hwndEdit, SCI_SETSELFORE, FALSE, 0);
-
-    // Caret line
-    SendMessage(hwndEdit, SCI_SETCARETLINEBACK, pColors->clrCaretLine, 0);
-
-    // Line number margin
-    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_LINENUMBER, pColors->clrLineNumber);
-    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_LINENUMBER, pColors->clrSurface);
-
-    // Indent guide
-    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_INDENTGUIDE, pColors->clrIndentGuide);
-    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_INDENTGUIDE, pColors->clrBackground);
-
-    // Edge color (right margin line)
-    SendMessage(hwndEdit, SCI_SETEDGECOLOUR, pColors->clrBorder, 0);
-
-    // Fold margin
-    SendMessage(hwndEdit, SCI_SETFOLDMARGINCOLOUR, TRUE, pColors->clrSurface);
-    SendMessage(hwndEdit, SCI_SETFOLDMARGINHICOLOUR, TRUE, pColors->clrSurface);
 }
 
 void DarkMode_ApplyToToolbar(HWND hwndToolbar)

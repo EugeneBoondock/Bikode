@@ -5960,6 +5960,9 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
           break;
 
         case SCN_CHARADDED:
+          // [biko] Trigger lightweight auto-completion
+          n2e_ShowAutoComplete(hwndFrom);
+
           // Auto indent
           if (bAutoIndent && (scn->ch == '\x0D' || scn->ch == '\x0A'))
           {
@@ -6097,24 +6100,24 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
 
       switch (pnmh->code)
       {
-        // [biko]: Dark mode custom draw for toolbar
+        // [biko]: Comic theme custom draw for toolbar
         case NM_CUSTOMDRAW:
         {
-          if (DarkMode_IsEnabled())
+          LPNMTBCUSTOMDRAW lpcd = (LPNMTBCUSTOMDRAW)lParam;
+          switch (lpcd->nmcd.dwDrawStage)
           {
-            LPNMTBCUSTOMDRAW lpcd = (LPNMTBCUSTOMDRAW)lParam;
-            switch (lpcd->nmcd.dwDrawStage)
+            case CDDS_PREPAINT:
+              return CDRF_NOTIFYITEMDRAW;
+            case CDDS_ITEMPREPAINT:
             {
-              case CDDS_PREPAINT:
-                return CDRF_NOTIFYITEMDRAW;
-              case CDDS_ITEMPREPAINT:
-              {
-                // Set dark background for toolbar button items
-                lpcd->clrHighlightHotTrack = RGB(55, 55, 55);
-                lpcd->clrBtnHighlight = RGB(55, 55, 55);
-                lpcd->clrBtnFace = RGB(24, 24, 24);
-                return 0x00010000; // TBCDRF_USECDCOLORS
-              }
+              BOOL bHot     = (lpcd->nmcd.uItemState & CDIS_HOT)     != 0;
+              BOOL bPressed = (lpcd->nmcd.uItemState & CDIS_SELECTED) != 0;
+              // Comic button colors: HOT=yellow, PRESSED=red, NORMAL=near-black
+              lpcd->clrHighlightHotTrack = RGB(255, 220, 0);   // POW yellow
+              lpcd->clrBtnHighlight      = bPressed ? RGB(220, 30, 30) : RGB(255, 220, 0);
+              lpcd->clrBtnFace           = bHot || bPressed ? RGB(10, 10, 10) : RGB(18, 18, 20);
+              lpcd->clrText              = bHot || bPressed ? RGB(10, 10, 10) : RGB(255, 220, 0);
+              return 0x00010000; // TBCDRF_USECDCOLORS
             }
           }
           break;
@@ -6154,27 +6157,32 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
     case 0xFB30:  // [biko]: BikoStatusBar control ID
       switch (pnmh->code)
       {
-        // [biko]: Dark mode custom draw for status bar
+        // [biko]: Comic theme custom draw for status bar
         case NM_CUSTOMDRAW:
         {
-          if (DarkMode_IsEnabled())
+          LPNMCUSTOMDRAW lpcd = (LPNMCUSTOMDRAW)lParam;
+          switch (lpcd->dwDrawStage)
           {
-            LPNMCUSTOMDRAW lpcd = (LPNMCUSTOMDRAW)lParam;
-            switch (lpcd->dwDrawStage)
+            case CDDS_PREPAINT:
+              return CDRF_NOTIFYITEMDRAW;
+            case CDDS_ITEMPREPAINT:
             {
-              case CDDS_PREPAINT:
-                return CDRF_NOTIFYITEMDRAW;
-              case CDDS_ITEMPREPAINT:
-              {
-                COLORREF clrBg = RGB(24, 24, 24);
-                COLORREF clrTxt = RGB(200, 200, 200);
-                SetBkColor(lpcd->hdc, clrBg);
-                SetTextColor(lpcd->hdc, clrTxt);
-                HBRUSH hBr = CreateSolidBrush(clrBg);
-                FillRect(lpcd->hdc, &lpcd->rc, hBr);
-                DeleteObject(hBr);
-                return CDRF_NEWFONT;
-              }
+              // Comic status: jet black bg, POW yellow text
+              COLORREF clrBg  = RGB(10, 10, 10);
+              COLORREF clrTxt = RGB(255, 220, 0);
+              SetBkColor(lpcd->hdc, clrBg);
+              SetTextColor(lpcd->hdc, clrTxt);
+              HBRUSH hBr = CreateSolidBrush(clrBg);
+              FillRect(lpcd->hdc, &lpcd->rc, hBr);
+              DeleteObject(hBr);
+              // Yellow top border — comic panel separator
+              HPEN hPen = CreatePen(PS_SOLID, 2, clrTxt);
+              HPEN hOldPen = SelectObject(lpcd->hdc, hPen);
+              MoveToEx(lpcd->hdc, lpcd->rc.left,  lpcd->rc.top, NULL);
+              LineTo  (lpcd->hdc, lpcd->rc.right, lpcd->rc.top);
+              SelectObject(lpcd->hdc, hOldPen);
+              DeleteObject(hPen);
+              return CDRF_NEWFONT;
             }
           }
           break;

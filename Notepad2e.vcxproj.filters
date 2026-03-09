@@ -935,6 +935,12 @@
     <ClCompile Include="src\Extension\Utils.c">
       <Filter>Source Files\Extension</Filter>
     </ClCompile>
+    <ClCompile Include="src\Extension\BikoComplete.c">
+      <Filter>Source Files\Extension</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Extension\ComicTheme.c">
+      <Filter>Source Files\Extension</Filter>
+    </ClCompile>
     <ClCompile Include="src\Extension\tinyexpr\tinyexpr.c">
       <Filter>Source Files\Extension\tinyexpr</Filter>
     </ClCompile>

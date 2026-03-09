@@ -119,7 +119,7 @@
       <Message>Generating timestamp...</Message>
     </PreBuildEvent>
     <ClCompile>
-      <AdditionalIncludeDirectories>scintilla\include;scintilla\src;scintilla\lexlib;scintilla\win32;$(ProjectDir)src;$(ProjectDir)src\Extension;$(ProjectDir)scintilla\lua\src;$(OutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>scintilla\include;scintilla\src;scintilla\lexlib;scintilla\win32;$(ProjectDir)src;$(ProjectDir)src\Extension;$(ProjectDir)scintilla\lua\src;$(ProjectDir)packages\WebView2\build\native\include;$(OutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRT_SECURE_NO_WARNINGS;STATIC_BUILD;SCI_LEXER;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
@@ -130,7 +130,7 @@
       <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>comctl32.lib;shlwapi.lib;imm32.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>comctl32.lib;shlwapi.lib;imm32.lib;winhttp.lib;$(ProjectDir)packages\WebView2\build\native\$(Platform)\WebView2LoaderStatic.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <OutputFile>$(SolutionDir)bin\$(Platform)\$(Configuration)\$(TargetName)$(TargetExt)</OutputFile>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
@@ -469,6 +469,8 @@
     <ClCompile Include="src\Extension\Trace.c" />
     <ClCompile Include="src\Extension\User32Helper.c" />
     <ClCompile Include="src\Extension\Utils.c" />
+    <ClCompile Include="src\Extension\BikoComplete.c" />
+    <ClCompile Include="src\Extension\ComicTheme.c" />
     <ClCompile Include="src\Extension\VersionHelper.c" />
     <ClCompile Include="src\Extension\ViewHelper.c" />
     <ClCompile Include="src\Extension\mono_json.c" />

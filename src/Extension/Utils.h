@@ -183,6 +183,7 @@ LPCWSTR n2e_GetExePath();
 UINT_PTR CALLBACK n2e_OFNHookProc(HWND hdlg, UINT uiMsg, WPARAM wParam, LPARAM lParam);
 BOOL n2e_GetGotoNumber(LPTSTR temp, int *out, const BOOL hex);
 void n2e_InplaceRev(WCHAR * s);
+void n2e_ShowAutoComplete(HWND hwndEdit);
 int n2e_CompareFiles(LPCWSTR sz1, LPCWSTR sz2);
 BOOL n2e_OpenFileByPrefix(LPCWSTR pref, LPWSTR dir, LPWSTR out);
 BOOL n2e_Grep(void* lpf, const BOOL grep);
