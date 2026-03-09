@@ -67,9 +67,11 @@
 #define CP_SYS_TEXT        RGB(110, 119, 133)
 
 // Input area
-#define CP_INPUT_BG        RGB(29, 36, 48)
+#define CP_INPUT_BG        RGB(20, 26, 36)
 #define CP_INPUT_BD        RGB(42, 49, 64)
 #define CP_INPUT_FOCUS_BD  RGB(53, 224, 255)
+#define CP_INPUT_WELL_BG   RGB(13, 18, 25)
+#define CP_INPUT_DOCK_BG   RGB(17, 21, 28)
 #define CP_INPUT_TEXT      RGB(243, 245, 247)
 
 // Accents — no blue, neutral tones
@@ -100,7 +102,7 @@
 
 #define CHAT_PANEL_WIDTH        360
 #define CHAT_HEADER_HEIGHT      58
-#define CHAT_INPUT_AREA_HEIGHT  96
+#define CHAT_INPUT_AREA_HEIGHT  108
 #define CHAT_INPUT_PAD          10
 #define CHAT_INPUT_INNER_PAD    10
 #define CHAT_INPUT_RADIUS       8
@@ -111,6 +113,8 @@
 #define CHAT_EMPTY_CARD_INSET   16
 #define CHAT_EMPTY_CHIP_H       24
 #define CHAT_EMPTY_CHIP_GAP      8
+#define CHAT_COMPOSER_TAG_H     20
+#define CHAT_COMPOSER_HINT_H    16
 
 #define CHAT_BUBBLE_PAD_H     12
 #define CHAT_BUBBLE_PAD_V      7
@@ -224,6 +228,10 @@ static int      s_chatW       = 0;     // chat area width
 
 // Input card rect
 static RECT     s_rcInputCard = { 0 };
+static RECT     s_rcInputWell = { 0 };
+static RECT     s_rcComposerTag = { 0 };
+static RECT     s_rcComposerHint = { 0 };
+static RECT     s_rcComposerDock = { 0 };
 static RECT     s_rcPendingStrip = { 0 };
 static int      s_lastLayoutParentRight = 0;
 static int      s_lastLayoutEditorTop = 0;
@@ -290,6 +298,10 @@ static BOOL PendingAttachments_AddFile(const WCHAR* wszSourcePath, const WCHAR* 
 static BOOL PendingAttachments_AddImage(const WCHAR* wszSourcePath, const WCHAR* wszDisplayName);
 static BOOL IsMissionIdleState(void);
 static int  MeasureThemeTextWidth(HDC hdc, HFONT hFont, LPCWSTR text);
+static int  MeasureWrappedTextHeight(HDC hdc, HFONT hFont, LPCWSTR text, int width);
+static void Utf8ToWideCompactLabel(const char* text, WCHAR* out, int cchOut);
+static void BuildMissionModelLabel(WCHAR* out, int cchOut);
+static void BuildMissionStatusLabel(WCHAR* out, int cchOut, COLORREF* pAccent, int* pProgressPct);
 static int  DrawQuickActionChip(HDC hdc, int x, int y, LPCWSTR label, COLORREF accent);
 static void PaintMissionEmptyState(HDC hdc, int cx, int cy);
 static BOOL ExtractGifUrl(const char* text, char* outUrl, int cchOut)
@@ -846,33 +858,41 @@ static void DrawButtonFace(HDC hdc, const RECT* rc, BOOL hover, BOOL down, BOOL 
 {
     if (!rc) return;
 
-    COLORREF fill = primary ? CP_BTN_PRIMARY_BG : CP_BTN_BG;
+    COLORREF fill = primary
+        ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), 56)
+        : CP_INPUT_DOCK_BG;
     COLORREF border = primary ? CP_BTN_PRIMARY_BORDER : CP_BTN_BORDER;
     if (down) {
-        fill = primary ? CP_BTN_PRIMARY_DOWN : CP_BTN_DOWN;
+        fill = primary ? CP_BTN_PRIMARY_DOWN : BikodeTheme_GetColor(BKCLR_SURFACE_MAIN);
+        border = primary ? CP_BTN_PRIMARY_BORDER : BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
     } else if (hover) {
-        fill = primary ? CP_BTN_PRIMARY_HOV : CP_BTN_HOV;
+        fill = primary
+            ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 84)
+            : BikodeTheme_GetColor(BKCLR_SURFACE_RAISED);
         if (!primary) border = CP_BTN_BORDER_HOV;
     }
 
     RECT rcButton = *rc;
     InflateRect(&rcButton, -1, -1);
-    FillRoundRect(hdc, &rcButton, 10, fill, border);
+    FillRoundRect(hdc, &rcButton, 8, fill, border);
 
-    // Inner shell adds cleaner depth without bright color accents.
     RECT rcInner = rcButton;
     InflateRect(&rcInner, -1, -1);
     COLORREF innerFill = fill;
     if (!down) {
-        innerFill = primary ? RGB(64, 64, 70) : RGB(44, 44, 49);
-        if (hover) innerFill = primary ? RGB(78, 78, 85) : RGB(56, 56, 61);
+        innerFill = primary
+            ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), CP_INPUT_DOCK_BG, hover ? 140 : 112)
+            : CP_INPUT_BG;
+        if (hover && !primary)
+            innerFill = BikodeTheme_GetColor(BKCLR_SURFACE_MAIN);
     }
-    FillRoundRectSolid(hdc, &rcInner, 9, innerFill);
+    FillRoundRectSolid(hdc, &rcInner, 7, innerFill);
 
-    // Subtle top highlight line for tactile feel.
     RECT rcHighlight = rcInner;
     InflateRect(&rcHighlight, -2, -2);
-    COLORREF hl = down ? RGB(64, 64, 68) : RGB(118, 118, 124);
+    COLORREF hl = primary
+        ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY), BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), 104)
+        : (hover ? BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN) : BikodeTheme_GetColor(BKCLR_STROKE_SOFT));
     HPEN hPen = CreatePen(PS_SOLID, 1, hl);
     HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
     MoveToEx(hdc, rcHighlight.left + 3, rcHighlight.top + 1, NULL);
@@ -904,6 +924,144 @@ static int MeasureThemeTextWidth(HDC hdc, HFONT hFont, LPCWSTR text)
     return sz.cx;
 }
 
+static int MeasureWrappedTextHeight(HDC hdc, HFONT hFont, LPCWSTR text, int width)
+{
+    RECT rcCalc = { 0, 0, max(width, 1), 0 };
+    HFONT hOld;
+
+    if (!hdc || !text || !text[0] || width <= 0)
+        return 0;
+
+    hOld = (HFONT)SelectObject(hdc, hFont ? hFont : BikodeTheme_GetFont(BKFONT_UI_SMALL));
+    DrawTextW(hdc, text, -1, &rcCalc, DT_LEFT | DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
+    SelectObject(hdc, hOld);
+    return rcCalc.bottom - rcCalc.top;
+}
+
+static void Utf8ToWideCompactLabel(const char* text, WCHAR* out, int cchOut)
+{
+    const char* tail = text;
+    if (!out || cchOut <= 0)
+        return;
+    out[0] = L'\0';
+    if (!text || !text[0])
+        return;
+
+    {
+        const char* slash = strrchr(text, '/');
+        if (slash && slash[1])
+            tail = slash + 1;
+    }
+    MultiByteToWideChar(CP_UTF8, 0, tail, -1, out, cchOut);
+}
+
+static void BuildMissionModelLabel(WCHAR* out, int cchOut)
+{
+    const AIProviderConfig* pCfg = AIBridge_GetProviderConfig();
+    const AIProviderDef* pDef = pCfg ? AIProvider_Get(pCfg->eProvider) : NULL;
+
+    if (!out || cchOut <= 0)
+        return;
+    out[0] = L'\0';
+
+    if (!pCfg || !pDef)
+    {
+        lstrcpynW(out, L"AI", cchOut);
+        return;
+    }
+
+    if (pCfg->szModel[0] &&
+        (!pDef->szDefaultModel || _stricmp(pCfg->szModel, pDef->szDefaultModel) != 0))
+    {
+        Utf8ToWideCompactLabel(pCfg->szModel, out, cchOut);
+        if (out[0])
+            return;
+    }
+
+    if (pDef->szName)
+    {
+        MultiByteToWideChar(CP_UTF8, 0, pDef->szName, -1, out, cchOut);
+    }
+    if (!out[0])
+        lstrcpynW(out, L"AI", cchOut);
+}
+
+static void BuildMissionStatusLabel(WCHAR* out, int cchOut, COLORREF* pAccent, int* pProgressPct)
+{
+    WCHAR statusBuf[128];
+    const AIProviderConfig* pCfg = AIBridge_GetProviderConfig();
+    const AIProviderDef* pDef = pCfg ? AIProvider_Get(pCfg->eProvider) : NULL;
+    EAIStatus aiStatus = AIBridge_GetStatus();
+    BOOL hasConfiguredAccess = FALSE;
+
+    if (!out || cchOut <= 0)
+        return;
+    out[0] = L'\0';
+
+    if (pAccent)
+        *pAccent = BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
+    if (pProgressPct)
+        *pProgressPct = 18;
+
+    if (pDef)
+        hasConfiguredAccess = pDef->bIsLocal || !pDef->bRequiresKey || (pCfg && pCfg->szApiKey[0]);
+
+    AICommands_GetStatusText(statusBuf, ARRAYSIZE(statusBuf));
+    if (statusBuf[0] && _wcsnicmp(statusBuf, L"AI: ", 4) != 0)
+    {
+        lstrcpynW(out, statusBuf, cchOut);
+        if (pAccent)
+            *pAccent = BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
+        if (pProgressPct)
+            *pProgressPct = 72;
+        return;
+    }
+
+    switch (aiStatus)
+    {
+    case AI_STATUS_READY:
+        lstrcpynW(out, L"Ready", cchOut);
+        if (pAccent) *pAccent = BikodeTheme_GetColor(BKCLR_SUCCESS_GREEN);
+        if (pProgressPct) *pProgressPct = 100;
+        break;
+    case AI_STATUS_THINKING:
+        lstrcpynW(out, L"Thinking", cchOut);
+        if (pAccent) *pAccent = BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
+        if (pProgressPct) *pProgressPct = 74;
+        break;
+    case AI_STATUS_PATCH_READY:
+        lstrcpynW(out, L"Patch Ready", cchOut);
+        if (pAccent) *pAccent = BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW);
+        if (pProgressPct) *pProgressPct = 100;
+        break;
+    case AI_STATUS_CONNECTING:
+        lstrcpynW(out, L"Connecting", cchOut);
+        if (pAccent) *pAccent = BikodeTheme_GetColor(BKCLR_WARNING_ORANGE);
+        if (pProgressPct) *pProgressPct = 38;
+        break;
+    case AI_STATUS_ERROR:
+        lstrcpynW(out, L"Error", cchOut);
+        if (pAccent) *pAccent = BikodeTheme_GetColor(BKCLR_DANGER_RED);
+        if (pProgressPct) *pProgressPct = 100;
+        break;
+    case AI_STATUS_OFFLINE:
+    default:
+        if (hasConfiguredAccess)
+        {
+            lstrcpynW(out, L"Configured", cchOut);
+            if (pAccent) *pAccent = BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW);
+            if (pProgressPct) *pProgressPct = 46;
+        }
+        else
+        {
+            lstrcpynW(out, L"Needs Key", cchOut);
+            if (pAccent) *pAccent = BikodeTheme_GetColor(BKCLR_HOT_MAGENTA);
+            if (pProgressPct) *pProgressPct = 12;
+        }
+        break;
+    }
+}
+
 static int DrawQuickActionChip(HDC hdc, int x, int y, LPCWSTR label, COLORREF accent)
 {
     RECT rcChip = { 0 };
@@ -933,14 +1091,64 @@ static void PaintMissionEmptyState(HDC hdc, int cx, int cy)
     RECT rcRail;
     int chipX;
     int chipY;
+    int curY;
+    int contentLeft;
+    int contentRight;
+    int contentWidth;
+    int titleH;
+    int bodyH;
+    int hintH;
+    int chipBottom;
+    static const WCHAR* s_labels[] = {
+        L"Trace this crash",
+        L"Explain selection",
+        L"Map this repo"
+    };
+    static const BikodeColorToken s_accents[] = {
+        BKCLR_SIGNAL_YELLOW,
+        BKCLR_ELECTRIC_CYAN,
+        BKCLR_HOT_MAGENTA
+    };
 
     rcHero.left = CHAT_EMPTY_CARD_INSET;
     rcHero.top = CHAT_EMPTY_CARD_INSET;
     rcHero.right = cx - CHAT_EMPTY_CARD_INSET;
-    rcHero.bottom = min(cy - CHAT_EMPTY_CARD_INSET, 254);
+    rcHero.bottom = cy - CHAT_EMPTY_CARD_INSET;
 
     if (rcHero.right <= rcHero.left || rcHero.bottom <= rcHero.top)
         return;
+
+    contentLeft = rcHero.left + 24;
+    contentRight = rcHero.right - 24;
+    contentWidth = contentRight - contentLeft;
+    if (contentWidth <= 40)
+        return;
+
+    titleH = max(28, MeasureWrappedTextHeight(hdc, BikodeTheme_GetFont(BKFONT_TITLE),
+        L"Start with a real mission.", contentWidth));
+    bodyH = MeasureWrappedTextHeight(hdc, BikodeTheme_GetFont(BKFONT_UI),
+        L"Ask Bikode AI to trace a crash, explain a symbol, search the repo, or write a patch with the current file context.",
+        contentWidth);
+    hintH = MeasureWrappedTextHeight(hdc, BikodeTheme_GetFont(BKFONT_UI_SMALL),
+        L"Paste screenshots, drop files, or use search to pull repo context into the thread.",
+        contentWidth);
+
+    chipX = contentLeft;
+    chipY = 0;
+    for (int i = 0; i < ARRAYSIZE(s_labels); i++)
+    {
+        int chipW = MeasureThemeTextWidth(hdc, BikodeTheme_GetFont(BKFONT_UI_SMALL), s_labels[i]) + 28;
+        if (chipX != contentLeft && chipX + chipW > contentRight)
+        {
+            chipX = contentLeft;
+            chipY += CHAT_EMPTY_CHIP_H + CHAT_EMPTY_CHIP_GAP;
+        }
+        chipX += chipW + CHAT_EMPTY_CHIP_GAP;
+    }
+    chipBottom = chipY + CHAT_EMPTY_CHIP_H;
+
+    curY = 18 + 24 + 14 + titleH + 8 + bodyH + 12 + chipBottom + 12 + hintH + 16;
+    rcHero.bottom = min(cy - CHAT_EMPTY_CARD_INSET, rcHero.top + max(curY, 228));
 
     BikodeTheme_DrawCutCornerPanel(hdc, &rcHero,
         BikodeTheme_GetColor(BKCLR_SURFACE_RAISED),
@@ -959,8 +1167,9 @@ static void PaintMissionEmptyState(HDC hdc, int cx, int cy)
         DeleteObject(hRail);
     }
 
-    rcEyebrow.left = rcHero.left + 24;
-    rcEyebrow.top = rcHero.top + 18;
+    curY = rcHero.top + 18;
+    rcEyebrow.left = contentLeft;
+    rcEyebrow.top = curY;
     rcEyebrow.right = rcEyebrow.left + 130;
     rcEyebrow.bottom = rcEyebrow.top + 24;
     BikodeTheme_DrawChip(hdc, &rcEyebrow, L"MISSION BOARD",
@@ -970,36 +1179,46 @@ static void PaintMissionEmptyState(HDC hdc, int cx, int cy)
         BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE,
         BikodeTheme_GetColor(BKCLR_HOT_MAGENTA));
 
-    rcTitle.left = rcHero.left + 24;
-    rcTitle.top = rcEyebrow.bottom + 14;
-    rcTitle.right = rcHero.right - 24;
-    rcTitle.bottom = rcTitle.top + 34;
+    curY = rcEyebrow.bottom + 14;
+    rcTitle.left = contentLeft;
+    rcTitle.top = curY;
+    rcTitle.right = contentRight;
+    rcTitle.bottom = rcTitle.top + titleH;
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
     SelectObject(hdc, BikodeTheme_GetFont(BKFONT_TITLE));
     DrawTextW(hdc, L"Start with a real mission.", -1, &rcTitle,
-        DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
 
-    rcBody.left = rcHero.left + 24;
-    rcBody.top = rcTitle.bottom + 6;
-    rcBody.right = rcHero.right - 24;
-    rcBody.bottom = rcBody.top + 68;
+    rcBody.left = contentLeft;
+    rcBody.top = rcTitle.bottom + 8;
+    rcBody.right = contentRight;
+    rcBody.bottom = rcBody.top + bodyH;
     SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
     SelectObject(hdc, BikodeTheme_GetFont(BKFONT_UI));
     DrawTextW(hdc,
         L"Ask Bikode AI to trace a crash, explain a symbol, search the repo, or write a patch with the current file context.",
         -1, &rcBody, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
 
-    chipX = rcHero.left + 24;
-    chipY = rcBody.bottom + 10;
-    chipX += DrawQuickActionChip(hdc, chipX, chipY, L"Trace this crash", BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW)) + CHAT_EMPTY_CHIP_GAP;
-    chipX += DrawQuickActionChip(hdc, chipX, chipY, L"Explain selection", BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN)) + CHAT_EMPTY_CHIP_GAP;
-    DrawQuickActionChip(hdc, chipX, chipY, L"Map this repo", BikodeTheme_GetColor(BKCLR_HOT_MAGENTA));
+    chipX = contentLeft;
+    chipY = rcBody.bottom + 12;
+    for (int i = 0; i < ARRAYSIZE(s_labels); i++)
+    {
+        int chipW = MeasureThemeTextWidth(hdc, BikodeTheme_GetFont(BKFONT_UI_SMALL), s_labels[i]) + 28;
+        if (chipX != contentLeft && chipX + chipW > contentRight)
+        {
+            chipX = contentLeft;
+            chipY += CHAT_EMPTY_CHIP_H + CHAT_EMPTY_CHIP_GAP;
+        }
+        chipW = DrawQuickActionChip(hdc, chipX, chipY, s_labels[i],
+            BikodeTheme_GetColor(s_accents[i]));
+        chipX += chipW + CHAT_EMPTY_CHIP_GAP;
+    }
 
-    rcHint.left = rcHero.left + 24;
-    rcHint.top = chipY + CHAT_EMPTY_CHIP_H + 14;
-    rcHint.right = rcHero.right - 24;
-    rcHint.bottom = rcHint.top + 24;
+    rcHint.left = contentLeft;
+    rcHint.top = chipY + CHAT_EMPTY_CHIP_H + 12;
+    rcHint.right = contentRight;
+    rcHint.bottom = rcHint.top + hintH;
     SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
     SelectObject(hdc, BikodeTheme_GetFont(BKFONT_UI_SMALL));
     DrawTextW(hdc, L"Paste screenshots, drop files, or use search to pull repo context into the thread.", -1,
@@ -1731,7 +1950,9 @@ BOOL ChatPanel_Create(HWND hwndParent)
     {
         s_pfnOrigInputProc = (WNDPROC)SetWindowLongPtrW(
             s_hwndInput, GWLP_WNDPROC, (LONG_PTR)ChatInputSubclassProc);
+        SetWindowTheme(s_hwndInput, L"", L"");
         SendMessage(s_hwndInput, WM_SETFONT, (WPARAM)s_hFontInput, TRUE);
+        SendMessageW(s_hwndInput, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(8, 8));
         SendMessageW(s_hwndInput, EM_SETCUEBANNER, TRUE,
                      (LPARAM)L"Message Bikode\x2026");
     }
@@ -1894,22 +2115,37 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
 
     // Input card
     int cardLeft   = x + CHAT_INPUT_PAD;
-    int cardTop    = y + 6;
+    int cardTop    = y + 4;
     int cardRight  = x + innerW - CHAT_INPUT_PAD;
     int pendingHeight = GetPendingSectionHeight();
-    int cardBottom = y + CHAT_INPUT_AREA_HEIGHT - 6 + pendingHeight;
+    int cardBottom = y + CHAT_INPUT_AREA_HEIGHT - 4 + pendingHeight;
     s_rcInputCard.left   = cardLeft;
     s_rcInputCard.top    = cardTop;
     s_rcInputCard.right  = cardRight;
     s_rcInputCard.bottom = cardBottom;
 
     int ip = CHAT_INPUT_INNER_PAD;
-    int editLeft   = cardLeft + ip;
-    int editTop    = cardTop + ip + pendingHeight;
-    int editBottom = cardBottom - ip;
+    int composerTop = cardTop + ip + pendingHeight;
+    s_rcComposerTag.left = cardLeft + ip + 4;
+    s_rcComposerTag.top = composerTop;
+    s_rcComposerTag.right = min(cardRight - ip - 4, s_rcComposerTag.left + 116);
+    s_rcComposerTag.bottom = s_rcComposerTag.top + CHAT_COMPOSER_TAG_H;
 
-    int sendLeft = cardRight - ip - CHAT_SEND_SIZE;
-    int sendTop  = cardBottom - ip - CHAT_SEND_SIZE;
+    s_rcInputWell.left = cardLeft + ip;
+    s_rcInputWell.top = s_rcComposerTag.bottom + 6;
+    s_rcInputWell.right = cardRight - ip;
+    s_rcInputWell.bottom = cardBottom - ip;
+    s_rcComposerHint.left = s_rcComposerTag.right + 8;
+    s_rcComposerHint.top = s_rcComposerTag.top;
+    s_rcComposerHint.right = s_rcInputWell.right;
+    s_rcComposerHint.bottom = s_rcComposerTag.bottom;
+
+    int editLeft   = s_rcInputWell.left + 8;
+    int editTop    = s_rcInputWell.top + 6;
+    int editBottom = s_rcInputWell.bottom - 6;
+
+    int sendLeft = s_rcInputWell.right - 8 - CHAT_SEND_SIZE;
+    int sendTop  = s_rcInputWell.bottom - 4 - CHAT_SEND_SIZE;
     if (s_hwndSend)
         MoveWindow(s_hwndSend, sendLeft, sendTop,
                    CHAT_SEND_SIZE, CHAT_SEND_SIZE, TRUE);
@@ -1925,7 +2161,11 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
                    CHAT_SEND_SIZE, CHAT_SEND_SIZE, TRUE);
 
     // Adjust input right edge to avoid overlapping buttons
-    int editRight = searchLeft - CHAT_BTN_GAP;
+    int editRight = searchLeft - CHAT_BTN_GAP - 4;
+    s_rcComposerDock.left = searchLeft - 6;
+    s_rcComposerDock.top = sendTop - 4;
+    s_rcComposerDock.right = s_rcInputWell.right + 2;
+    s_rcComposerDock.bottom = sendTop + CHAT_SEND_SIZE + 4;
     if (s_hwndInput)
     {
         int inputsRight = editRight;
@@ -2220,7 +2460,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
         // Header - mission-control chrome
         {
             WCHAR wszStatus[128];
-            WCHAR wszModel[128] = L"Model Auto";
+            WCHAR wszModel[128] = L"AI";
             WCHAR wszContext[128] = L"CTX Current";
             RECT rcHeaderCard;
             RECT rcModel;
@@ -2228,10 +2468,13 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             RECT rcContext;
             RECT rcProgress;
             RECT rcAccent;
-            const AIProviderConfig* pCfg = AIBridge_GetProviderConfig();
-            EAIStatus aiStatus = AIBridge_GetStatus();
+            COLORREF statusAccent = BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
             int progressPct = 18;
-            COLORREF progressClr = BikodeTheme_GetColor(BKCLR_STROKE_SOFT);
+            int modelW;
+            int contextW;
+            int statusW;
+            int availableChipsW;
+            int totalChipW;
             int iconX = 14;
             int iconY = 11;
 
@@ -2266,18 +2509,8 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             DrawTextW(hm, L"Bikode AI", -1, &rcTitle,
                       DT_SINGLELINE | DT_VCENTER | DT_LEFT);
 
-            AICommands_GetStatusText(wszStatus, ARRAYSIZE(wszStatus));
-            if (pCfg)
-            {
-                if (pCfg->szModel[0]) {
-                    MultiByteToWideChar(CP_UTF8, 0, pCfg->szModel, -1, wszModel, ARRAYSIZE(wszModel));
-                } else {
-                    const AIProviderDef* pDef = AIProvider_Get(pCfg->eProvider);
-                    if (pDef && pDef->szName) {
-                        MultiByteToWideChar(CP_UTF8, 0, pDef->szName, -1, wszModel, ARRAYSIZE(wszModel));
-                    }
-                }
-            }
+            BuildMissionModelLabel(wszModel, ARRAYSIZE(wszModel));
+            BuildMissionStatusLabel(wszStatus, ARRAYSIZE(wszStatus), &statusAccent, &progressPct);
             {
                 const WCHAR* root = FileManager_GetRootPath();
                 const WCHAR* leaf = NULL;
@@ -2288,45 +2521,34 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
                 }
             }
 
-            switch (aiStatus)
+            modelW = min(126, max(84, MeasureThemeTextWidth(hm, BikodeTheme_GetFont(BKFONT_MONO_SMALL), wszModel) + 26));
+            contextW = min(116, max(84, MeasureThemeTextWidth(hm, BikodeTheme_GetFont(BKFONT_MONO_SMALL), wszContext) + 26));
+            statusW = min(112, max(84, MeasureThemeTextWidth(hm, BikodeTheme_GetFont(BKFONT_UI_SMALL), wszStatus) + 26));
+            availableChipsW = (s_rcCloseBtn.left - 8) - rcTitle.left;
+            totalChipW = modelW + contextW + statusW + 12;
+            if (totalChipW > availableChipsW)
             {
-            case AI_STATUS_READY:
-                progressPct = 100;
-                progressClr = BikodeTheme_GetColor(BKCLR_SUCCESS_GREEN);
-                break;
-            case AI_STATUS_THINKING:
-                progressPct = 68;
-                progressClr = BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
-                break;
-            case AI_STATUS_PATCH_READY:
-                progressPct = 100;
-                progressClr = BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW);
-                break;
-            case AI_STATUS_CONNECTING:
-                progressPct = 36;
-                progressClr = BikodeTheme_GetColor(BKCLR_WARNING_ORANGE);
-                break;
-            case AI_STATUS_ERROR:
-                progressPct = 100;
-                progressClr = BikodeTheme_GetColor(BKCLR_DANGER_RED);
-                break;
-            case AI_STATUS_OFFLINE:
-            default:
-                progressPct = 14;
-                progressClr = BikodeTheme_GetColor(BKCLR_HOT_MAGENTA);
-                break;
+                int excess = totalChipW - availableChipsW;
+                int shrink = min(excess, modelW - 72);
+                modelW -= shrink;
+                excess -= shrink;
+                shrink = min(excess, contextW - 76);
+                contextW -= shrink;
+                excess -= shrink;
+                shrink = min(excess, statusW - 76);
+                statusW -= shrink;
             }
 
             rcModel.left = rcTitle.left;
             rcModel.top = rcTitle.bottom + 3;
-            rcModel.right = rcModel.left + 108;
+            rcModel.right = rcModel.left + modelW;
             rcModel.bottom = rcModel.top + 20;
             rcContext = rcModel;
             rcContext.left = rcModel.right + 6;
-            rcContext.right = rcContext.left + 98;
+            rcContext.right = rcContext.left + contextW;
             rcStatus = rcContext;
             rcStatus.left = rcContext.right + 6;
-            rcStatus.right = s_rcCloseBtn.left - 8;
+            rcStatus.right = min(s_rcCloseBtn.left - 8, rcStatus.left + statusW);
 
             BikodeTheme_DrawChip(hm, &rcModel, wszModel,
                 BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
@@ -2345,7 +2567,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
                 BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
                 BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
                 BikodeTheme_GetFont(BKFONT_UI_SMALL), TRUE,
-                BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN));
+                statusAccent);
 
             rcProgress.left = rcTitle.left;
             rcProgress.right = s_rcCloseBtn.left - 8;
@@ -2355,7 +2577,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
                 RECT rcFill = rcProgress;
                 rcFill.right = rcProgress.left + ((rcProgress.right - rcProgress.left) * progressPct) / 100;
                 HBRUSH hBase = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_STROKE_SOFT));
-                HBRUSH hFill = CreateSolidBrush(progressClr);
+                HBRUSH hFill = CreateSolidBrush(statusAccent);
                 FillRect(hm, &rcProgress, hBase);
                 if (rcFill.right > rcFill.left)
                     FillRect(hm, &rcFill, hFill);
@@ -2371,8 +2593,58 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
         // Input card
         {
             COLORREF cardBd = s_bInputFocused ? CP_INPUT_FOCUS_BD : CP_INPUT_BD;
-            FillRoundRect(hm, &s_rcInputCard, CHAT_INPUT_RADIUS,
-                          CP_INPUT_BG, cardBd);
+            RECT rcRail = s_rcInputCard;
+            RECT rcMeta;
+            BikodeTheme_DrawCutCornerPanel(hm, &s_rcInputCard,
+                BikodeTheme_GetColor(BKCLR_SURFACE_RAISED),
+                BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+                cardBd,
+                10, TRUE);
+
+            rcRail.left += 10;
+            rcRail.top += 10;
+            rcRail.right = rcRail.left + 3;
+            rcRail.bottom = min(s_rcInputWell.bottom, s_rcInputCard.bottom - 10);
+            {
+                HBRUSH hRail = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+                FillRect(hm, &rcRail, hRail);
+                DeleteObject(hRail);
+            }
+
+            if (!IsRectEmpty(&s_rcComposerTag))
+            {
+                BikodeTheme_DrawChip(hm, &s_rcComposerTag, L"PROMPT DECK",
+                    BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+                    BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+                    BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
+                    BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE,
+                    BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+            }
+
+            rcMeta = s_rcComposerHint;
+            SetBkMode(hm, TRANSPARENT);
+            SetTextColor(hm, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
+            SelectObject(hm, BikodeTheme_GetFont(BKFONT_UI_SMALL));
+            DrawTextW(hm, L"Shift+Enter newline", -1, &rcMeta,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+            if (!IsRectEmpty(&s_rcInputWell))
+            {
+                BikodeTheme_DrawRoundedPanel(hm, &s_rcInputWell,
+                    CP_INPUT_WELL_BG,
+                    BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+                    s_bInputFocused ? CP_INPUT_FOCUS_BD : BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+                    8, FALSE);
+            }
+
+            if (!IsRectEmpty(&s_rcComposerDock))
+            {
+                BikodeTheme_DrawRoundedPanel(hm, &s_rcComposerDock,
+                    CP_INPUT_DOCK_BG,
+                    BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+                    BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+                    8, FALSE);
+            }
         }
 
         // Pending attachments strip
@@ -2391,14 +2663,14 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
     {
         HDC hdcEdit = (HDC)wParam;
         SetTextColor(hdcEdit, CP_INPUT_TEXT);
-        SetBkColor(hdcEdit, CP_INPUT_BG);
+        SetBkColor(hdcEdit, CP_INPUT_WELL_BG);
         SetBkMode(hdcEdit, OPAQUE);
         static HBRUSH s_hBrEdit = NULL;
         static COLORREF s_lastClr = 0;
-        if (!s_hBrEdit || s_lastClr != CP_INPUT_BG) {
+        if (!s_hBrEdit || s_lastClr != CP_INPUT_WELL_BG) {
             if (s_hBrEdit) DeleteObject(s_hBrEdit);
-            s_hBrEdit = CreateSolidBrush(CP_INPUT_BG);
-            s_lastClr = CP_INPUT_BG;
+            s_hBrEdit = CreateSolidBrush(CP_INPUT_WELL_BG);
+            s_lastClr = CP_INPUT_WELL_BG;
         }
         return (LRESULT)s_hBrEdit;
     }

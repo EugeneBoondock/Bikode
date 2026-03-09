@@ -156,9 +156,14 @@ EAIStatus AIBridge_GetStatus(void)
 
 const WCHAR* AIBridge_GetStatusText(void)
 {
+    const AIProviderDef* pDef = AIProvider_Get(s_config.providerCfg.eProvider);
+    BOOL configured = FALSE;
+    if (pDef)
+        configured = pDef->bIsLocal || !pDef->bRequiresKey || s_config.providerCfg.szApiKey[0];
+
     switch (AIBridge_GetStatus())
     {
-    case AI_STATUS_OFFLINE:     return L"AI: offline";
+    case AI_STATUS_OFFLINE:     return configured ? L"AI: configured" : L"AI: needs key";
     case AI_STATUS_CONNECTING:  return L"AI: connecting...";
     case AI_STATUS_READY:       return L"AI: ready";
     case AI_STATUS_THINKING:    return L"AI: thinking...";
