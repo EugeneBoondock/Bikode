@@ -186,6 +186,11 @@ HWND EditCreate(HWND hwndParent)
     g_hInstance,
     NULL);
 
+  SetWindowLongPtr(hwnd, GWL_STYLE,
+    GetWindowLongPtr(hwnd, GWL_STYLE) & ~(WS_HSCROLL | WS_VSCROLL | WS_BORDER));
+  SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+    SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+
   SendMessage(hwnd, SCI_SETCODEPAGE, iDefaultCodePage, 0);
   SendMessage(hwnd, SCI_SETEOLMODE, SC_EOL_CRLF, 0);
   SendMessage(hwnd, SCI_SETPASTECONVERTENDINGS, 1, 0);
@@ -193,6 +198,9 @@ HWND EditCreate(HWND hwndParent)
   SendMessage(hwnd, SCI_USEPOPUP, FALSE, 0);
   SendMessage(hwnd, SCI_SETSCROLLWIDTH, 2048, 0);
   SendMessage(hwnd, SCI_SETSCROLLWIDTHTRACKING, TRUE, 0);
+  SendMessage(hwnd, SCI_SETHSCROLLBAR, FALSE, 0);
+  SendMessage(hwnd, SCI_SETVSCROLLBAR, FALSE, 0);
+  ShowScrollBar(hwnd, SB_BOTH, FALSE);
   SendMessage(hwnd, SCI_SETENDATLASTLINE, TRUE, 0);
   SendMessage(hwnd, SCI_SETCARETSTICKY, FALSE, 0);
   SendMessage(hwnd, SCI_SETXCARETPOLICY, CARET_SLOP | CARET_EVEN, 50);

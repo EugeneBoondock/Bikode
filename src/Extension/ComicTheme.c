@@ -277,6 +277,9 @@ void ComicTheme_ApplyToEditor(HWND hwndEdit)
     SendMessage(hwndEdit, SCI_SETEDGECOLOUR, RGB(34, 40, 50), 0);
     SendMessage(hwndEdit, SCI_SETWHITESPACEFORE, TRUE, RGB(28, 34, 42));
     SendMessage(hwndEdit, SCI_SETWHITESPACEBACK, TRUE, COMIC_CODE_BG);
+    SendMessage(hwndEdit, SCI_SETHSCROLLBAR, FALSE, 0);
+    SendMessage(hwndEdit, SCI_SETVSCROLLBAR, FALSE, 0);
+    ShowScrollBar(hwndEdit, SB_BOTH, FALSE);
 
     // Indicators: diagnostics, diffs, and AI callouts
     SendMessage(hwndEdit, SCI_INDICSETSTYLE, 0, INDIC_SQUIGGLE);

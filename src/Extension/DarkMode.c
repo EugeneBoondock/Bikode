@@ -374,6 +374,8 @@ void DarkMode_ApplyToEditor(HWND hwndEdit)
     // Remove any Win32 theme border on the editor
     SetWindowLongPtr(hwndEdit, GWL_EXSTYLE,
         GetWindowLongPtr(hwndEdit, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
+    SetWindowLongPtr(hwndEdit, GWL_STYLE,
+        GetWindowLongPtr(hwndEdit, GWL_STYLE) & ~(WS_HSCROLL | WS_VSCROLL | WS_BORDER));
     SetWindowPos(hwndEdit, NULL, 0, 0, 0, 0,
         SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
 }

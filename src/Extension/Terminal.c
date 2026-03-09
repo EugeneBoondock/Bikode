@@ -482,6 +482,8 @@ static HFONT  g_fontGrid    = NULL;
 static BOOL   g_caretOn     = TRUE;
 static int    g_cellW       = 8;
 static int    g_cellH       = 16;
+static UINT   g_sessionCounter = 0;
+static UINT   g_activeSessionId = 1;
 
 static const WCHAR *CLS_PANEL = L"BikoTermPanel";
 static const WCHAR *CLS_VIEW  = L"BikoTermView";
@@ -838,6 +840,7 @@ static BOOL Spawn(HWND hwndParent, ShellKind sh) {
     SetTimer(g_hwndPanel, TIMER_BLINK, 530, NULL);
 
     g_curShell = sh;
+    g_activeSessionId = ++g_sessionCounter;
     InvalidateRect(g_hwndPanel, NULL, TRUE);
     return TRUE;
 }
@@ -979,6 +982,71 @@ static COLORREF GetBG(BYTE idx) {
     return dk ? C_DKBG : C_LTBG;
 }
 
+typedef enum {
+    ROW_NORMAL = 0,
+    ROW_PROMPT,
+    ROW_SUCCESS,
+    ROW_WARNING,
+    ROW_ERROR
+} RowTone;
+
+static RowTone ClassifyRowTone(const Cell *row, int cols) {
+    WCHAR text[512];
+    int n = 0;
+    int end = cols - 1;
+    while (end >= 0 && row[end].ch == L' ') end--;
+    if (end < 0) return ROW_NORMAL;
+    for (int i = 0; i <= end && n < (int)ARRAYSIZE(text) - 1; i++) {
+        text[n++] = row[i].ch ? row[i].ch : L' ';
+    }
+    text[n] = 0;
+
+    if (StrStrIW(text, L"error") || StrStrIW(text, L"failed") || StrStrIW(text, L"exception") ||
+        StrStrIW(text, L"fatal") || StrStrIW(text, L"cannot"))
+        return ROW_ERROR;
+    if (StrStrIW(text, L"warning") || StrStrIW(text, L"warn") || StrStrIW(text, L"deprecated"))
+        return ROW_WARNING;
+    if (StrStrIW(text, L"success") || StrStrIW(text, L"done") || StrStrIW(text, L"ready") ||
+        StrStrIW(text, L"completed"))
+        return ROW_SUCCESS;
+    if ((n >= 3 && text[0] == L'P' && text[1] == L'S' && text[2] == L' ') ||
+        (n >= 2 && text[n - 1] == L'>' && text[0] != L'[') ||
+        (n >= 1 && text[0] == L'$'))
+        return ROW_PROMPT;
+
+    return ROW_NORMAL;
+}
+
+static COLORREF ToneRowBackground(RowTone tone, COLORREF base) {
+    switch (tone) {
+    case ROW_PROMPT:
+        return BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), base, 26);
+    case ROW_SUCCESS:
+        return BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SUCCESS_GREEN), base, 24);
+    case ROW_WARNING:
+        return BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_WARNING_ORANGE), base, 26);
+    case ROW_ERROR:
+        return BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_DANGER_RED), base, 28);
+    default:
+        return base;
+    }
+}
+
+static COLORREF ToneAccent(RowTone tone) {
+    switch (tone) {
+    case ROW_PROMPT:
+        return BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW);
+    case ROW_SUCCESS:
+        return BikodeTheme_GetColor(BKCLR_SUCCESS_GREEN);
+    case ROW_WARNING:
+        return BikodeTheme_GetColor(BKCLR_WARNING_ORANGE);
+    case ROW_ERROR:
+        return BikodeTheme_GetColor(BKCLR_DANGER_RED);
+    default:
+        return RGB(0, 0, 0);
+    }
+}
+
 /* Selection helper */
 static BOOL InSel(int r, int c) {
     if (!g_hasSel) return FALSE;
@@ -1069,13 +1137,25 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             if (absLine < 0 || absLine >= g->used) continue;
             Cell *row = &g->buf[absLine * g->cols];
             int y = r * g_cellH;
+            RowTone tone = ClassifyRowTone(row, g->cols);
             COLORREF rowBaseBg = (dk && (absLine & 1)) ? C_DKROWALT : defBg;
+            COLORREF accent = ToneAccent(tone);
+            rowBaseBg = ToneRowBackground(tone, rowBaseBg);
+            if (dk && tone != ROW_NORMAL) {
+                RECT accentRc = { 0, y, 3, y + g_cellH };
+                HBRUSH hAcc = CreateSolidBrush(accent);
+                FillRect(mem, &accentRc, hAcc);
+                DeleteObject(hAcc);
+            }
             int c = 0;
             while (c < g->cols) {
                 BOOL sel = InSel(r, c);
                 COLORREF fg = sel ? (dk ? RGB(255,255,255) : RGB(0,0,0)) : GetFG(row[c].fg);
                 COLORREF bg = sel ? (dk ? C_DKSEL : RGB(180,215,255))
                                   : (row[c].bg == 0 ? rowBaseBg : GetBG(row[c].bg));
+                if (!sel && row[c].fg == 7 && dk && tone != ROW_NORMAL) {
+                    fg = BikodeTheme_Mix(accent, C_DKFG, 54);
+                }
                 WCHAR run[512]; int rl = 0;
                 int cs = c;
                 while (c < g->cols && rl < 511) {
@@ -1083,6 +1163,9 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                     COLORREF f2 = cs2 ? (dk?RGB(255,255,255):RGB(0,0,0)) : GetFG(row[c].fg);
                     COLORREF b2 = cs2 ? (dk ? C_DKSEL : RGB(180,215,255))
                                       : (row[c].bg == 0 ? rowBaseBg : GetBG(row[c].bg));
+                    if (!cs2 && row[c].fg == 7 && dk && tone != ROW_NORMAL) {
+                        f2 = BikodeTheme_Mix(accent, C_DKFG, 54);
+                    }
                     if (f2 != fg || b2 != bg) break;
                     run[rl++] = row[c].ch;
                     c++;
@@ -1413,13 +1496,14 @@ static void CalcBtns(int w) {
     g_rcClose.right = g_rcClose.left + bs; g_rcClose.bottom = by + bs;
     g_rcNew.left = g_rcClose.left - bs - 4; g_rcNew.top = by;
     g_rcNew.right = g_rcNew.left + bs; g_rcNew.bottom = by + bs;
-    g_rcDrop.left = 10; g_rcDrop.top = SPLITTER_H + 12;
-    g_rcDrop.right = 10 + 116; g_rcDrop.bottom = g_rcDrop.top + 18;
+    g_rcDrop.left = 104; g_rcDrop.top = SPLITTER_H + 12;
+    g_rcDrop.right = g_rcDrop.left + 110; g_rcDrop.bottom = g_rcDrop.top + 18;
 }
 
 static void PaintHeader(HWND hwnd, HDC dc, RECT *rc) {
     WCHAR cwd[MAX_PATH] = L"";
-    RECT deck, rail, deckLabel, shellChip, cwdChip, stateChip;
+    WCHAR tabText[64];
+    RECT deck, rail, deckLabel, tabChip, shellChip, cwdChip, stateChip;
     WCHAR runState[32] = L"IDLE";
     COLORREF stateAccent = BikodeTheme_GetColor(BKCLR_TEXT_MUTED);
     int W = rc->right;
@@ -1452,6 +1536,7 @@ static void PaintHeader(HWND hwnd, HDC dc, RECT *rc) {
     }
 
     SetBkMode(dc, TRANSPARENT);
+    swprintf_s(tabText, ARRAYSIZE(tabText), L"TERM %02u", g_activeSessionId ? g_activeSessionId : 1);
     deckLabel.left = 18;
     deckLabel.top = deck.top + 1;
     deckLabel.right = 132;
@@ -1460,7 +1545,19 @@ static void PaintHeader(HWND hwnd, HDC dc, RECT *rc) {
     if (g_fontDrop) SelectObject(dc, g_fontDrop);
     DrawTextW(dc, L"CONSOLE DECK", -1, &deckLabel, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 
+    tabChip.left = 18;
+    tabChip.top = deckLabel.bottom + 1;
+    tabChip.right = tabChip.left + 78;
+    tabChip.bottom = tabChip.top + 18;
+    BikodeTheme_DrawChip(dc, &tabChip, tabText,
+        BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
+        BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE, BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+
     shellChip = g_rcDrop;
+    shellChip.left = tabChip.right + 8;
+    shellChip.right = shellChip.left + 110;
     stateChip.right = g_rcNew.left - 10;
     stateChip.left = stateChip.right - 86;
     stateChip.top = g_rcDrop.top;
