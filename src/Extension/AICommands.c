@@ -465,6 +465,14 @@ void AICommands_CreateMenu(HMENU hMainMenu)
         InsertMenuW(hMainMenu, 4, MF_BYPOSITION | MF_POPUP, (UINT_PTR)hGitMenu, L"Git");
     }
 
+    // ── Terminal menu: first-class console controls ──
+    {
+        HMENU hTerminalMenu = CreatePopupMenu();
+        AppendMenuW(hTerminalMenu, MF_STRING, IDM_TERMINAL_TOGGLE, L"Toggle Terminal\tCtrl+`");
+        AppendMenuW(hTerminalMenu, MF_STRING, IDM_TERMINAL_NEW,    L"New Terminal");
+        InsertMenuW(hMainMenu, 5, MF_BYPOSITION | MF_POPUP, (UINT_PTR)hTerminalMenu, L"Terminal");
+    }
+
     // ── Settings menu: AI configuration ──
     if (hSettings)
     {

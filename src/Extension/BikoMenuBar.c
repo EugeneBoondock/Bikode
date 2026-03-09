@@ -133,6 +133,15 @@ static void BuildItems(void)
     s_items[i].szLabel[d] = 0;
     if (d == 0 && s_items[i].hPopup) {
       UINT firstCmd = GetMenuItemID(s_items[i].hPopup, 0);
+      WCHAR firstItemText[64] = L"";
+      MENUITEMINFOW submii;
+      ZeroMemory(&submii, sizeof(submii));
+      submii.cbSize = sizeof(submii);
+      submii.fMask = MIIM_STRING | MIIM_ID;
+      submii.dwTypeData = firstItemText;
+      submii.cch = 63;
+      if (GetMenuItemInfoW(s_items[i].hPopup, 0, TRUE, &submii) && submii.wID)
+        firstCmd = submii.wID;
       if (firstCmd == IDM_AI_TOGGLE_CHAT || firstCmd == IDM_BIKO_COMMAND_PALETTE ||
           firstCmd == IDM_AI_TRANSFORM) {
         lstrcpyW(s_items[i].szRaw, L"&Agents");
@@ -145,6 +154,18 @@ static void BuildItems(void)
         lstrcpyW(s_items[i].szLabel, L"Git");
         s_items[i].chMnemonic = L'g';
         d = 3;
+      }
+      else if (firstCmd == IDM_TERMINAL_TOGGLE || firstCmd == IDM_TERMINAL_NEW) {
+        lstrcpyW(s_items[i].szRaw, L"&Terminal");
+        lstrcpyW(s_items[i].szLabel, L"Terminal");
+        s_items[i].chMnemonic = L't';
+        d = 8;
+      }
+      else if (wcsstr(firstItemText, L"Terminal") || wcsstr(firstItemText, L"New Terminal")) {
+        lstrcpyW(s_items[i].szRaw, L"&Terminal");
+        lstrcpyW(s_items[i].szLabel, L"Terminal");
+        s_items[i].chMnemonic = L't';
+        d = 8;
       }
     }
 

@@ -48,18 +48,21 @@ static BOOL g_havePTY = FALSE;
  * ═══════════════════════════════════════════════════════════════════ */
 #define PANEL_HEIGHT_DEFAULT  180
 #define SPLITTER_H            3
-#define HEADER_H              32
+#define HEADER_H              34
 #define TIMER_HEALTH          1
 #define TIMER_BLINK           2
 #define WM_TERMDATA           (WM_USER + 200)
 
 /* colours */
-#define C_DKBG     RGB(9,12,17)
+#define C_DKBG     RGB(8,11,17)
 #define C_DKFG     RGB(243,245,247)
 #define C_DKHDR    RGB(23,28,36)
 #define C_DKSPLIT  RGB(42,49,64)
 #define C_DKTXT    RGB(243,245,247)
 #define C_DKDIM    RGB(168,179,194)
+#define C_DKROWALT RGB(10,14,20)
+#define C_DKSEL    RGB(22,47,63)
+#define C_DKCARET  RGB(255,212,0)
 #define C_DKBTN    RGB(29,36,48)
 #define C_DKBORD   RGB(42,49,64)
 #define C_DKDROP   RGB(17,21,28)
@@ -487,7 +490,7 @@ static BOOL g_regView  = FALSE;
 
 /* Header button rects */
 static RECT g_rcDrop = {0}, g_rcNew = {0}, g_rcClose = {0};
-static BOOL g_hoverClose = FALSE, g_hoverNew = FALSE;
+static BOOL g_hoverClose = FALSE, g_hoverNew = FALSE, g_hoverDrop = FALSE;
 
 /* Selection state */
 static BOOL g_selecting = FALSE, g_hasSel = FALSE;
@@ -1066,17 +1069,20 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             if (absLine < 0 || absLine >= g->used) continue;
             Cell *row = &g->buf[absLine * g->cols];
             int y = r * g_cellH;
+            COLORREF rowBaseBg = (dk && (absLine & 1)) ? C_DKROWALT : defBg;
             int c = 0;
             while (c < g->cols) {
                 BOOL sel = InSel(r, c);
                 COLORREF fg = sel ? (dk ? RGB(255,255,255) : RGB(0,0,0)) : GetFG(row[c].fg);
-                COLORREF bg = sel ? (dk ? RGB(55,55,80) : RGB(180,215,255)) : GetBG(row[c].bg);
+                COLORREF bg = sel ? (dk ? C_DKSEL : RGB(180,215,255))
+                                  : (row[c].bg == 0 ? rowBaseBg : GetBG(row[c].bg));
                 WCHAR run[512]; int rl = 0;
                 int cs = c;
                 while (c < g->cols && rl < 511) {
                     BOOL cs2 = InSel(r, c);
                     COLORREF f2 = cs2 ? (dk?RGB(255,255,255):RGB(0,0,0)) : GetFG(row[c].fg);
-                    COLORREF b2 = cs2 ? (dk?RGB(55,55,80):RGB(180,215,255)) : GetBG(row[c].bg);
+                    COLORREF b2 = cs2 ? (dk ? C_DKSEL : RGB(180,215,255))
+                                      : (row[c].bg == 0 ? rowBaseBg : GetBG(row[c].bg));
                     if (f2 != fg || b2 != bg) break;
                     run[rl++] = row[c].ch;
                     c++;
@@ -1103,8 +1109,22 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             int cx = g->curC * g_cellW;
             int cy = g->curR * g_cellH;
             RECT cr2 = { cx, cy, cx + 2, cy + g_cellH };
-            HBRUSH cb = CreateSolidBrush(dk ? RGB(200,200,220) : RGB(0,0,0));
+            HBRUSH cb = CreateSolidBrush(dk ? C_DKCARET : RGB(0,0,0));
             FillRect(mem, &cr2, cb); DeleteObject(cb);
+        }
+
+        if (dk) {
+            HPEN hOuter = CreatePen(PS_SOLID, 1, BikodeTheme_GetColor(BKCLR_STROKE_DARK));
+            HPEN hInner = CreatePen(PS_SOLID, 1, BikodeTheme_GetColor(BKCLR_STROKE_SOFT));
+            HPEN hOld = (HPEN)SelectObject(mem, hOuter);
+            MoveToEx(mem, 0, 0, NULL); LineTo(mem, rc.right - 1, 0);
+            MoveToEx(mem, 0, 0, NULL); LineTo(mem, 0, rc.bottom - 1);
+            SelectObject(mem, hInner);
+            MoveToEx(mem, rc.right - 1, 0, NULL); LineTo(mem, rc.right - 1, rc.bottom - 1);
+            MoveToEx(mem, 0, rc.bottom - 1, NULL); LineTo(mem, rc.right - 1, rc.bottom - 1);
+            SelectObject(mem, hOld);
+            DeleteObject(hOuter);
+            DeleteObject(hInner);
         }
 
         if (ofont) SelectObject(mem, ofont);
@@ -1388,18 +1408,18 @@ static void ShowShellMenu(HWND hwnd) {
  * Header painting
  * ═══════════════════════════════════════════════════════════════════ */
 static void CalcBtns(int w) {
-    int bs = 20, by = SPLITTER_H + (HEADER_H - 20) / 2;
+    int bs = 20, by = SPLITTER_H + (HEADER_H - 20) / 2 + 3;
     g_rcClose.left = w - bs - 8; g_rcClose.top = by;
     g_rcClose.right = g_rcClose.left + bs; g_rcClose.bottom = by + bs;
     g_rcNew.left = g_rcClose.left - bs - 4; g_rcNew.top = by;
     g_rcNew.right = g_rcNew.left + bs; g_rcNew.bottom = by + bs;
-    g_rcDrop.left = 10; g_rcDrop.top = SPLITTER_H + (HEADER_H - 20) / 2;
-    g_rcDrop.right = 10 + 118; g_rcDrop.bottom = g_rcDrop.top + 20;
+    g_rcDrop.left = 10; g_rcDrop.top = SPLITTER_H + 12;
+    g_rcDrop.right = 10 + 116; g_rcDrop.bottom = g_rcDrop.top + 18;
 }
 
 static void PaintHeader(HWND hwnd, HDC dc, RECT *rc) {
     WCHAR cwd[MAX_PATH] = L"";
-    RECT deck, shellChip, cwdChip, stateChip;
+    RECT deck, rail, deckLabel, shellChip, cwdChip, stateChip;
     WCHAR runState[32] = L"IDLE";
     COLORREF stateAccent = BikodeTheme_GetColor(BKCLR_TEXT_MUTED);
     int W = rc->right;
@@ -1414,30 +1434,52 @@ static void PaintHeader(HWND hwnd, HDC dc, RECT *rc) {
     deck.top = SPLITTER_H;
     deck.right = W;
     deck.bottom = SPLITTER_H + HEADER_H;
-    BikodeTheme_DrawRoundedPanel(dc, &deck,
+    BikodeTheme_DrawCutCornerPanel(dc, &deck,
         BikodeTheme_GetColor(BKCLR_SURFACE_RAISED),
         BikodeTheme_GetColor(BKCLR_STROKE_DARK),
         BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
-        0, TRUE);
+        8, TRUE);
+
+    rail = deck;
+    rail.left += 8;
+    rail.top += 6;
+    rail.right = rail.left + 3;
+    rail.bottom -= 6;
+    {
+        HBRUSH hRail = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+        FillRect(dc, &rail, hRail);
+        DeleteObject(hRail);
+    }
 
     SetBkMode(dc, TRANSPARENT);
-    shellChip.left = 10;
-    shellChip.top = deck.top + 6;
-    shellChip.right = 106;
-    shellChip.bottom = deck.bottom - 6;
+    deckLabel.left = 18;
+    deckLabel.top = deck.top + 1;
+    deckLabel.right = 132;
+    deckLabel.bottom = deckLabel.top + 12;
+    SetTextColor(dc, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
+    if (g_fontDrop) SelectObject(dc, g_fontDrop);
+    DrawTextW(dc, L"CONSOLE DECK", -1, &deckLabel, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+    shellChip = g_rcDrop;
     stateChip.right = g_rcNew.left - 10;
     stateChip.left = stateChip.right - 86;
-    stateChip.top = shellChip.top;
-    stateChip.bottom = shellChip.bottom;
+    stateChip.top = g_rcDrop.top;
+    stateChip.bottom = g_rcDrop.bottom;
     cwdChip.left = shellChip.right + 8;
     cwdChip.top = shellChip.top;
     cwdChip.right = stateChip.left - 8;
     cwdChip.bottom = shellChip.bottom;
     BikodeTheme_DrawChip(dc, &shellChip, g_shells[g_curShell].label,
-        BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
-        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        g_hoverDrop ? BikodeTheme_GetColor(BKCLR_SURFACE_RAISED) : BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+        g_hoverDrop ? BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN) : BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
         BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
         BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE, BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+    {
+        RECT rcDropArrow = shellChip;
+        rcDropArrow.left = rcDropArrow.right - 12;
+        SetTextColor(dc, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
+        DrawTextW(dc, L"v", 1, &rcDropArrow, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
     if (cwdChip.right > cwdChip.left + 40) {
         BikodeTheme_DrawChip(dc, &cwdChip, cwd,
             BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
@@ -1501,6 +1543,10 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     case WM_SETCURSOR: {
         POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
         if (pt.y < SPLITTER_H) { SetCursor(LoadCursor(NULL, IDC_SIZENS)); return TRUE; }
+        if (PtInRect(&g_rcDrop, pt) || PtInRect(&g_rcNew, pt) || PtInRect(&g_rcClose, pt)) {
+            SetCursor(LoadCursor(NULL, IDC_HAND));
+            return TRUE;
+        }
         break;
     }
 
@@ -1531,9 +1577,9 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             SendMessage(p, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rp.right, rp.bottom));
         } else {
             POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
-            BOOL c2 = PtInRect(&g_rcClose, pt), n2 = PtInRect(&g_rcNew, pt);
-            if (c2 != g_hoverClose || n2 != g_hoverNew) {
-                g_hoverClose = c2; g_hoverNew = n2;
+            BOOL c2 = PtInRect(&g_rcClose, pt), n2 = PtInRect(&g_rcNew, pt), d2 = PtInRect(&g_rcDrop, pt);
+            if (c2 != g_hoverClose || n2 != g_hoverNew || d2 != g_hoverDrop) {
+                g_hoverClose = c2; g_hoverNew = n2; g_hoverDrop = d2;
                 RECT rh = { 0, SPLITTER_H, 9999, SPLITTER_H + HEADER_H };
                 InvalidateRect(hwnd, &rh, FALSE);
             }
@@ -1544,8 +1590,8 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     }
 
     case WM_MOUSELEAVE:
-        if (g_hoverClose || g_hoverNew) {
-            g_hoverClose = FALSE; g_hoverNew = FALSE;
+        if (g_hoverClose || g_hoverNew || g_hoverDrop) {
+            g_hoverClose = FALSE; g_hoverNew = FALSE; g_hoverDrop = FALSE;
             RECT rh = { 0, SPLITTER_H, 9999, SPLITTER_H + HEADER_H };
             InvalidateRect(hwnd, &rh, FALSE);
         }
