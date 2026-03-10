@@ -66,15 +66,16 @@ static HFONT CreateComicFont(int height, BOOL bBold, BOOL bMono)
 
 static void CreateHalftonePattern(void)
 {
-    WORD bits[6] = {
-        0b101010,  // . X . X . X
-        0b010101,  // X . X . X .
-        0b101010,
-        0b010101,
-        0b101010,
-        0b010101
-    };
-    s_hDotPattern = CreateBitmap(6, 6, 1, 1, bits);
+    /* 32x32 pseudo-random noise for film-grain texture.
+       Matches the fractalNoise grain overlay from BikodeWebsite. */
+    WORD bits[64]; /* 32 rows * 2 WORDs per row */
+    unsigned int seed = 0xB1C0DE;
+    int i;
+    for (i = 0; i < 64; i++) {
+        seed = seed * 1103515245 + 12345;
+        bits[i] = (WORD)((seed >> 16) & 0xFFFF);
+    }
+    s_hDotPattern = CreateBitmap(32, 32, 1, 1, bits);
     if (s_hDotPattern)
         s_hDotBrush = CreatePatternBrush(s_hDotPattern);
 }
@@ -150,7 +151,7 @@ void ComicTheme_DrawHalftoneDots(HDC hdc, RECT* prc, COLORREF dotColor, COLORREF
     if (!s_hDotBrush) return;
 
     // Set brush colors and origin
-    SetBrushOrgEx(hdc, prc->left % 6, prc->top % 6, NULL);
+    SetBrushOrgEx(hdc, prc->left % 32, prc->top % 32, NULL);
     SetTextColor(hdc, dotColor);
     SetBkColor(hdc, bgColor);
 
@@ -257,7 +258,7 @@ void ComicTheme_ApplyToEditor(HWND hwndEdit)
     SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_LINENUMBER, COMIC_CODE_LINENUM);
     SendMessage(hwndEdit, SCI_STYLESETBOLD, STYLE_LINENUMBER, FALSE);
     SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_INDENTGUIDE, COMIC_CODE_BG);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_INDENTGUIDE, RGB(34, 40, 50));
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_INDENTGUIDE, RGB(50, 50, 50));
 
     // Fold margin
     SendMessage(hwndEdit, SCI_SETFOLDMARGINCOLOUR, TRUE, COMIC_CODE_GUTTER);
@@ -274,8 +275,8 @@ void ComicTheme_ApplyToEditor(HWND hwndEdit)
     SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_LINEINDICATOR_FIRST_LAST, RGB(92, 65, 18));
 
     // Edge / right column hint
-    SendMessage(hwndEdit, SCI_SETEDGECOLOUR, RGB(34, 40, 50), 0);
-    SendMessage(hwndEdit, SCI_SETWHITESPACEFORE, TRUE, RGB(28, 34, 42));
+    SendMessage(hwndEdit, SCI_SETEDGECOLOUR, RGB(50, 50, 50), 0);
+    SendMessage(hwndEdit, SCI_SETWHITESPACEFORE, TRUE, RGB(50, 50, 50));
     SendMessage(hwndEdit, SCI_SETWHITESPACEBACK, TRUE, COMIC_CODE_BG);
     SendMessage(hwndEdit, SCI_SETHSCROLLBAR, FALSE, 0);
     SendMessage(hwndEdit, SCI_SETVSCROLLBAR, FALSE, 0);
@@ -300,7 +301,7 @@ void ComicTheme_ApplyToEditor(HWND hwndEdit)
 
     // Style 240 is reserved for boxed AI annotations.
     SendMessage(hwndEdit, SCI_STYLESETFORE, 240, COMIC_WHITE);
-    SendMessage(hwndEdit, SCI_STYLESETBACK, 240, RGB(23, 28, 36));
+    SendMessage(hwndEdit, SCI_STYLESETBACK, 240, RGB(36, 36, 36));
     SendMessage(hwndEdit, SCI_STYLESETBOLD, 240, TRUE);
 }
 

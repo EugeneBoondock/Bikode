@@ -499,6 +499,8 @@
     <ClCompile Include="src\Extension\ProofTray.c" />
     <ClCompile Include="src\Extension\FileManager.c" />
     <ClCompile Include="src\Extension\MarkdownPreview.c" />
+    <ClCompile Include="src\Extension\PreviewTab.c" />
+    <ClCompile Include="src\Extension\WebViewUI.cpp" />
     <ClCompile Include="src\Extension\WelcomeScreen.c" />
     <ClCompile Include="src\Helpers.c" />
     <ClCompile Include="src\Notepad2.c" />

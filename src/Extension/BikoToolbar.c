@@ -13,6 +13,8 @@
 #include "GitUI.h"
 #include "FileManager.h"
 #include "DarkMode.h"
+#include "PreviewTab.h"
+#include "../resource.h"
 #include <windowsx.h>
 #include <string.h>
 
@@ -24,6 +26,10 @@ static BOOL s_registered = FALSE;
 static BOOL s_tracking = FALSE;
 static BOOL s_hoverCommand = FALSE;
 static RECT s_rcCommand = { 0 };
+static BOOL s_hoverPreview = FALSE;
+static RECT s_rcPreview = { 0 };
+static BOOL s_hoverOpen = FALSE;
+static RECT s_rcOpen = { 0 };
 
 static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
@@ -167,8 +173,33 @@ static void Paint(HWND hwnd, HDC hdc)
     chipRight -= DrawChipAuto(mem, chipRight, 5, wszWorkspace, BikodeTheme_GetColor(BKCLR_HOT_MAGENTA), FALSE) + 8;
 
     commandW = min(340, max(240, rc.right / 3));
-    s_rcCommand.left = max(rcProject.right + 20, (rc.right - commandW) / 2);
+    int previewW = 96;
+    
+    s_rcCommand.left = max(rcProject.right + 20 + previewW + 10, (rc.right - commandW) / 2);
     s_rcCommand.right = min(chipRight - 10, s_rcCommand.left + commandW);
+    
+    // Position Preview Button left of Quick Command
+    s_rcPreview.right = s_rcCommand.left - 10;
+    s_rcPreview.left = s_rcPreview.right - previewW;
+    s_rcPreview.top = 4;
+    s_rcPreview.bottom = height - 4;
+
+    // Position Open Button left of Preview Button
+    s_rcOpen.right = s_rcPreview.left - 10;
+    s_rcOpen.left = s_rcOpen.right - previewW;
+    s_rcOpen.top = 4;
+    s_rcOpen.bottom = height - 4;
+
+    if (s_rcPreview.left > rcProject.right + 10) {
+        BikodeTheme_DrawButton(mem, &s_rcPreview, L"Preview", BKGLYPH_SEARCH, s_hoverPreview, FALSE, FALSE, FALSE);
+    } else {
+        SetRectEmpty(&s_rcPreview);
+    }
+    if (s_rcOpen.left > rcProject.right + 10) {
+        BikodeTheme_DrawButton(mem, &s_rcOpen, L"Open", BKGLYPH_OPEN, s_hoverOpen, FALSE, FALSE, FALSE);
+    } else {
+        SetRectEmpty(&s_rcOpen);
+    }
     s_rcCommand.top = 4;
     s_rcCommand.bottom = height - 4;
     if (s_rcCommand.right < s_rcCommand.left + 180) {
@@ -223,14 +254,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_MOUSEMOVE:
     {
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-        BOOL hover = PtInRect(&s_rcCommand, pt);
+        BOOL hoverCommand = PtInRect(&s_rcCommand, pt);
+        BOOL hoverPreview = PtInRect(&s_rcPreview, pt);
+        BOOL hoverOpen = PtInRect(&s_rcOpen, pt);
         if (!s_tracking) {
             TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
             TrackMouseEvent(&tme);
             s_tracking = TRUE;
         }
-        if (hover != s_hoverCommand) {
-            s_hoverCommand = hover;
+        if (hoverCommand != s_hoverCommand || hoverPreview != s_hoverPreview || hoverOpen != s_hoverOpen) {
+            s_hoverCommand = hoverCommand;
+            s_hoverPreview = hoverPreview;
+            s_hoverOpen = hoverOpen;
             InvalidateRect(hwnd, NULL, FALSE);
         }
         return 0;
@@ -239,11 +274,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_MOUSELEAVE:
         s_tracking = FALSE;
         s_hoverCommand = FALSE;
+        s_hoverPreview = FALSE;
+        s_hoverOpen = FALSE;
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
 
     case WM_SETCURSOR:
-        if (LOWORD(lParam) == HTCLIENT && s_hoverCommand) {
+        if (LOWORD(lParam) == HTCLIENT && (s_hoverCommand || s_hoverPreview || s_hoverOpen)) {
             SetCursor(LoadCursor(NULL, IDC_HAND));
             return TRUE;
         }
@@ -254,6 +291,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         if (PtInRect(&s_rcCommand, pt)) {
             PostMessage(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(IDM_BIKO_COMMAND_PALETTE, 0), 0);
+            return 0;
+        }
+        if (PtInRect(&s_rcPreview, pt)) {
+            PreviewTab_Toggle();
+            return 0;
+        }
+        if (PtInRect(&s_rcOpen, pt)) {
+            FileManager_BrowseForFolder(GetParent(hwnd));
             return 0;
         }
         break;

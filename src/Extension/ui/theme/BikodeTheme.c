@@ -95,12 +95,17 @@ static void CreateFonts(void)
 
 static void CreateHalftoneBrush(void)
 {
-    WORD bits[8] = {
-        0x0044, 0x0011, 0x0044, 0x0011,
-        0x0044, 0x0011, 0x0044, 0x0011
-    };
+    /* 32x32 pseudo-random noise bitmap for film-grain texture.
+       Matches the fractalNoise grain overlay from BikodeWebsite. */
+    WORD bits[64]; /* 32 rows * 2 WORDs per row */
+    unsigned int seed = 0xB1C0DE;
+    int i;
+    for (i = 0; i < 64; i++) {
+        seed = seed * 1103515245 + 12345;
+        bits[i] = (WORD)((seed >> 16) & 0xFFFF);
+    }
     if (s_hHalftoneBrush) return;
-    s_hHalftoneBmp = CreateBitmap(8, 8, 1, 1, bits);
+    s_hHalftoneBmp = CreateBitmap(32, 32, 1, 1, bits);
     if (s_hHalftoneBmp)
         s_hHalftoneBrush = CreatePatternBrush(s_hHalftoneBmp);
 }
@@ -148,28 +153,28 @@ COLORREF BikodeTheme_GetColor(BikodeColorToken token)
 {
     switch (token)
     {
-    case BKCLR_APP_BG:            return RGB(11, 15, 20);
-    case BKCLR_SURFACE_MAIN:      return RGB(17, 22, 29);
-    case BKCLR_SURFACE_RAISED:    return RGB(22, 28, 36);
-    case BKCLR_SURFACE_ELEVATED:  return RGB(27, 35, 45);
-    case BKCLR_EDITOR_BG:         return RGB(11, 15, 20);
-    case BKCLR_EDITOR_GUTTER:     return RGB(17, 22, 29);
-    case BKCLR_EDITOR_ACTIVE_LINE:return RGB(16, 21, 28);
-    case BKCLR_EDITOR_SELECTION:  return RGB(22, 47, 63);
+    case BKCLR_APP_BG:            return RGB(24, 24, 24);      // biko-bg #181818
+    case BKCLR_SURFACE_MAIN:      return RGB(36, 36, 36);      // biko-surface #242424
+    case BKCLR_SURFACE_RAISED:    return RGB(48, 50, 58);      // biko-hover #30323a
+    case BKCLR_SURFACE_ELEVATED:  return RGB(55, 55, 55);      // biko-border #373737
+    case BKCLR_EDITOR_BG:         return RGB(24, 24, 24);      // biko-bg
+    case BKCLR_EDITOR_GUTTER:     return RGB(36, 36, 36);      // biko-surface
+    case BKCLR_EDITOR_ACTIVE_LINE:return RGB(30, 30, 30);      // subtle lift
+    case BKCLR_EDITOR_SELECTION:  return RGB(30, 55, 97);      // accent at ~20%
     case BKCLR_EDITOR_FIND:       return RGB(62, 40, 12);
     case BKCLR_EDITOR_BRACE:      return RGB(255, 212, 0);
-    case BKCLR_STROKE_DARK:       return RGB(5, 6, 8);
-    case BKCLR_STROKE_SOFT:       return RGB(42, 49, 64);
-    case BKCLR_TEXT_PRIMARY:      return RGB(243, 245, 247);
-    case BKCLR_TEXT_SECONDARY:    return RGB(168, 179, 194);
-    case BKCLR_TEXT_MUTED:        return RGB(110, 119, 133);
+    case BKCLR_STROKE_DARK:       return RGB(17, 17, 17);      // #111111
+    case BKCLR_STROKE_SOFT:       return RGB(50, 50, 50);      // biko-divider #323232
+    case BKCLR_TEXT_PRIMARY:      return RGB(230, 230, 230);    // biko-text1 #E6E6E6
+    case BKCLR_TEXT_SECONDARY:    return RGB(150, 150, 150);    // biko-text2 #969696
+    case BKCLR_TEXT_MUTED:        return RGB(80, 80, 80);       // biko-muted #505050
     case BKCLR_SIGNAL_YELLOW:     return RGB(255, 212, 0);
-    case BKCLR_ELECTRIC_CYAN:     return RGB(53, 224, 255);
+    case BKCLR_ELECTRIC_CYAN:     return RGB(75, 139, 245);     // biko-accent #4B8BF5
     case BKCLR_HOT_MAGENTA:       return RGB(255, 77, 166);
     case BKCLR_SUCCESS_GREEN:     return RGB(31, 227, 138);
     case BKCLR_WARNING_ORANGE:    return RGB(255, 155, 48);
     case BKCLR_DANGER_RED:        return RGB(255, 91, 91);
-    case BKCLR_TEXTURE_DOT:       return RGB(48, 56, 72);
+    case BKCLR_TEXTURE_DOT:       return RGB(32, 32, 32);       // subtle grain dot
     default:                      return RGB(255, 255, 255);
     }
 }
@@ -223,7 +228,7 @@ void BikodeTheme_FillHalftone(HDC hdc, const RECT* rc, COLORREF bgColor)
 
     SetBkColor(hdc, bgColor);
     SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXTURE_DOT));
-    SetBrushOrgEx(hdc, rc->left % 8, rc->top % 8, NULL);
+    SetBrushOrgEx(hdc, rc->left % 32, rc->top % 32, NULL);
     HBRUSH hOld = (HBRUSH)SelectObject(hdc, s_hHalftoneBrush);
     PatBlt(hdc, rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top, PATCOPY);
     SelectObject(hdc, hOld);

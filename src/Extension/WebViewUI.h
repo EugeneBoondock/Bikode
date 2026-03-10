@@ -1,5 +1,5 @@
 #pragma once
-#include "Notepad2.h"
+#include <windows.h>
 
 #ifdef __cplusplus
 extern "C" {

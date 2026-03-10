@@ -2,6 +2,7 @@
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
 #include <wrl/client.h>
+#include <wrl/event.h>
 #include <string>
 
 using namespace Microsoft::WRL;

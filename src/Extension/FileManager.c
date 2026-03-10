@@ -762,13 +762,20 @@ void FileManager_BrowseForFolder(HWND hwndParent) {
     BROWSEINFOW bi = {0};
     bi.hwndOwner      = hwndParent;
     bi.pszDisplayName  = szFolder;
-    bi.lpszTitle       = L"Open Folder";
-    bi.ulFlags         = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    bi.lpszTitle       = L"Open File or Folder";
+    // BIF_BROWSEINCLUDEFILES allows selecting files as well as folders
+    bi.ulFlags         = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_BROWSEINCLUDEFILES;
     LPITEMIDLIST pidl  = SHBrowseForFolderW(&bi);
     if (pidl) {
         SHGetPathFromIDListW(pidl, szFolder);
         CoTaskMemFree(pidl);
-        if (szFolder[0]) FileManager_OpenFolder(szFolder);
+        if (szFolder[0]) {
+            if (PathIsDirectoryW(szFolder)) {
+                FileManager_OpenFolder(szFolder);
+            } else {
+                FileLoad(FALSE, FALSE, FALSE, FALSE, szFolder);
+            }
+        }
     }
 }
 

@@ -30,22 +30,22 @@
 //=============================================================================
 
 static const DarkModeColors s_darkColors = {
-    .clrBackground  = RGB(9, 12, 17),
-    .clrSurface     = RGB(23, 28, 36),
-    .clrText        = RGB(243, 245, 247),
-    .clrTextDim     = RGB(110, 119, 133),
-    .clrBorder      = RGB(42, 49, 64),
-    .clrAccent      = RGB(53, 224, 255),
-    .clrSelection   = RGB(27, 60, 82),
-    .clrCaretLine   = RGB(17, 24, 34),
-    .clrLineNumber  = RGB(110, 119, 133),
-    .clrIndentGuide = RGB(42, 49, 64),
-    .clrComment     = RGB(120, 160, 124),
-    .clrKeyword     = RGB(53, 224, 255),
+    .clrBackground  = RGB(24, 24, 24),       // biko-bg #181818
+    .clrSurface     = RGB(36, 36, 36),       // biko-surface #242424
+    .clrText        = RGB(230, 230, 230),    // biko-text1 #E6E6E6
+    .clrTextDim     = RGB(80, 80, 80),       // biko-muted #505050
+    .clrBorder      = RGB(55, 55, 55),       // biko-border #373737
+    .clrAccent      = RGB(75, 139, 245),     // biko-accent #4B8BF5
+    .clrSelection   = RGB(30, 55, 97),       // accent at ~20%
+    .clrCaretLine   = RGB(30, 30, 30),       // subtle lift
+    .clrLineNumber  = RGB(80, 80, 80),       // biko-muted #505050
+    .clrIndentGuide = RGB(50, 50, 50),       // biko-divider #323232
+    .clrComment     = RGB(150, 150, 150),    // biko-text2 #969696
+    .clrKeyword     = RGB(75, 139, 245),     // biko-accent #4B8BF5
     .clrString      = RGB(255, 155, 48),
     .clrNumber      = RGB(31, 227, 138),
-    .clrOperator    = RGB(243, 245, 247),
-    .clrType        = RGB(255, 77, 166),
+    .clrOperator    = RGB(230, 230, 230),    // biko-text1
+    .clrType        = RGB(100, 160, 255),    // biko-accent2 #64A0FF
     .clrFunction    = RGB(255, 212, 0),
     .clrPreprocessor = RGB(255, 91, 91),
 };
