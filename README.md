@@ -1,15 +1,23 @@
 # Bikode
 
 ![License: 3-clause BSD](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)
-![Status: x86 build](https://proger.me/notepad2e/status/1.svg)
-![Status: tests](https://proger.me/notepad2e/status/2.svg)
 
-*Bikode* is a lightweight IDE by **BoondockLabs**, built as a wrapper around *Notepad2e* (which is itself a fork of *Notepad2* by Florian Balmer, version 4.2.25).
+Bikode is an AI-first Windows code editor by **BoondockLabs**. It keeps the native speed and lightweight editing model that came from the Notepad2e/Notepad2 lineage, but the product in this repository is now **Bikode**: a fast local editor with built-in AI assistance, terminal workflows, project navigation, and modern IDE-style conveniences.
 
-For information about the original project lineage please see `Readme.txt` and `Notepad2.txt`.
-This document covers the current Bikode build and inherited 2e behavior.
+## What Bikode Is
 
-For those of you who are unfamiliar with *Notepad2*:
+- A native Win32 editor built around Scintilla.
+- An AI-first workspace where the assistant can inspect files, edit code, create files, use the terminal, and work directly inside the editor.
+- A lightweight alternative to heavier Electron-based IDEs.
+- A continuation of the Notepad2e foundation, but with its own product direction, UX, and release identity.
+
+## Project Lineage
+
+Bikode is built on top of **Notepad2e**, which itself is a fork of **Notepad2** by Florian Balmer. That lineage still matters for licensing, parts of the editing model, and some inherited behavior, but this repository documents and ships **Bikode**.
+
+For the original upstream background, see [doc/Readme.txt](doc/Readme.txt) and [doc/Notepad2.txt](doc/Notepad2.txt).
+
+If you are new to the family of editors Bikode came from:
 
 > ***Notepad2* is a light-weight Scintilla-based text editor for Windows.** <br>
 > It offers no tabs, code folding, autocompletion, or other features <br>
@@ -20,17 +28,13 @@ Some folks use it to replace the standard `Notepad.exe` of Windows.
 
 It's also part of [TortoiseGit](https://tortoisegit.org).
 
-**License:** *Notepad2* uses 3-clause BSD license. *Notepad 2e* and Bikode follow the same license.
+**License:** Notepad2 uses the 3-clause BSD license. Notepad2e and Bikode follow the same license.
 
 **Thanks to** Steven Penny for his generous donations! #286 #251 <a name="thanks"></a>
 
 ## Downloads
 
-Stable versions are available via [GitHub releases](https://github.com/ProgerXP/Notepad2e/releases).
-
-Archived non-stable daily builds are available from [this page](http://proger.me/notepad2e/binaries/).
-
-Latest non-stable x86/non-ICU build is permanently available by [this URL](http://proger.me/notepad2e/binaries/LATEST).
+Current Bikode builds and release assets are published via [GitHub Releases](https://github.com/EugeneBoondock/Bikode/releases).
 
 ## Compilation
 

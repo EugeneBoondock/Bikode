@@ -7,7 +7,13 @@
       "Bash(cmd /c:*)",
       "Bash(powershell -Command:*)",
       "Bash(Select-Object -Last 50)",
-      "Bash(\"/c/Program Files \\(x86\\)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe\" Notepad2e.vcxproj //t:Rebuild //p:Configuration=Debug //p:Platform=x64 //p:PlatformToolset=v143 //m:4 //nologo //v:minimal)"
+      "Bash(\"/c/Program Files \\(x86\\)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe\" Notepad2e.vcxproj //t:Rebuild //p:Configuration=Debug //p:Platform=x64 //p:PlatformToolset=v143 //m:4 //nologo //v:minimal)",
+      "Bash(cmd.exe:*)",
+      "Bash(/mnt/c/Windows/System32/cmd.exe /c \"echo hello\")",
+      "Bash(MSBUILDER=\"/c/Program Files \\(x86\\)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe\")",
+      "Bash(\"$MSBUILDER\" \"c:/Users/USER/Projects/Bikode/Notepad2e.vcxproj\" //p:Configuration=Debug //p:Platform=x64 //p:PlatformToolset=v143 //t:Rebuild //m //v:minimal)",
+      "Bash(export MSBUILDER=\"/c/Program Files \\(x86\\)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe\")",
+      "Bash(\"/c/Program Files \\(x86\\)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe\" \"c:/Users/USER/Projects/Bikode/Notepad2e.vcxproj\" //p:Configuration=Debug //p:Platform=x64 //p:PlatformToolset=v143 //t:Rebuild //m //v:minimal)"
     ]
   }
 }

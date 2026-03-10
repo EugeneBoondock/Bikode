@@ -13,6 +13,11 @@
 #include "AIAgent.h"
 #include "AIDirectCall.h"
 #include "AIBridge.h"
+#include "CommonUtils.h"
+#include "Externals.h"
+#include "Terminal.h"
+#include "Utils.h"
+#include "ViewHelper.h"
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,8 +33,14 @@
 #define MAX_AGENT_ITERATIONS    15
 #define MAX_MESSAGES_PER_CALL   128
 #define MAX_FILE_READ_SIZE      (50 * 1024)
+#define MAX_FILE_WINDOW_SIZE    (64 * 1024)
 #define MAX_CMD_OUTPUT_SIZE     (20 * 1024)
+#define MAX_TOOL_RESULT_SNIPPET 4096
+#define MAX_TOOL_FEEDBACK_SIZE  (12 * 1024)
 #define CMD_TIMEOUT_MS          30000
+
+extern WCHAR szCurFile[N2E_MAX_PATH_N_CMD_LINE];
+extern BOOL bModified;
 
 //=============================================================================
 // Growable string buffer (local copy)
@@ -109,7 +120,7 @@ static const char* json_find_value_a(const char* json, const char* key)
                    *afterKey == '\n' || *afterKey == '\r')) afterKey++;
             return afterKey;
         }
-        // Not a key (it's a value) — keep searching
+        // Not a key (it's a value) Ã¢â‚¬â€ keep searching
         p += needleLen;
     }
     return NULL;
@@ -194,6 +205,19 @@ static char* json_extract_string_a(const char* json, const char* key)
     return sb.data;
 }
 
+static int json_extract_int_a(const char* json, const char* key, int defaultValue)
+{
+    const char* val = json_find_value_a(json, key);
+    if (!val) return defaultValue;
+
+    char* endPtr = NULL;
+    long parsed = strtol(val, &endPtr, 10);
+    if (endPtr == val)
+        return defaultValue;
+
+    return (int)parsed;
+}
+
 //=============================================================================
 // Conversation history (persists across user turns)
 //=============================================================================
@@ -232,6 +256,267 @@ static void AddToHistory(const char* role, const char* content)
     LeaveCriticalSection(&s_csHistory);
 }
 
+static char* WideToUtf8Dup(const WCHAR* wsz)
+{
+    if (!wsz || !wsz[0])
+        return _strdup("");
+
+    int len = WideCharToMultiByte(CP_UTF8, 0, wsz, -1, NULL, 0, NULL, NULL);
+    if (len <= 0)
+        return _strdup("");
+
+    char* out = (char*)malloc(len);
+    if (!out)
+        return _strdup("");
+
+    WideCharToMultiByte(CP_UTF8, 0, wsz, -1, out, len, NULL, NULL);
+    return out;
+}
+
+static HWND s_hwndMainForTools = NULL;
+
+static char* ConvertCodePageToUtf8Dup(const char* text, UINT codePage)
+{
+    int wideLen;
+    WCHAR* wideBuf;
+    int utf8Len;
+    char* utf8Buf;
+
+    if (!text)
+        return _strdup("");
+
+    wideLen = MultiByteToWideChar(codePage, 0, text, -1, NULL, 0);
+    if (wideLen <= 0)
+        return NULL;
+
+    wideBuf = (WCHAR*)malloc((size_t)wideLen * sizeof(WCHAR));
+    if (!wideBuf)
+        return NULL;
+
+    if (MultiByteToWideChar(codePage, 0, text, -1, wideBuf, wideLen) <= 0)
+    {
+        free(wideBuf);
+        return NULL;
+    }
+
+    utf8Len = WideCharToMultiByte(CP_UTF8, 0, wideBuf, -1, NULL, 0, NULL, NULL);
+    if (utf8Len <= 0)
+    {
+        free(wideBuf);
+        return NULL;
+    }
+
+    utf8Buf = (char*)malloc(utf8Len);
+    if (!utf8Buf)
+    {
+        free(wideBuf);
+        return NULL;
+    }
+
+    if (WideCharToMultiByte(CP_UTF8, 0, wideBuf, -1, utf8Buf, utf8Len, NULL, NULL) <= 0)
+    {
+        free(wideBuf);
+        free(utf8Buf);
+        return NULL;
+    }
+
+    free(wideBuf);
+    return utf8Buf;
+}
+
+static BOOL IsValidUtf8Text(const char* text)
+{
+    if (!text || !text[0])
+        return TRUE;
+
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0) > 0;
+}
+
+static char* EnsureUtf8TextDup(const char* text, UINT preferredCodePage)
+{
+    char* converted;
+
+    if (!text)
+        return _strdup("");
+
+    if (IsValidUtf8Text(text))
+        return _strdup(text);
+
+    converted = ConvertCodePageToUtf8Dup(text, preferredCodePage);
+    if (converted)
+        return converted;
+
+    if (preferredCodePage != CP_ACP)
+    {
+        converted = ConvertCodePageToUtf8Dup(text, CP_ACP);
+        if (converted)
+            return converted;
+    }
+
+    if (preferredCodePage != CP_OEMCP)
+    {
+        converted = ConvertCodePageToUtf8Dup(text, CP_OEMCP);
+        if (converted)
+            return converted;
+    }
+
+    {
+        StrBuf sb;
+        const unsigned char* p;
+
+        sb_init(&sb, (int)strlen(text) + 32);
+        for (p = (const unsigned char*)text; *p; ++p)
+        {
+            const unsigned char ch = *p;
+            if (ch == '\n' || ch == '\r' || ch == '\t' || ch >= 0x20)
+            {
+                if (ch < 0x80)
+                    sb_append(&sb, (const char*)p, 1);
+                else
+                    sb_append(&sb, "?", 1);
+            }
+        }
+        return sb.data;
+    }
+}
+
+static void StripUnsafeControlsInPlace(char* text)
+{
+    char* src = text;
+    char* dst = text;
+
+    if (!text)
+        return;
+
+    while (*src)
+    {
+        const unsigned char ch = (unsigned char)*src;
+        if (ch == '\r' || ch == '\n' || ch == '\t' || ch >= 0x20)
+            *dst++ = *src;
+        src++;
+    }
+    *dst = '\0';
+}
+
+static int Utf8SafePrefixLen(const char* text, int maxBytes)
+{
+    int i = 0;
+
+    if (!text || maxBytes <= 0)
+        return 0;
+
+    while (text[i] && i < maxBytes)
+    {
+        unsigned char ch = (unsigned char)text[i];
+        int seqLen = 1;
+
+        if (ch < 0x80)
+            seqLen = 1;
+        else if ((ch & 0xE0) == 0xC0)
+            seqLen = 2;
+        else if ((ch & 0xF0) == 0xE0)
+            seqLen = 3;
+        else if ((ch & 0xF8) == 0xF0)
+            seqLen = 4;
+
+        if (i + seqLen > maxBytes)
+            break;
+
+        i += seqLen;
+    }
+
+    return i;
+}
+
+static char* PrepareToolResultForModel(const char* toolName, const char* text, int maxBytes)
+{
+    UINT fallbackCodePage = CP_ACP;
+    char* utf8Text;
+    int keepLen;
+    BOOL truncated;
+    StrBuf sb;
+
+    if (toolName &&
+        (strcmp(toolName, "run_command") == 0 || strcmp(toolName, "list_dir") == 0))
+    {
+        fallbackCodePage = CP_OEMCP;
+    }
+
+    utf8Text = EnsureUtf8TextDup(text ? text : "", fallbackCodePage);
+    if (!utf8Text)
+        return _strdup("");
+
+    StripUnsafeControlsInPlace(utf8Text);
+    keepLen = Utf8SafePrefixLen(utf8Text, maxBytes);
+    truncated = ((int)strlen(utf8Text) > keepLen);
+
+    sb_init(&sb, keepLen + 48);
+    if (keepLen > 0)
+        sb_append(&sb, utf8Text, keepLen);
+    if (truncated)
+        sb_append(&sb, "\n[... truncated]\n", -1);
+
+    free(utf8Text);
+    return sb.data;
+}
+
+static char* BuildCompactRetryMessage(const char* text)
+{
+    char* compact = PrepareToolResultForModel("run_command", text, 1800);
+    StrBuf sb;
+
+    if (!compact)
+        return _strdup("Tool execution completed. Verbose output was omitted to keep the follow-up request valid.");
+
+    sb_init(&sb, (int)strlen(compact) + 128);
+    sb_append(&sb,
+        "Tool execution completed. Verbose output was compacted to keep the next request body valid.\n\n",
+        -1);
+    sb_append(&sb, compact, -1);
+    free(compact);
+    return sb.data;
+}
+
+static void MirrorCommandActivityToTerminal(const char* cwd, const char* command,
+                                            const char* output, DWORD exitCode,
+                                            BOOL timedOut)
+{
+    StrBuf transcript;
+    char* safeOutput;
+
+    if (!s_hwndMainForTools || !command || !command[0])
+        return;
+
+    sb_init(&transcript, 1024);
+    sb_append(&transcript, "\r\n[Bikode agent]", -1);
+    if (cwd && cwd[0])
+        sb_appendf(&transcript, " [cwd: %s]", cwd);
+    sb_appendf(&transcript, "\r\n> %s\r\n", command);
+    Terminal_AppendTranscript(s_hwndMainForTools, transcript.data);
+    sb_free(&transcript);
+
+    safeOutput = PrepareToolResultForModel("run_command", output ? output : "(no output)", MAX_TOOL_RESULT_SNIPPET);
+    if (!safeOutput)
+        return;
+
+    sb_init(&transcript, (int)strlen(safeOutput) + 128);
+    if (safeOutput[0])
+        sb_append(&transcript, safeOutput, -1);
+    else
+        sb_append(&transcript, "(no output)", -1);
+
+    if (timedOut)
+        sb_append(&transcript, "\r\n[Process timed out]\r\n", -1);
+    else if (exitCode != 0)
+        sb_appendf(&transcript, "\r\n[Exit code: %lu]\r\n", exitCode);
+    else
+        sb_append(&transcript, "\r\n", -1);
+
+    Terminal_AppendTranscript(s_hwndMainForTools, transcript.data);
+    sb_free(&transcript);
+    free(safeOutput);
+}
+
 //=============================================================================
 // System prompt
 //=============================================================================
@@ -248,7 +533,7 @@ static char* BuildSystemPrompt(void)
         "SYSTEM PROMPT -- \"Bikode Assistant: Bikode-Mode\"\n\n"
         "Identity\n"
         "You are the Bikode Assistant (codename: Bikode): a minimalistic IDE partner for coding, debugging, and learning, built into a lightweight code editor. "
-        "Your demeanor is inspired by Steve Biko’s habits of reasoning and communication: direct, clear, grounded in reality, respectful of human dignity, and biased toward practical action. "
+        "Your demeanor is inspired by Steve BikoÃ¢â‚¬â„¢s habits of reasoning and communication: direct, clear, grounded in reality, respectful of human dignity, and biased toward practical action. "
         "You are not Steve Biko. You do not imitate him as a person; you adopt a similar problem approach.\n\n"
 
         "Default output style\n"
@@ -275,17 +560,17 @@ static char* BuildSystemPrompt(void)
         "- Clarity: make the problem sharply defined.\n"
         "- Self-reliance: leave the user more capable after each interaction.\n"
         "- Practicality: translate ideas into steps that can be executed now.\n"
-        "- Honesty: if you don’t know, say so, then propose how to find out.\n"
+        "- Honesty: if you donÃ¢â‚¬â„¢t know, say so, then propose how to find out.\n"
         "- Standards: insist on correctness, tests, and maintainable code.\n\n"
 
         "Operating principles (Bikode-mode translated to engineering)\n"
         "A) \"Take stock\" before proposing fixes.\n"
-        "   - Restate the user’s goal in one sentence.\n"
+        "   - Restate the userÃ¢â‚¬â„¢s goal in one sentence.\n"
         "   - Name what is known, what is unknown, and what evidence is missing.\n"
         "   - Identify constraints: language, runtime, OS, framework, deadlines, code style, performance, security.\n"
         "B) Separate surface symptoms from root causes.\n"
         "   - Describe the observed failure (error message, wrong output, slow path).\n"
-        "   - List 2–4 plausible causes (ranked).\n"
+        "   - List 2Ã¢â‚¬â€œ4 plausible causes (ranked).\n"
         "   - Choose the smallest experiment that can eliminate a cause.\n"
         "C) Identify the \"anomaly\".\n"
         "   - Point out contradictions: \"This should work if X is true, yet we observe Y.\"\n"
@@ -299,7 +584,7 @@ static char* BuildSystemPrompt(void)
         "   - Be calm about it. No drama. No panic language.\n"
         "F) Fair debate, update when evidence changes.\n"
         "   - If the user challenges your plan with better evidence, adopt it plainly.\n"
-        "   - Credit the user’s evidence. Move on. No defensiveness.\n"
+        "   - Credit the userÃ¢â‚¬â„¢s evidence. Move on. No defensiveness.\n"
         "G) \"In a nutshell\" is always available.\n"
         "   - If the user asks for a short view, give: 1) the diagnosis, 2) the fix, 3) the next check.\n\n"
 
@@ -311,9 +596,9 @@ static char* BuildSystemPrompt(void)
         "   Ask the minimum set of questions that unlock the next action. Ask at most 3 questions at a time. If the user provided enough info, do not ask questions just to be safe.\n"
         "   Infer context from the repo before asking (e.g., default language/framework is what the project already uses).\n"
         "2) Plan (short)\n"
-        "   - 3–7 steps, ordered, only when the task is non-trivial.\n"
+        "   - 3Ã¢â‚¬â€œ7 steps, ordered, only when the task is non-trivial.\n"
         "   - Each step should be executable in the IDE and state what success looks like.\n"
-        "   - Skip the formal plan for simple greetings, yes/no answers, or single-command fixes—answer directly instead.\n"
+        "   - Skip the formal plan for simple greetings, yes/no answers, or single-command fixesÃ¢â‚¬â€answer directly instead.\n"
         "3) Action\n"
         "   Provide the code, commands, or edits. Keep code minimal and readable. Prefer small, composable functions. Include comments only where they teach a decision.\n"
         "4) Proof\n"
@@ -322,7 +607,7 @@ static char* BuildSystemPrompt(void)
         "5) Teach the reasoning (tight)\n"
         "   - Explain why this approach works.\n"
         "   - Name the mistake pattern that caused the bug (if applicable).\n"
-        "6) In a nutshell (1–3 lines)\n"
+        "6) In a nutshell (1Ã¢â‚¬â€œ3 lines)\n"
         "   A compact recap the user can hold in their head.\n\n"
 
         "UI and UX standard\n"
@@ -333,21 +618,26 @@ static char* BuildSystemPrompt(void)
         "Provide practical design outputs: component list, layout notes, interaction rules, empty/loading/error states, and microcopy.\n\n"
 
         "Coding behaviour standards\n"
-        "- Always respect the user’s requested stack and constraints.\n"
+        "- Always respect the userÃ¢â‚¬â„¢s requested stack and constraints.\n"
         "- If writing code: ensure it runs, prefer clarity, include error handling where realistic, avoid hidden global state unless required, add tests when changes affect logic.\n"
-        "- If debugging: ask for the smallest useful artifact, propose a minimal reproduction, suggest instrumentation (logs, assertions, timing, feature flags).\n\n"
+        "- If debugging: ask for the smallest useful artifact, propose a minimal reproduction, suggest instrumentation (logs, assertions, timing, feature flags).\n"
+        "- Bikode is your native platform. Treat the editor, filesystem, workspace, and terminal as first-class surfaces you can operate directly.\n"
+        "- When the user asks you to write, fix, refactor, or add code, do the work in the editor/workspace via tools. Do not dump the source code into chat.\n"
+        "- If the user does not give a file path, prefer the active editor buffer or a new editor buffer.\n\n"
 
         "Tool discipline\n"
         "- Do not call tools when you already have enough evidence to answer.\n"
         "- Read files before modifying them.\n"
         "- Batch tool usage when possible: read all needed files first, then edit.\n"
-        "- Tool-call blocks must contain only a single JSON object. No extra text inside <tool_call>…</tool_call>.\n"
+        "- Tool-call blocks must contain only a single JSON object. No extra text inside <tool_call>Ã¢â‚¬Â¦</tool_call>.\n"
         "- Before running destructive commands or irreversible operations, summarise the impact in one line and ask for explicit confirmation.\n"
         "  Examples: deleting files, wiping folders, git reset --hard, removing dependencies, uninstalling software, killing critical processes.\n\n"
 
         "File editing discipline\n"
         "- Always inspect the target file(s) before writing code so you understand the surrounding context and reference the exact path/region in your explanation (use @path#line_start-line_end).\n"
-        "- When the user asks you to write code, modify the actual files via tools (apply_patch/write_file/etc.) instead of dumping large code blocks in the chat response.\n"
+        "- When the user asks you to write code, modify the actual files via tools instead of dumping large code blocks in the chat response.\n"
+        "- Prefer native Bikode actions first: inspect the active document, replace the active document, create a new editor buffer, open files in the editor, create directories, then use shell commands only when needed.\n"
+        "- If a file is too large, read it in chunks with start_line and line_count instead of giving up.\n"
         "- Final answers should describe what changed and where, not reproduce the code verbatim.\n\n"
 
         "Context inference\n"
@@ -356,7 +646,7 @@ static char* BuildSystemPrompt(void)
         "- Detect the relevant stack (currently C/Win32, VS/MSBuild) from the repo and do not interrogate the user for it.\n\n"
 
         "Teaching style (self-reliance engine)\n"
-        "Your explanations must elevate the user’s critical awareness:\n"
+        "Your explanations must elevate the userÃ¢â‚¬â„¢s critical awareness:\n"
         "- Name the concept (e.g., \"off-by-one\", \"race condition\", \"mutation vs immutability\").\n"
         "- Show the symptom.\n"
         "- Show the check that confirms it.\n"
@@ -375,7 +665,7 @@ static char* BuildSystemPrompt(void)
 
         "When the user is wrong\n"
         "Correct them plainly, with evidence:\n"
-        "- \"That assumption doesn’t match the output we’re seeing.\"\n"
+        "- \"That assumption doesnÃ¢â‚¬â„¢t match the output weÃ¢â‚¬â„¢re seeing.\"\n"
         "- Provide the observable proof (example, test, doc excerpt if available).\n"
         "No mockery. No softness that hides the truth.\n\n"
 
@@ -409,19 +699,24 @@ static char* BuildSystemPrompt(void)
         "- A way to verify results,\n"
         "- More confidence in their own reasoning.\n\n"
 
-        "You have access to tools that let you read files, write code, execute commands, and explore the filesystem.\n\n"
+        "You have access to tools that let you operate Bikode natively: inspect the active document, create and edit files, create folders, initialize repos, execute commands, and explore the filesystem.\n\n"
 
         "## Available Tools\n\n"
         "To use a tool, include a tool call block in your response:\n\n"
         "<tool_call>\n"
         "{\"name\": \"tool_name\", \"param1\": \"value1\"}\n"
         "</tool_call>\n\n"
-        "You can include multiple tool calls in a single response. After tools execute, you’ll receive their results and can continue.\n\n"
+        "You can include multiple tool calls in a single response. After tools execute, youÃ¢â‚¬â„¢ll receive their results and can continue.\n\n"
 
         "### read_file\n"
-        "Read the contents of a file.\n"
-        "Parameters: name, path\n"
-        "Example: {\"name\": \"read_file\", \"path\": \"src/main.c\"}\n\n"
+        "Read the contents of a file from disk.\n"
+        "Parameters: name, path, optional start_line, optional line_count\n"
+        "Example: {\"name\": \"read_file\", \"path\": \"src/main.c\", \"start_line\": 120, \"line_count\": 80}\n\n"
+
+        "### get_active_document\n"
+        "Read the current editor buffer, including unsaved changes.\n"
+        "Parameters: name, optional start_line, optional line_count\n"
+        "Example: {\"name\": \"get_active_document\", \"start_line\": 1, \"line_count\": 120}\n\n"
 
         "### write_file\n"
         "Create or overwrite a file with the given content.\n"
@@ -433,15 +728,40 @@ static char* BuildSystemPrompt(void)
         "Parameters: name, path, old_text, new_text\n"
         "Example: {\"name\": \"replace_in_file\", \"path\": \"main.c\", \"old_text\": \"return 0;\", \"new_text\": \"return EXIT_SUCCESS;\"}\n\n"
 
+        "### open_file\n"
+        "Open an existing file in the editor.\n"
+        "Parameters: name, path\n"
+        "Example: {\"name\": \"open_file\", \"path\": \"src/main.c\"}\n\n"
+
         "### insert_in_editor\n"
         "Insert or replace text in the currently open editor buffer. This modifies the active document the user has open.\n"
         "Parameters: name, content\n"
         "Example: {\"name\": \"insert_in_editor\", \"content\": \"Hello World\"}\n\n"
 
+        "### replace_editor_content\n"
+        "Replace the entire active editor buffer with the given text.\n"
+        "Parameters: name, content\n"
+        "Example: {\"name\": \"replace_editor_content\", \"content\": \"int main(void) { return 0; }\"}\n\n"
+
+        "### new_file_in_editor\n"
+        "Create a new untitled editor buffer and fill it with the given text.\n"
+        "Parameters: name, content\n"
+        "Example: {\"name\": \"new_file_in_editor\", \"content\": \"print('hello')\"}\n\n"
+
+        "### make_dir\n"
+        "Create a directory recursively.\n"
+        "Parameters: name, path\n"
+        "Example: {\"name\": \"make_dir\", \"path\": \"scripts\\deploy\"}\n\n"
+
+        "### init_repo\n"
+        "Initialize a git repository in the given directory.\n"
+        "Parameters: name, path\n"
+        "Example: {\"name\": \"init_repo\", \"path\": \"sandbox\\demo-app\"}\n\n"
+
         "### run_command\n"
         "Execute a shell command and return its output.\n"
-        "Parameters: name, command\n"
-        "Example: {\"name\": \"run_command\", \"command\": \"dir /b src\"}\n\n"
+        "Parameters: name, command, optional cwd\n"
+        "Example: {\"name\": \"run_command\", \"command\": \"npm test\", \"cwd\": \"webapp\"}\n\n"
 
         "### list_dir\n"
         "List the contents of a directory.\n"
@@ -460,14 +780,27 @@ static char* BuildSystemPrompt(void)
 
         "## Guidelines\n"
         "- Read files before modifying them to understand their current content.\n"
+        "- Use get_active_document when the current editor buffer may have unsaved changes.\n"
         "- Use replace_in_file for targeted edits; use write_file for creating new files.\n"
-        "- When creating files, always use write_file with the full content. After writing, the file will automatically be opened in the editor.\n"
-        "- Use insert_in_editor to put content directly into the user’s active editor.\n"
+        "- Use replace_editor_content or new_file_in_editor instead of pasting code into chat when the user asks you to write code without a path.\n"
+        "- Use open_file after analysis if you want the user to see a file you touched.\n"
+        "- Use make_dir and init_repo when creating project structure; use run_command when you need the terminal.\n"
+        "- Use start_line and line_count when a file is large.\n"
+        "- Use insert_in_editor to put content directly into the userÃ¢â‚¬â„¢s active editor.\n"
         "- Include enough context in old_text to uniquely identify the replacement location.\n"
         "- All JSON strings must use proper escaping (\\n for newlines, \\\" for quotes, \\\\ for backslash).\n"
-        "- When your answer is complete (no more tools needed), respond with plain text only.\n", -1);
+        "- When your answer is complete (no more tools needed), respond with plain text only and summarize the workspace changes instead of repeating the code.\n", -1);
 
-    sb_appendf(&sb, "- The workspace is on Windows. Current directory: %s\n", cwd);
+    sb_appendf(&sb, "- Runtime platform: Windows Win32. Command execution uses cmd.exe by default. Current workspace: %s\n", cwd);
+    {
+        char* activePath = WideToUtf8Dup(szCurFile);
+        if (activePath && activePath[0])
+            sb_appendf(&sb, "- Active document path: %s\n", activePath);
+        else
+            sb_append(&sb, "- Active document path: (untitled buffer)\n", -1);
+        sb_appendf(&sb, "- Active document modified: %s\n", bModified ? "yes" : "no");
+        free(activePath);
+    }
 
     return sb.data;
 }
@@ -483,6 +816,9 @@ typedef struct {
     char*   oldText;
     char*   newText;
     char*   command;
+    char*   cwd;
+    int     startLine;
+    int     lineCount;
 } ToolCall;
 
 // Tag variants that LLMs commonly use for tool calls
@@ -525,10 +861,13 @@ static const char* FindRawJsonToolCall(const char* p)
         if (name)
         {
             // Check if it's one of our known tools
-            if (strcmp(name, "read_file") == 0 || strcmp(name, "write_file") == 0 ||
-                strcmp(name, "replace_in_file") == 0 || strcmp(name, "run_command") == 0 ||
-                strcmp(name, "list_dir") == 0 || strcmp(name, "insert_in_editor") == 0 ||
-                strcmp(name, "web_search") == 0 ||
+            if (strcmp(name, "read_file") == 0 || strcmp(name, "get_active_document") == 0 ||
+                strcmp(name, "write_file") == 0 || strcmp(name, "replace_in_file") == 0 ||
+                strcmp(name, "open_file") == 0 || strcmp(name, "insert_in_editor") == 0 ||
+                strcmp(name, "replace_editor_content") == 0 ||
+                strcmp(name, "new_file_in_editor") == 0 || strcmp(name, "make_dir") == 0 ||
+                strcmp(name, "init_repo") == 0 || strcmp(name, "run_command") == 0 ||
+                strcmp(name, "list_dir") == 0 || strcmp(name, "web_search") == 0 ||
                 strcmp(name, "gif_search") == 0)
             {
                 free(name);
@@ -585,6 +924,9 @@ static int ParseOneToolCall(const char* json, int jsonLen, ToolCall* tc)
     tc->oldText = json_extract_string_a(buf, "old_text");
     tc->newText = json_extract_string_a(buf, "new_text");
     tc->command = json_extract_string_a(buf, "command");
+    tc->cwd     = json_extract_string_a(buf, "cwd");
+    tc->startLine = json_extract_int_a(buf, "start_line", 0);
+    tc->lineCount = json_extract_int_a(buf, "line_count", 0);
     if (!tc->command)
         tc->command = json_extract_string_a(buf, "query"); // Map query -> command
 
@@ -692,6 +1034,7 @@ static void FreeToolCalls(ToolCall* calls, int count)
         if (calls[i].oldText) free(calls[i].oldText);
         if (calls[i].newText) free(calls[i].newText);
         if (calls[i].command) free(calls[i].command);
+        if (calls[i].cwd)     free(calls[i].cwd);
     }
     free(calls);
 }
@@ -699,6 +1042,42 @@ static void FreeToolCalls(ToolCall* calls, int count)
 //=============================================================================
 // Directory helper
 //=============================================================================
+
+// Main window HWND for tools that need UI interaction (set per agent run)
+
+static BOOL EnsureDirExistsRecursive(const char* dirPath)
+{
+    char pathBuf[MAX_PATH];
+    DWORD attrs;
+
+    if (!dirPath || !dirPath[0])
+        return FALSE;
+
+    strncpy(pathBuf, dirPath, MAX_PATH - 1);
+    pathBuf[MAX_PATH - 1] = '\0';
+
+    attrs = GetFileAttributesA(pathBuf);
+    if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY))
+        return TRUE;
+
+    for (char* p = pathBuf; *p; p++)
+    {
+        if (*p == '\\' || *p == '/')
+        {
+            char saved = *p;
+            *p = '\0';
+            if (pathBuf[0])
+                CreateDirectoryA(pathBuf, NULL);
+            *p = saved;
+        }
+    }
+
+    if (CreateDirectoryA(pathBuf, NULL))
+        return TRUE;
+
+    attrs = GetFileAttributesA(pathBuf);
+    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY);
+}
 
 static void EnsureParentDirExists(const char* filePath)
 {
@@ -711,19 +1090,158 @@ static void EnsureParentDirExists(const char* filePath)
     if (!lastSep) lastSep = strrchr(dirPath, '/');
     if (!lastSep) return;
     *lastSep = '\0';
+    EnsureDirExistsRecursive(dirPath);
+}
 
-    // Iteratively create directories
-    for (char* p = dirPath; *p; p++)
+static void OpenFileInEditor(const char* path)
+{
+    if (!s_hwndMainForTools || !path || !path[0])
+        return;
+
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
+    WCHAR* wszPath = (WCHAR*)malloc(wlen * sizeof(WCHAR));
+    if (!wszPath)
+        return;
+
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, wszPath, wlen);
+    PostMessage(s_hwndMainForTools, WM_AI_OPEN_FILE, 0, (LPARAM)wszPath);
+}
+
+static char* ReadFileLineWindow(const char* path, int startLine, int lineCount)
+{
+    HANDLE hFile;
+    StrBuf sb;
+    DWORD bytesRead = 0;
+    char buffer[4096];
+    int currentLine = 1;
+    int endLine;
+    int truncated = 0;
+
+    if (startLine < 1)
+        startLine = 1;
+    if (lineCount < 1)
+        lineCount = 1;
+    endLine = startLine + lineCount;
+
+    hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return _strdup("Error: Failed to open file for chunked read");
+
+    sb_init(&sb, 4096);
+
+    while (ReadFile(hFile, buffer, sizeof(buffer), &bytesRead, NULL) && bytesRead > 0)
     {
-        if (*p == '\\' || *p == '/')
+        for (DWORD i = 0; i < bytesRead; i++)
         {
-            char saved = *p;
-            *p = '\0';
-            if (dirPath[0]) CreateDirectoryA(dirPath, NULL);
-            *p = saved;
+            const char ch = buffer[i];
+
+            if (currentLine >= startLine && currentLine < endLine)
+            {
+                if (sb.len < MAX_FILE_WINDOW_SIZE)
+                    sb_append(&sb, &ch, 1);
+                else
+                    truncated = 1;
+            }
+
+            if (ch == '\n')
+            {
+                currentLine++;
+                if (currentLine >= endLine)
+                    break;
+            }
         }
+
+        if (currentLine >= endLine)
+            break;
     }
-    CreateDirectoryA(dirPath, NULL);
+
+    CloseHandle(hFile);
+
+    if (!sb.data || sb.len == 0)
+    {
+        sb_free(&sb);
+        return _strdup("(no content in requested line window)");
+    }
+
+    if (truncated)
+        sb_append(&sb, "\n[... chunk truncated at 65536 bytes]", -1);
+
+    return sb.data;
+}
+
+static char* ReadEditorTextWindow(int startLine, int lineCount)
+{
+    int docLen;
+    int lineTotal;
+    int startIndex;
+    int endIndex;
+    int startPos;
+    int endPos;
+    char* text;
+    StrBuf out;
+
+    if (!hwndEdit)
+        return _strdup("Error: No active editor");
+
+    docLen = (int)SendMessage(hwndEdit, SCI_GETLENGTH, 0, 0);
+    lineTotal = (int)SendMessage(hwndEdit, SCI_GETLINECOUNT, 0, 0);
+
+    if (startLine <= 0 || lineCount <= 0)
+    {
+        int readLen = docLen;
+        if (readLen > MAX_FILE_READ_SIZE)
+            readLen = MAX_FILE_READ_SIZE;
+
+        text = n2e_GetTextRange(0, readLen);
+        if (!text)
+            return _strdup("Error: Failed to read active editor");
+
+        if (docLen > readLen)
+        {
+            sb_init(&out, readLen + 96);
+            sb_append(&out, text, -1);
+            sb_appendf(&out, "\n\n[... truncated, showing first %d of %d bytes]", readLen, docLen);
+            n2e_Free(text);
+            return out.data;
+        }
+
+        return text;
+    }
+
+    if (lineTotal < 1)
+        return _strdup("(empty document)");
+
+    startIndex = startLine - 1;
+    if (startIndex < 0)
+        startIndex = 0;
+    if (startIndex >= lineTotal)
+        startIndex = lineTotal - 1;
+
+    endIndex = startIndex + lineCount;
+    if (endIndex > lineTotal)
+        endIndex = lineTotal;
+
+    startPos = (int)SendMessage(hwndEdit, SCI_POSITIONFROMLINE, startIndex, 0);
+    if (endIndex >= lineTotal)
+        endPos = docLen;
+    else
+        endPos = (int)SendMessage(hwndEdit, SCI_POSITIONFROMLINE, endIndex, 0);
+
+    text = n2e_GetTextRange(startPos, endPos);
+    if (!text)
+        return _strdup("Error: Failed to read active editor");
+
+    if ((endPos - startPos) > MAX_FILE_WINDOW_SIZE)
+    {
+        sb_init(&out, MAX_FILE_WINDOW_SIZE + 96);
+        sb_append(&out, text, MAX_FILE_WINDOW_SIZE);
+        sb_append(&out, "\n[... chunk truncated at 65536 bytes]", -1);
+        n2e_Free(text);
+        return out.data;
+    }
+
+    return text;
 }
 
 //=============================================================================
@@ -731,12 +1249,13 @@ static void EnsureParentDirExists(const char* filePath)
 //=============================================================================
 
 // Main window HWND for tools that need UI interaction (set per agent run)
-static HWND s_hwndMainForTools = NULL;
-
-static char* Tool_ReadFile(const char* path)
+static char* Tool_ReadFile(const char* path, int startLine, int lineCount)
 {
     if (!path || !path[0])
         return _strdup("Error: No file path specified");
+
+    if (startLine > 0 && lineCount > 0)
+        return ReadFileLineWindow(path, startLine, lineCount);
 
     HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -789,13 +1308,44 @@ static char* Tool_ReadFile(const char* path)
     return content;
 }
 
+static char* Tool_GetActiveDocument(int startLine, int lineCount)
+{
+    StrBuf sb;
+    char* text;
+    char* activePath = WideToUtf8Dup(szCurFile);
+
+    text = ReadEditorTextWindow(startLine, lineCount);
+    if (!text)
+    {
+        free(activePath);
+        return _strdup("Error: Failed to read active editor");
+    }
+
+    sb_init(&sb, (int)strlen(text) + 256);
+    sb_appendf(&sb, "[path=%s]\n", (activePath && activePath[0]) ? activePath : "(untitled)");
+    sb_appendf(&sb, "[modified=%s]\n", bModified ? "yes" : "no");
+    if (startLine > 0 && lineCount > 0)
+        sb_appendf(&sb, "[lines=%d..%d]\n", startLine, startLine + lineCount - 1);
+    sb_append(&sb, "\n", 1);
+    sb_append(&sb, text, -1);
+
+    free(activePath);
+    n2e_Free(text);
+    return sb.data;
+}
+
 static char* Tool_WriteFile(const char* path, const char* content)
 {
+    DWORD attrs;
+    BOOL existed;
+
     if (!path || !path[0])
         return _strdup("Error: No file path specified");
     if (!content) content = "";
 
     EnsureParentDirExists(path);
+    attrs = GetFileAttributesA(path);
+    existed = (attrs != INVALID_FILE_ATTRIBUTES) && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
 
     HANDLE hFile = CreateFileA(path, GENERIC_WRITE, 0, NULL,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -812,20 +1362,11 @@ static char* Tool_WriteFile(const char* path, const char* content)
     WriteFile(hFile, content, len, &written, NULL);
     CloseHandle(hFile);
 
-    // Open the file in the editor (on UI thread)
-    if (s_hwndMainForTools)
-    {
-        int wlen = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
-        WCHAR* wszPath = (WCHAR*)malloc(wlen * sizeof(WCHAR));
-        if (wszPath)
-        {
-            MultiByteToWideChar(CP_UTF8, 0, path, -1, wszPath, wlen);
-            PostMessage(s_hwndMainForTools, WM_AI_OPEN_FILE, 0, (LPARAM)wszPath);
-        }
-    }
+    OpenFileInEditor(path);
 
     char msg[512];
-    snprintf(msg, sizeof(msg), "Successfully wrote %lu bytes to '%s'", written, path);
+    snprintf(msg, sizeof(msg), "%s '%s' (%lu bytes)",
+             existed ? "Updated" : "Created", path, written);
     return _strdup(msg);
 }
 
@@ -896,6 +1437,7 @@ static char* Tool_ReplaceInFile(const char* path, const char* oldText, const cha
     WriteFile(hFile, newContent, newTotalLen, &written, NULL);
     CloseHandle(hFile);
     free(newContent);
+    OpenFileInEditor(path);
 
     char msg[512];
     snprintf(msg, sizeof(msg),
@@ -904,8 +1446,11 @@ static char* Tool_ReplaceInFile(const char* path, const char* oldText, const cha
     return _strdup(msg);
 }
 
-static char* Tool_RunCommand(const char* command)
+static char* Tool_RunCommand(const char* command, const char* cwd)
 {
+    BOOL timedOut = FALSE;
+    char* safeOutput;
+
     if (!command || !command[0])
         return _strdup("Error: No command specified");
 
@@ -932,88 +1477,101 @@ static char* Tool_RunCommand(const char* command)
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
 
-    // Build command line: cmd.exe /c "command"
-    int cmdLen = (int)strlen(command);
-    char* cmdLine = (char*)malloc(cmdLen + 32);
-    if (!cmdLine)
+    // Build command line: cmd.exe /c command
     {
-        CloseHandle(hReadPipe);
+        int cmdLen = (int)strlen(command);
+        char* cmdLine = (char*)malloc(cmdLen + 32);
+        BOOL bCreated;
+
+        if (!cmdLine)
+        {
+            CloseHandle(hReadPipe);
+            CloseHandle(hWritePipe);
+            return _strdup("Error: Out of memory");
+        }
+
+        snprintf(cmdLine, cmdLen + 32, "cmd.exe /c %s", command);
+        bCreated = CreateProcessA(
+            NULL, cmdLine, NULL, NULL, TRUE,
+            CREATE_NO_WINDOW, NULL, cwd && cwd[0] ? cwd : NULL, &si, &pi);
+
+        free(cmdLine);
         CloseHandle(hWritePipe);
-        return _strdup("Error: Out of memory");
-    }
-    snprintf(cmdLine, cmdLen + 32, "cmd.exe /c %s", command);
 
-    BOOL bCreated = CreateProcessA(
-        NULL, cmdLine, NULL, NULL, TRUE,
-        CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
-
-    free(cmdLine);
-    CloseHandle(hWritePipe); // close write end in parent
-
-    if (!bCreated)
-    {
-        DWORD err = GetLastError();
-        CloseHandle(hReadPipe);
-        char errBuf[256];
-        snprintf(errBuf, sizeof(errBuf), "Error: CreateProcess failed (err=%lu)", err);
-        return _strdup(errBuf);
+        if (!bCreated)
+        {
+            DWORD err = GetLastError();
+            CloseHandle(hReadPipe);
+            {
+                char errBuf[256];
+                snprintf(errBuf, sizeof(errBuf), "Error: CreateProcess failed (err=%lu)", err);
+                return _strdup(errBuf);
+            }
+        }
     }
 
     CloseHandle(pi.hThread);
 
     // Read output
-    StrBuf output;
-    sb_init(&output, 4096);
-
-    char buf[4096];
-    DWORD bytesRead;
-    while (ReadFile(hReadPipe, buf, sizeof(buf) - 1, &bytesRead, NULL) && bytesRead > 0)
     {
-        sb_append(&output, buf, bytesRead);
-        if (output.len >= MAX_CMD_OUTPUT_SIZE)
+        StrBuf output;
+        char buf[4096];
+        DWORD bytesRead;
+        DWORD exitCode = 0;
+        DWORD waitResult;
+
+        sb_init(&output, 4096);
+
+        while (ReadFile(hReadPipe, buf, sizeof(buf) - 1, &bytesRead, NULL) && bytesRead > 0)
         {
-            sb_append(&output, "\n[... output truncated]", -1);
-            break;
+            sb_append(&output, buf, bytesRead);
+            if (output.len >= MAX_CMD_OUTPUT_SIZE)
+            {
+                sb_append(&output, "\n[... output truncated]", -1);
+                break;
+            }
         }
-    }
 
-    CloseHandle(hReadPipe);
+        CloseHandle(hReadPipe);
 
-    // Wait for process with timeout
-    DWORD waitResult = WaitForSingleObject(pi.hProcess, CMD_TIMEOUT_MS);
+        waitResult = WaitForSingleObject(pi.hProcess, CMD_TIMEOUT_MS);
+        if (waitResult == WAIT_OBJECT_0)
+        {
+            GetExitCodeProcess(pi.hProcess, &exitCode);
+        }
+        else
+        {
+            timedOut = TRUE;
+            TerminateProcess(pi.hProcess, 1);
+            sb_append(&output, "\n[Process timed out and was terminated]", -1);
+        }
 
-    DWORD exitCode = 0;
-    if (waitResult == WAIT_OBJECT_0)
-    {
-        GetExitCodeProcess(pi.hProcess, &exitCode);
-    }
-    else
-    {
-        TerminateProcess(pi.hProcess, 1);
-        sb_append(&output, "\n[Process timed out and was terminated]", -1);
-    }
+        CloseHandle(pi.hProcess);
 
-    CloseHandle(pi.hProcess);
+        if (exitCode != 0 && waitResult == WAIT_OBJECT_0)
+            sb_appendf(&output, "\n[Exit code: %lu]", exitCode);
 
-    // Format result
-    if (exitCode != 0 && waitResult == WAIT_OBJECT_0)
-    {
-        sb_appendf(&output, "\n[Exit code: %lu]", exitCode);
-    }
-
-    if (output.len == 0)
-    {
+        safeOutput = PrepareToolResultForModel("run_command",
+            output.len > 0 ? output.data : "(no output)", MAX_CMD_OUTPUT_SIZE);
+        MirrorCommandActivityToTerminal(cwd, command,
+            output.len > 0 ? output.data : "(no output)", exitCode, timedOut);
         sb_free(&output);
+    }
+
+    if (!safeOutput || !safeOutput[0])
+    {
+        if (safeOutput)
+            free(safeOutput);
         return _strdup("(no output)");
     }
 
-    return output.data; // caller frees
+    return safeOutput;
 }
 
 static char* Tool_ListDir(const char* path)
 {
     if (!path || !path[0])
-        return _strdup("Error: No directory path specified");
+        path = ".";
 
     char searchPath[MAX_PATH];
     snprintf(searchPath, sizeof(searchPath), "%s\\*", path);
@@ -1078,6 +1636,106 @@ static char* Tool_InsertInEditor(const char* content)
     char msg[256];
     snprintf(msg, sizeof(msg), "Successfully inserted %d bytes into the editor", len);
     return _strdup(msg);
+}
+
+static char* Tool_OpenFile(const char* path)
+{
+    DWORD attrs;
+
+    if (!path || !path[0])
+        return _strdup("Error: No file path specified");
+
+    attrs = GetFileAttributesA(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY))
+        return _strdup("Error: File does not exist");
+
+    OpenFileInEditor(path);
+
+    {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "Opened '%s' in the editor", path);
+        return _strdup(msg);
+    }
+}
+
+static char* Tool_ReplaceEditorContent(const char* content)
+{
+    char* textCopy;
+    int len;
+    char msg[256];
+
+    if (!content)
+        content = "";
+    if (!s_hwndMainForTools)
+        return _strdup("Error: No main window available");
+
+    textCopy = _strdup(content);
+    if (!textCopy)
+        return _strdup("Error: Out of memory");
+
+    PostMessage(s_hwndMainForTools, WM_AI_REPLACE_EDITOR, 0, (LPARAM)textCopy);
+    len = (int)strlen(content);
+    snprintf(msg, sizeof(msg), "Replaced the active editor buffer (%d bytes)", len);
+    return _strdup(msg);
+}
+
+static char* Tool_NewFileInEditor(const char* content)
+{
+    char* textCopy;
+    int len;
+    char msg[256];
+
+    if (!content)
+        content = "";
+    if (!s_hwndMainForTools)
+        return _strdup("Error: No main window available");
+
+    textCopy = _strdup(content);
+    if (!textCopy)
+        return _strdup("Error: Out of memory");
+
+    PostMessage(s_hwndMainForTools, WM_AI_NEW_FILE_TEXT, 0, (LPARAM)textCopy);
+    len = (int)strlen(content);
+    snprintf(msg, sizeof(msg), "Created a new editor buffer (%d bytes)", len);
+    return _strdup(msg);
+}
+
+static char* Tool_MakeDir(const char* path)
+{
+    if (!path || !path[0])
+        return _strdup("Error: No directory path specified");
+
+    if (!EnsureDirExistsRecursive(path))
+    {
+        char err[512];
+        snprintf(err, sizeof(err), "Error: Could not create directory '%s' (error %lu)",
+                 path, GetLastError());
+        return _strdup(err);
+    }
+
+    {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "Ensured directory exists: '%s'", path);
+        return _strdup(msg);
+    }
+}
+
+static char* Tool_InitRepo(const char* path)
+{
+    char dirPath[MAX_PATH];
+
+    if (!path || !path[0])
+    {
+        GetCurrentDirectoryA(MAX_PATH, dirPath);
+    }
+    else
+    {
+        strncpy(dirPath, path, MAX_PATH - 1);
+        dirPath[MAX_PATH - 1] = '\0';
+        EnsureDirExistsRecursive(dirPath);
+    }
+
+    return Tool_RunCommand("git init", dirPath);
 }
 
 static char* Tool_WebSearch(const char* query)
@@ -1145,7 +1803,7 @@ static char* Tool_WebSearch(const char* query)
     }
     sb_append(&cmd, "\" --max=5", -1);
 
-    char* result = Tool_RunCommand(cmd.data);
+    char* result = Tool_RunCommand(cmd.data, NULL);
     sb_free(&cmd);
 
     return result;
@@ -1212,7 +1870,7 @@ static char* Tool_GifSearch(const char* query)
     }
     sb_append(&cmd, "\"", -1);
 
-    char* result = Tool_RunCommand(cmd.data);
+    char* result = Tool_RunCommand(cmd.data, NULL);
     sb_free(&cmd);
     return result;
 }
@@ -1221,15 +1879,27 @@ static char* Tool_GifSearch(const char* query)
 static char* ExecuteTool(const ToolCall* tc)
 {
     if (strcmp(tc->name, "read_file") == 0)
-        return Tool_ReadFile(tc->path);
+        return Tool_ReadFile(tc->path, tc->startLine, tc->lineCount);
+    if (strcmp(tc->name, "get_active_document") == 0)
+        return Tool_GetActiveDocument(tc->startLine, tc->lineCount);
     if (strcmp(tc->name, "write_file") == 0)
         return Tool_WriteFile(tc->path, tc->content);
     if (strcmp(tc->name, "replace_in_file") == 0)
         return Tool_ReplaceInFile(tc->path, tc->oldText, tc->newText);
+    if (strcmp(tc->name, "open_file") == 0)
+        return Tool_OpenFile(tc->path);
     if (strcmp(tc->name, "insert_in_editor") == 0)
         return Tool_InsertInEditor(tc->content);
+    if (strcmp(tc->name, "replace_editor_content") == 0)
+        return Tool_ReplaceEditorContent(tc->content);
+    if (strcmp(tc->name, "new_file_in_editor") == 0)
+        return Tool_NewFileInEditor(tc->content);
+    if (strcmp(tc->name, "make_dir") == 0)
+        return Tool_MakeDir(tc->path);
+    if (strcmp(tc->name, "init_repo") == 0)
+        return Tool_InitRepo(tc->path);
     if (strcmp(tc->name, "run_command") == 0)
-        return Tool_RunCommand(tc->command);
+        return Tool_RunCommand(tc->command, tc->cwd);
     if (strcmp(tc->name, "list_dir") == 0)
         return Tool_ListDir(tc->path);
     if (strcmp(tc->name, "web_search") == 0)
@@ -1332,6 +2002,132 @@ static char* StripToolCallTags(const char* text)
     return sb.data;
 }
 
+static BOOL ContainsSubstringCI(const char* haystack, const char* needle)
+{
+    size_t needleLen;
+
+    if (!haystack || !needle || !needle[0])
+        return FALSE;
+
+    needleLen = strlen(needle);
+    for (const char* p = haystack; *p; p++)
+    {
+        if (_strnicmp(p, needle, needleLen) == 0)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static BOOL IsLikelyCodeWriteTask(const char* userMessage)
+{
+    static const char* positives[] = {
+        "write ", "create ", "implement", "add ", "fix ", "edit ",
+        "update ", "change ", "refactor", "build ", "make ", NULL
+    };
+    static const char* negatives[] = {
+        "explain", "why ", "what does", "review", "summarize", NULL
+    };
+
+    if (!userMessage || !userMessage[0])
+        return FALSE;
+
+    for (int i = 0; negatives[i]; i++)
+    {
+        if (ContainsSubstringCI(userMessage, negatives[i]))
+            return FALSE;
+    }
+
+    for (int i = 0; positives[i]; i++)
+    {
+        if (ContainsSubstringCI(userMessage, positives[i]))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+static BOOL ResponseLooksLikeCodeDump(const char* text)
+{
+    if (!text || !text[0])
+        return FALSE;
+
+    return strstr(text, "```") != NULL ||
+        ContainsSubstringCI(text, "#include") ||
+        ContainsSubstringCI(text, "function ") ||
+        ContainsSubstringCI(text, "class ") ||
+        ContainsSubstringCI(text, "def ") ||
+        ContainsSubstringCI(text, "public static");
+}
+
+static BOOL IsWorkspaceMutationTool(const char* toolName)
+{
+    return toolName &&
+        (strcmp(toolName, "write_file") == 0 ||
+         strcmp(toolName, "replace_in_file") == 0 ||
+         strcmp(toolName, "replace_editor_content") == 0 ||
+         strcmp(toolName, "new_file_in_editor") == 0 ||
+         strcmp(toolName, "insert_in_editor") == 0 ||
+         strcmp(toolName, "make_dir") == 0 ||
+         strcmp(toolName, "init_repo") == 0);
+}
+
+static void AppendToolOperationSummary(StrBuf* sb, const ToolCall* tc)
+{
+    if (!sb || !tc)
+        return;
+
+    if (strcmp(tc->name, "write_file") == 0 && tc->path)
+        sb_appendf(sb, "- Wrote %s\n", tc->path);
+    else if (strcmp(tc->name, "replace_in_file") == 0 && tc->path)
+        sb_appendf(sb, "- Updated %s\n", tc->path);
+    else if (strcmp(tc->name, "open_file") == 0 && tc->path)
+        sb_appendf(sb, "- Opened %s in the editor\n", tc->path);
+    else if (strcmp(tc->name, "replace_editor_content") == 0)
+        sb_append(sb, "- Replaced the active editor buffer\n", -1);
+    else if (strcmp(tc->name, "new_file_in_editor") == 0)
+        sb_append(sb, "- Created a new editor buffer\n", -1);
+    else if (strcmp(tc->name, "insert_in_editor") == 0)
+        sb_append(sb, "- Inserted text into the active editor\n", -1);
+    else if (strcmp(tc->name, "make_dir") == 0 && tc->path)
+        sb_appendf(sb, "- Ensured directory %s exists\n", tc->path);
+    else if (strcmp(tc->name, "init_repo") == 0)
+        sb_appendf(sb, "- Initialized a git repository%s%s\n",
+                   tc->path && tc->path[0] ? " in " : "",
+                   tc->path && tc->path[0] ? tc->path : "");
+    else if (strcmp(tc->name, "run_command") == 0 && tc->command)
+    {
+        if (tc->cwd && tc->cwd[0])
+            sb_appendf(sb, "- Ran command: %s (cwd: %s)\n", tc->command, tc->cwd);
+        else
+            sb_appendf(sb, "- Ran command: %s\n", tc->command);
+    }
+}
+
+static char* BuildWorkspaceCompletionMessage(const StrBuf* ops, const char* cleanResponse)
+{
+    StrBuf sb;
+    sb_init(&sb, 512);
+
+    if (ops && ops->len > 0)
+    {
+        sb_append(&sb, "Applied the change directly in Bikode.\n", -1);
+        sb_append(&sb, ops->data, ops->len);
+    }
+    else
+    {
+        sb_append(&sb, "Done.\n", -1);
+    }
+
+    if (cleanResponse && cleanResponse[0] && !ResponseLooksLikeCodeDump(cleanResponse))
+    {
+        sb_append(&sb, "\n", 1);
+        sb_append(&sb, cleanResponse, (int)strlen(cleanResponse) > 400 ? 400 : -1);
+    }
+
+    return sb.data;
+}
+
 //=============================================================================
 // Agent thread
 //=============================================================================
@@ -1400,6 +2196,12 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     // Agent loop
     int iteration = 0;
     char* finalResponse = NULL;
+    BOOL forcedNativeRetry = FALSE;
+    BOOL compactToolRetry = FALSE;
+    BOOL workspaceMutated = FALSE;
+    const BOOL codeWriteTask = IsLikelyCodeWriteTask(p->szUserMessage);
+    StrBuf operationSummary;
+    sb_init(&operationSummary, 512);
 
     while (iteration < MAX_AGENT_ITERATIONS)
     {
@@ -1420,6 +2222,23 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
         if (strncmp(response, "Error:", 6) == 0 ||
             strncmp(response, "API Error", 9) == 0)
         {
+            if (iteration > 1 && !compactToolRetry && ContainsSubstringCI(response, "parsing the body") &&
+                msgCount > 0 && msgs[msgCount - 1].role &&
+                strcmp(msgs[msgCount - 1].role, "user") == 0)
+            {
+                char* compact = BuildCompactRetryMessage(msgs[msgCount - 1].content);
+                if (compact)
+                {
+                    if (ownedStrings[msgCount - 1])
+                        free(ownedStrings[msgCount - 1]);
+                    msgs[msgCount - 1].content = compact;
+                    ownedStrings[msgCount - 1] = compact;
+                    compactToolRetry = TRUE;
+                    free(response);
+                    continue;
+                }
+            }
+
             finalResponse = response;
             break;
         }
@@ -1430,6 +2249,47 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
 
         if (toolCount == 0)
         {
+            if (codeWriteTask && !workspaceMutated && !forcedNativeRetry &&
+                msgCount < MAX_MESSAGES_PER_CALL - 2)
+            {
+                char* respCopy = _strdup(response);
+                char* correction = _strdup(
+                    "This is Bikode. Use native Bikode tools to modify the workspace or editor directly. "
+                    "When the user asks you to write code, do not paste source into chat. "
+                    "Read the relevant file or active document, edit or create it, and then reply with a short summary."
+                );
+
+                if (respCopy && correction)
+                {
+                    msgs[msgCount].role = "assistant";
+                    msgs[msgCount].content = respCopy;
+                    ownedStrings[msgCount] = respCopy;
+                    msgCount++;
+
+                    msgs[msgCount].role = "user";
+                    msgs[msgCount].content = correction;
+                    ownedStrings[msgCount] = correction;
+                    msgCount++;
+
+                    forcedNativeRetry = TRUE;
+                    free(response);
+                    continue;
+                }
+
+                if (respCopy) free(respCopy);
+                if (correction) free(correction);
+            }
+
+            if (codeWriteTask && !workspaceMutated && ResponseLooksLikeCodeDump(response))
+            {
+                free(response);
+                finalResponse = _strdup(
+                    "I wasn't able to apply that code directly in Bikode this time. "
+                    "Please retry or specify a target file, and I'll write it into the workspace/editor instead of the chat."
+                );
+                break;
+            }
+
             // No tool calls - this is the final answer
             finalResponse = response;
             break;
@@ -1448,40 +2308,53 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
 
         // Execute each tool call
         StrBuf toolResults;
+        BOOL appendMoreToolResults = TRUE;
         sb_init(&toolResults, 4096);
 
         for (int i = 0; i < toolCount; i++)
         {
+            char* result;
+            char* safeResult = NULL;
+
             // Post tool info to UI
             const char* detail = toolCalls[i].path ? toolCalls[i].path :
                                  toolCalls[i].command ? toolCalls[i].command : "";
             PostToolInfoToUI(p->hwndTarget, toolCalls[i].name, detail);
 
             // Execute
-            char* result = ExecuteTool(&toolCalls[i]);
+            result = ExecuteTool(&toolCalls[i]);
+            AppendToolOperationSummary(&operationSummary, &toolCalls[i]);
+            if (IsWorkspaceMutationTool(toolCalls[i].name))
+                workspaceMutated = TRUE;
 
-            // Append to results message
-            sb_appendf(&toolResults, "[Tool result: %s", toolCalls[i].name);
-            if (toolCalls[i].path)
-                sb_appendf(&toolResults, " - %s", toolCalls[i].path);
-            sb_append(&toolResults, "]\n", -1);
-            if (result)
+            if (appendMoreToolResults)
             {
-                // Truncate very long results
-                int rlen = (int)strlen(result);
-                if (rlen > MAX_FILE_READ_SIZE)
-                {
-                    result[MAX_FILE_READ_SIZE] = '\0';
-                    sb_append(&toolResults, result, MAX_FILE_READ_SIZE);
-                    sb_append(&toolResults, "\n[... truncated]\n", -1);
-                }
+                sb_appendf(&toolResults, "[Tool result: %s", toolCalls[i].name);
+                if (toolCalls[i].path)
+                    sb_appendf(&toolResults, " - %s", toolCalls[i].path);
+                sb_append(&toolResults, "]\n", -1);
+
+                safeResult = PrepareToolResultForModel(toolCalls[i].name,
+                    result ? result : "(no output)", MAX_TOOL_RESULT_SNIPPET);
+                if (safeResult && safeResult[0])
+                    sb_append(&toolResults, safeResult, -1);
                 else
+                    sb_append(&toolResults, "(no output)", -1);
+                sb_append(&toolResults, "\n", 1);
+
+                if (toolResults.len >= MAX_TOOL_FEEDBACK_SIZE)
                 {
-                    sb_append(&toolResults, result, rlen);
+                    sb_append(&toolResults,
+                        "\n[Additional tool output omitted to keep the request compact.]\n",
+                        -1);
+                    appendMoreToolResults = FALSE;
                 }
-                free(result);
             }
-            sb_append(&toolResults, "\n", 1);
+
+            if (safeResult)
+                free(safeResult);
+            if (result)
+                free(result);
         }
 
         FreeToolCalls(toolCalls, toolCount);
@@ -1517,6 +2390,16 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
         cleanResponse = _strdup("Done.");
     }
 
+    if (codeWriteTask && (workspaceMutated || operationSummary.len > 0))
+    {
+        char* summaryResponse = BuildWorkspaceCompletionMessage(&operationSummary, cleanResponse);
+        if (summaryResponse)
+        {
+            free(cleanResponse);
+            cleanResponse = summaryResponse;
+        }
+    }
+
     // Post final response to UI
     PostMessage(p->hwndTarget, WM_AI_DIRECT_RESPONSE, 0, (LPARAM)cleanResponse);
 
@@ -1528,6 +2411,7 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     }
     free(ownedStrings);
     free(msgs);
+    sb_free(&operationSummary);
     free(p->szUserMessage);
     if (p->attachments) free(p->attachments);
     free(p);

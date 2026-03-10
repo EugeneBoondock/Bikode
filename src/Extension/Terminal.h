@@ -89,6 +89,9 @@ void    Terminal_RelinquishFocus(void);
 // Run a command in the terminal (creates a new terminal if none exists).
 void    Terminal_RunCommand(HWND hwndParent, const char* pszCommand);
 
+// Append transcript text to the active terminal session and auto-show the panel without stealing focus.
+void    Terminal_AppendTranscript(HWND hwndParent, const char* pszText);
+
 #ifdef __cplusplus
 }
 #endif

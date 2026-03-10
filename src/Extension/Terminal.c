@@ -967,6 +967,29 @@ void Terminal_RunCommand(HWND hwndP, const char *cmd) {
     Terminal_SendCommand(cmd);
 }
 
+void Terminal_AppendTranscript(HWND hwndP, const char *text) {
+    if (!text || !text[0]) return;
+
+    if (!g_term && !Spawn(hwndP, g_curShell)) return;
+
+    if (!g_visible && g_hwndPanel) {
+        ShowWindow(g_hwndPanel, SW_SHOW);
+        g_visible = TRUE;
+        g_wantFocus = FALSE;
+        if (hwndP) {
+            RECT rc;
+            GetClientRect(hwndP, &rc);
+            SendMessage(hwndP, WM_SIZE, SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom));
+        }
+    }
+
+    if (g_term && g_term->grid) {
+        Grid_ProcessVT(g_term->grid, text, (int)strlen(text));
+        if (g_term->hwndView)
+            InvalidateRect(g_term->hwndView, NULL, FALSE);
+    }
+}
+
 /* ═══════════════════════════════════════════════════════════════════
  * Colour helpers
  * ═══════════════════════════════════════════════════════════════════ */

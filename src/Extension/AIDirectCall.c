@@ -315,15 +315,51 @@ static char* json_extract_nested_content(const char* json, const char* key1,
 // Request body builders (per format)
 //=============================================================================
 
+// Reasoning models (o1, o3, o4, gpt-5.x) spend part of max_completion_tokens
+// on internal chain-of-thought.  A budget that is too small means the model
+// can exhaust all tokens on reasoning and produce an empty visible response.
+// This helper returns a safe minimum so visible output always has headroom.
+#define REASONING_MODEL_MIN_TOKENS  16384
+
+static BOOL IsOpenAIReasoningModel(const char* model)
+{
+    if (!model) return FALSE;
+    // gpt-5, gpt-5.2, etc.
+    if (_strnicmp(model, "gpt-5", 5) == 0) return TRUE;
+    // o1, o1-mini, o1-preview
+    if (_strnicmp(model, "o1", 2) == 0 && (model[2] == '\0' || model[2] == '-')) return TRUE;
+    // o3, o3-mini
+    if (_strnicmp(model, "o3", 2) == 0 && (model[2] == '\0' || model[2] == '-')) return TRUE;
+    // o4-mini, etc.
+    if (_strnicmp(model, "o4", 2) == 0 && (model[2] == '\0' || model[2] == '-')) return TRUE;
+    return FALSE;
+}
+
+static int ResolveMaxTokens_OpenAI(const AIProviderConfig* cfg, const char* model)
+{
+    int tokens = cfg->iMaxTokens;
+    if (IsOpenAIReasoningModel(model))
+    {
+        // Ensure reasoning models have enough headroom
+        if (tokens > 0 && tokens < REASONING_MODEL_MIN_TOKENS)
+            tokens = REASONING_MODEL_MIN_TOKENS;
+        if (tokens == 0)
+            tokens = REASONING_MODEL_MIN_TOKENS;
+    }
+    return tokens;
+}
+
 static void BuildBody_OpenAI(StrBuf* body, const AIProviderConfig* cfg,
                               const char* systemPrompt, const char* userMessage)
 {
     const char* model = cfg->szModel[0] ? cfg->szModel : "gpt-4o-mini";
+    int maxTokens = ResolveMaxTokens_OpenAI(cfg, model);
     sb_append(body, "{", 1);
     sb_appendf(body, "\"model\":\"%s\",", model);
-    sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
-    if (cfg->iMaxTokens > 0)
-        sb_appendf(body, "\"max_completion_tokens\":%d,", cfg->iMaxTokens);
+    if (!IsOpenAIReasoningModel(model))
+        sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
+    if (maxTokens > 0)
+        sb_appendf(body, "\"max_completion_tokens\":%d,", maxTokens);
     sb_append(body, "\"messages\":[", -1);
     sb_append(body, "{\"role\":\"system\",\"content\":", -1);
     json_escape_append(body, systemPrompt);
@@ -769,6 +805,45 @@ static char* ParseResponse_OpenAI(const char* respJson)
     if (content && content[0]) return content;
     if (content) free(content);
 
+    // Check for finish_reason:"length" with empty content.
+    // Reasoning models (o1/o3/gpt-5.x) can spend the entire token budget on
+    // internal chain-of-thought, leaving nothing for visible output.
+    char* finishReason = json_extract_string(respJson, "finish_reason");
+    if (finishReason)
+    {
+        if (strcmp(finishReason, "length") == 0)
+        {
+            free(finishReason);
+            // Check if reasoning tokens consumed the budget
+            const char* reasoning = json_find_value(respJson, "reasoning_tokens");
+            if (reasoning && *reasoning >= '1' && *reasoning <= '9')
+            {
+                return _strdup(
+                    "The model used all available tokens for internal reasoning "
+                    "and could not produce a visible response.\n"
+                    "Please increase **Max Tokens** in AI settings "
+                    "(e.g. 16384 or higher for reasoning models).");
+            }
+            return _strdup(
+                "The response was cut off because it exceeded the token limit.\n"
+                "Please increase **Max Tokens** in AI settings.");
+        }
+        free(finishReason);
+    }
+
+    // If we found a valid message object with empty content, accept it
+    // rather than reporting a parse error.
+    if (choices)
+    {
+        const char* msg = json_find_value(choices, "message");
+        if (msg)
+        {
+            const char* cv = json_find_value(msg, "content");
+            if (cv && *cv == '"')
+                return _strdup("(empty response from model)");
+        }
+    }
+
     return NULL;
 }
 
@@ -1104,11 +1179,13 @@ static void BuildBodyMulti_OpenAI(StrBuf* body, const AIProviderConfig* cfg,
                                    const AIChatMessage* msgs, int count)
 {
     const char* model = cfg->szModel[0] ? cfg->szModel : "gpt-4o-mini";
+    int maxTokens = ResolveMaxTokens_OpenAI(cfg, model);
     sb_append(body, "{", 1);
     sb_appendf(body, "\"model\":\"%s\",", model);
-    sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
-    if (cfg->iMaxTokens > 0)
-        sb_appendf(body, "\"max_completion_tokens\":%d,", cfg->iMaxTokens);
+    if (!IsOpenAIReasoningModel(model))
+        sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
+    if (maxTokens > 0)
+        sb_appendf(body, "\"max_completion_tokens\":%d,", maxTokens);
     sb_append(body, "\"messages\":[", -1);
     for (int i = 0; i < count; i++)
     {

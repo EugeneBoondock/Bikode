@@ -377,6 +377,63 @@ int flagDisplayHelp = 0;
 HACCEL hAccFindReplace = NULL;
 // [2e]: InfoBox improvements #386
 HACCEL hAccMsgBox = NULL;
+static LONG s_BikodeEditorChromeWorkerActive = 0;
+
+static void Bikode_HideEditorChrome(HWND hwndEditor)
+{
+  if (!hwndEditor || !IsWindow(hwndEditor) || !n2e_IsScintillaWindow(hwndEditor))
+    return;
+
+  SetWindowLongPtr(hwndEditor, GWL_EXSTYLE,
+                   GetWindowLongPtr(hwndEditor, GWL_EXSTYLE) & ~WS_EX_CLIENTEDGE);
+  SetWindowLongPtr(hwndEditor, GWL_STYLE,
+                   GetWindowLongPtr(hwndEditor, GWL_STYLE) & ~(WS_HSCROLL | WS_VSCROLL | WS_BORDER));
+  SetWindowPos(hwndEditor, NULL, 0, 0, 0, 0,
+               SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
+
+  SendMessage(hwndEditor, SCI_SETHSCROLLBAR, FALSE, 0);
+  SendMessage(hwndEditor, SCI_SETVSCROLLBAR, FALSE, 0);
+  ShowScrollBar(hwndEditor, SB_BOTH, FALSE);
+}
+
+static DWORD WINAPI Bikode_EditorChromeWorker(LPVOID lpParam)
+{
+  UNREFERENCED_PARAMETER(lpParam);
+
+  for (int i = 0; i < 20; ++i)
+  {
+    Sleep(200);
+
+    Bikode_HideEditorChrome(_hwndEdit);
+    if (hwndEdit && hwndEdit != _hwndEdit)
+      Bikode_HideEditorChrome(hwndEdit);
+  }
+
+  InterlockedExchange(&s_BikodeEditorChromeWorkerActive, 0);
+  return 0;
+}
+
+static void Bikode_ScheduleEditorChromeHide(HWND hwnd)
+{
+  HANDLE hThread;
+  UNREFERENCED_PARAMETER(hwnd);
+
+  if (!_hwndEdit)
+    return;
+
+  if (InterlockedCompareExchange(&s_BikodeEditorChromeWorkerActive, 1, 0) != 0)
+    return;
+
+  hThread = CreateThread(NULL, 0, Bikode_EditorChromeWorker, NULL, 0, NULL);
+  if (hThread)
+  {
+    CloseHandle(hThread);
+  }
+  else
+  {
+    InterlockedExchange(&s_BikodeEditorChromeWorkerActive, 0);
+  }
+}
 
 
 //=============================================================================
@@ -913,6 +970,7 @@ HWND InitInstance(HINSTANCE hInstance, LPSTR pszCmdLine, int nCmdShow)
 
   UpdateToolbar();
   UpdateStatusbar();
+  Bikode_ScheduleEditorChromeHide(hwndMain);
 
   return (hwndMain);
 
@@ -1008,7 +1066,6 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
       n2e_OnActivateMainWindow(wParam, lParam);
       break;
     // [/2e]
-
 
     // [2e]: Edit highlighted word #18
     case WM_ACTIVATEAPP:
@@ -1569,7 +1626,6 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
         SendMessage(hwndNextCBChain, WM_CHANGECBCHAIN, lParam, wParam);
       break;
 
-
     case WM_TRAYMESSAGE:
       switch (lParam)
       {
@@ -1633,7 +1689,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
       {
         LPCWSTR wszFile = (LPCWSTR)lParam;
         if (wszFile) {
-          FileLoad(TRUE, FALSE, FALSE, FALSE, wszFile);
+          FileLoad(FALSE, FALSE, FALSE, FALSE, wszFile);
           free((void*)wszFile);
         }
       }
@@ -1649,6 +1705,40 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
           int newPos = pos + (int)strlen(pszText);
           SendMessage(hwndEdit, SCI_GOTOPOS, newPos, 0);
           SendMessage(hwndEdit, SCI_ENDUNDOACTION, 0, 0);
+          free(pszText);
+        }
+      }
+      return 0;
+
+    case WM_AI_REPLACE_EDITOR:
+      {
+        char* pszText = (char*)lParam;
+        if (pszText) {
+          const int docLen = (int)SendMessage(hwndEdit, SCI_GETLENGTH, 0, 0);
+          SendMessage(hwndEdit, SCI_BEGINUNDOACTION, 0, 0);
+          SendMessage(hwndEdit, SCI_SETTARGETSTART, 0, 0);
+          SendMessage(hwndEdit, SCI_SETTARGETEND, docLen, 0);
+          SendMessage(hwndEdit, SCI_REPLACETARGET, -1, (LPARAM)pszText);
+          SendMessage(hwndEdit, SCI_GOTOPOS, 0, 0);
+          SendMessage(hwndEdit, SCI_ENDUNDOACTION, 0, 0);
+          free(pszText);
+        }
+      }
+      return 0;
+
+    case WM_AI_NEW_FILE_TEXT:
+      {
+        char* pszText = (char*)lParam;
+        if (pszText) {
+          if (FileLoad(FALSE, TRUE, FALSE, FALSE, L"")) {
+            const int docLen = (int)SendMessage(hwndEdit, SCI_GETLENGTH, 0, 0);
+            SendMessage(hwndEdit, SCI_BEGINUNDOACTION, 0, 0);
+            SendMessage(hwndEdit, SCI_SETTARGETSTART, 0, 0);
+            SendMessage(hwndEdit, SCI_SETTARGETEND, docLen, 0);
+            SendMessage(hwndEdit, SCI_REPLACETARGET, -1, (LPARAM)pszText);
+            SendMessage(hwndEdit, SCI_GOTOPOS, 0, 0);
+            SendMessage(hwndEdit, SCI_ENDUNDOACTION, 0, 0);
+          }
           free(pszText);
         }
       }
@@ -2325,6 +2415,8 @@ void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam)
     InlineProgressBarCtrl_Resize(hwndStatusProgressBar);
   }
   // [/2e]
+
+  Bikode_ScheduleEditorChromeHide(hwnd);
 }
 
 //=============================================================================
@@ -5965,9 +6057,6 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
           break;
 
         case SCN_CHARADDED:
-          // [biko] Trigger lightweight auto-completion
-          n2e_ShowAutoComplete(hwndFrom);
-
           // Auto indent
           if (bAutoIndent && (scn->ch == '\x0D' || scn->ch == '\x0A'))
           {

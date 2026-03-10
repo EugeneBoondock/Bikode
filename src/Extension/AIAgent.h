@@ -33,6 +33,12 @@ extern "C" {
 // Insert text into the editor (lParam = heap-allocated char* UTF-8 text, receiver must free)
 #define WM_AI_INSERT_TEXT   (WM_USER + 0x704)
 
+// Replace the active editor buffer with UTF-8 text (lParam = heap-allocated char* text, receiver must free)
+#define WM_AI_REPLACE_EDITOR (WM_USER + 0x705)
+
+// Create a new untitled editor buffer and fill it with UTF-8 text (lParam = heap-allocated char* text, receiver must free)
+#define WM_AI_NEW_FILE_TEXT  (WM_USER + 0x706)
+
 //=============================================================================
 // Public API
 //=============================================================================
