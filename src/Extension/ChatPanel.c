@@ -36,65 +36,71 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <process.h>
 #include "resource.h"
 
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "urlmon.lib")
 
 //=============================================================================
-// Color palette
+// Color palette — matched to BikodeWebsite neutral gray + blue accent
 //=============================================================================
 
 // Background
-#define CP_BG              RGB(17, 21, 28)
-#define CP_HEADER          RGB(23, 28, 36)
+#define CP_BG              RGB(24, 24, 24)       // biko-bg #181818
+#define CP_HEADER          RGB(36, 36, 36)       // biko-surface #242424
 
-// User bubble (right side) — neutral grey
-#define CP_USER_BG         RGB(31, 36, 45)
-#define CP_USER_TEXT       RGB(243, 245, 247)
+// User bubble (right side)
+#define CP_USER_BG         RGB(48, 50, 58)       // biko-hover #30323a
+#define CP_USER_TEXT       RGB(230, 230, 230)    // biko-text1 #E6E6E6
 
 // AI bubble (left side)
-#define CP_AI_BG           RGB(23, 28, 36)
-#define CP_AI_TEXT         RGB(243, 245, 247)
-#define CP_AI_STRIP        RGB(29, 36, 48)
+#define CP_AI_BG           RGB(36, 36, 36)       // biko-surface #242424
+#define CP_AI_TEXT         RGB(230, 230, 230)    // biko-text1 #E6E6E6
+#define CP_AI_STRIP        RGB(48, 50, 58)       // biko-hover #30323a
 
 // Attachment chips
-#define CP_ATTACHMENT_BG      RGB(29, 36, 48)
-#define CP_ATTACHMENT_BORDER  RGB(42, 49, 64)
-#define CP_ATTACHMENT_TEXT    RGB(168, 179, 194)
+#define CP_ATTACHMENT_BG      RGB(48, 50, 58)    // biko-hover
+#define CP_ATTACHMENT_BORDER  RGB(55, 55, 55)    // biko-border #373737
+#define CP_ATTACHMENT_TEXT    RGB(150, 150, 150)  // biko-text2 #969696
 
 // System messages
-#define CP_SYS_TEXT        RGB(110, 119, 133)
+#define CP_SYS_TEXT        RGB(150, 150, 150)    // biko-text2 #969696
 
 // Input area
-#define CP_INPUT_BG        RGB(20, 26, 36)
-#define CP_INPUT_BD        RGB(42, 49, 64)
-#define CP_INPUT_FOCUS_BD  RGB(53, 224, 255)
-#define CP_INPUT_WELL_BG   RGB(13, 18, 25)
-#define CP_INPUT_DOCK_BG   RGB(17, 21, 28)
-#define CP_INPUT_TEXT      RGB(243, 245, 247)
+#define CP_INPUT_BG        RGB(36, 36, 36)       // biko-surface
+#define CP_INPUT_BD        RGB(55, 55, 55)       // biko-border
+#define CP_INPUT_FOCUS_BD  RGB(75, 139, 245)     // biko-accent #4B8BF5
+#define CP_INPUT_WELL_BG   RGB(24, 24, 24)       // biko-bg
+#define CP_INPUT_DOCK_BG   RGB(24, 24, 24)       // biko-bg
+#define CP_INPUT_TEXT      RGB(230, 230, 230)    // biko-text1
 
-// Accents — no blue, neutral tones
-#define CP_ACCENT          RGB(255, 212, 0)
-#define CP_TEXT_PRIMARY    RGB(243, 245, 247)
-#define CP_TEXT_SECONDARY  RGB(168, 179, 194)
-#define CP_CLOSE_HOV       RGB(29, 36, 48)
-#define CP_SEND_HOV        RGB(53, 224, 255)
-#define CP_SEND_BG         RGB(255, 212, 0)
-#define CP_SCROLLBAR_BG    RGB(14, 18, 24)
-#define CP_SCROLLBAR_TH    RGB(42, 49, 64)
-#define CP_SCROLLBAR_HOV   RGB(53, 224, 255)
-#define CP_BTN_BG             RGB(23, 28, 36)
-#define CP_BTN_HOV            RGB(29, 36, 48)
-#define CP_BTN_DOWN           RGB(17, 21, 28)
-#define CP_BTN_BORDER         RGB(42, 49, 64)
-#define CP_BTN_BORDER_HOV     RGB(53, 224, 255)
-#define CP_BTN_ICON           RGB(243, 245, 247)
+// Accents — blue accent from website
+#define CP_ACCENT          RGB(75, 139, 245)     // biko-accent #4B8BF5
+#define CP_TEXT_PRIMARY    RGB(230, 230, 230)    // biko-text1
+#define CP_TEXT_SECONDARY  RGB(150, 150, 150)    // biko-text2
+#define CP_CLOSE_HOV       RGB(48, 50, 58)       // biko-hover
+#define CP_SEND_HOV        RGB(100, 160, 255)    // biko-accent2 #64A0FF
+#define CP_SEND_BG         RGB(75, 139, 245)     // biko-accent
+#define CP_SCROLLBAR_BG    RGB(24, 24, 24)       // biko-bg
+#define CP_SCROLLBAR_TH    RGB(80, 80, 80)       // biko-muted #505050
+#define CP_SCROLLBAR_HOV   RGB(75, 139, 245)     // biko-accent
+#define CP_BTN_BG             RGB(36, 36, 36)    // biko-surface
+#define CP_BTN_HOV            RGB(48, 50, 58)    // biko-hover
+#define CP_BTN_DOWN           RGB(24, 24, 24)    // biko-bg
+#define CP_BTN_BORDER         RGB(55, 55, 55)    // biko-border
+#define CP_BTN_BORDER_HOV     RGB(75, 139, 245)  // biko-accent
+#define CP_BTN_ICON           RGB(230, 230, 230) // biko-text1
 
-#define CP_BTN_PRIMARY_BG     RGB(255, 212, 0)
-#define CP_BTN_PRIMARY_HOV    RGB(255, 224, 48)
-#define CP_BTN_PRIMARY_DOWN   RGB(223, 181, 0)
-#define CP_BTN_PRIMARY_BORDER RGB(255, 212, 0)
+#define CP_BTN_PRIMARY_BG     RGB(75, 139, 245)  // biko-accent
+#define CP_BTN_PRIMARY_HOV    RGB(100, 160, 255) // biko-accent2
+#define CP_BTN_PRIMARY_DOWN   RGB(55, 110, 200)  // accent-dark
+#define CP_BTN_PRIMARY_BORDER RGB(75, 139, 245)  // biko-accent
+
+// Additional tokens for status card
+#define CP_BORDER          RGB(55, 55, 55)       // biko-border #373737
+#define CP_MUTED           RGB(80, 80, 80)       // biko-muted #505050
+#define CP_DIVIDER         RGB(50, 50, 50)       // biko-divider #323232
 
 //=============================================================================
 // Layout constants
@@ -253,6 +259,86 @@ static char*    s_chatHistory[MAX_CHAT_HISTORY];
 static int      s_iHistoryCount = 0;
 
 //=============================================================================
+// AI Working Status Card
+//=============================================================================
+
+static BOOL   s_bAIWorking         = FALSE;
+static char   s_szStatusText[256]  = "";
+static char   s_szToolText[512]    = "";
+static WCHAR  s_wszStatusText[256] = L"";
+static WCHAR  s_wszToolText[512]   = L"";
+static int    s_statusDotPhase     = 0;     // 0, 1, 2 for pulsing animation
+static DWORD  s_statusDotTick      = 0;
+
+#define STATUS_DOT_TIMER_ID    0x71A2
+#define STATUS_DOT_TIMER_MS    400
+#define STATUS_CARD_PAD_H      16
+#define STATUS_CARD_PAD_V      12
+#define STATUS_CARD_RADIUS     10
+#define STATUS_CARD_MARGIN     10
+#define STATUS_DOT_R           4
+#define STATUS_TEXT_GAP        8
+#define STATUS_TOOL_GAP        4
+
+//=============================================================================
+// Activity GIF Pool
+//=============================================================================
+
+typedef enum {
+    ACTIVITY_THINKING = 0,
+    ACTIVITY_READING,
+    ACTIVITY_WRITING,
+    ACTIVITY_RUNNING,
+    ACTIVITY_COUNT
+} ActivityCategory;
+
+static const char* s_activityGifUrls[ACTIVITY_COUNT][3] = {
+    // ACTIVITY_THINKING
+    {
+        "https://media.tenor.com/1UmAI4RVPqYAAAAM/thinking-emoji.gif",
+        "https://media.tenor.com/DHIiPSvCLjMAAAAM/thinking.gif",
+        "https://media.tenor.com/Lg5g-PIALQUAAAAM/hmm-thinking.gif",
+    },
+    // ACTIVITY_READING
+    {
+        "https://media.tenor.com/UnFbz_wCOEAAAAAM/cat-typing.gif",
+        "https://media.tenor.com/FawYo00tBekAAAAM/reading-read.gif",
+        "https://media.tenor.com/xBzl1i2YOQQAAAAM/searching.gif",
+    },
+    // ACTIVITY_WRITING
+    {
+        "https://media.tenor.com/UnFbz_wCOEAAAAAM/cat-typing.gif",
+        "https://media.tenor.com/y2JXkY1pXkwAAAAM/cat-computer.gif",
+        "https://media.tenor.com/FHMi0_bJ110AAAAM/typing-fast.gif",
+    },
+    // ACTIVITY_RUNNING
+    {
+        "https://media.tenor.com/2rckjS5gbfUAAAAM/hacker-hackerman.gif",
+        "https://media.tenor.com/bMH3-4F_zwkAAAAM/coding.gif",
+        "https://media.tenor.com/GfSX-u7VGM4AAAAM/coding.gif",
+    },
+};
+
+// Status card GIF state (separate from message GIFs)
+static Gdiplus::Image* s_pStatusGif         = NULL;
+static GUID            s_statusGifFrameGuid;
+static UINT            s_statusGifFrameCount = 0;
+static UINT            s_statusGifFrameIndex = 0;
+static UINT*           s_statusGifDelaysCs   = NULL;
+static DWORD           s_statusGifLastTick   = 0;
+static int             s_statusGifDrawW      = 0;
+static int             s_statusGifDrawH      = 0;
+static ActivityCategory s_currentActivity    = ACTIVITY_THINKING;
+static WCHAR           s_wszStatusGifPath[MAX_PATH] = L"";
+static LONG            s_statusGifDownloading = 0;
+
+#define STATUS_GIF_MAX_W   180
+#define STATUS_GIF_MAX_H   100
+#define STATUS_GIF_GAP      8
+
+#define WM_STATUS_GIF_READY  (WM_USER + 0x710)
+
+//=============================================================================
 // Forward declarations
 //=============================================================================
 
@@ -304,6 +390,22 @@ static void BuildMissionModelLabel(WCHAR* out, int cchOut);
 static void BuildMissionStatusLabel(WCHAR* out, int cchOut, COLORREF* pAccent, int* pProgressPct);
 static int  DrawQuickActionChip(HDC hdc, int x, int y, LPCWSTR label, COLORREF accent);
 static void PaintMissionEmptyState(HDC hdc, int cx, int cy);
+// Drawing helpers (defined later, forward-declared for status card)
+static void FillRoundRect(HDC hdc, const RECT* prc, int r, COLORREF fill, COLORREF border);
+static void FillRoundRectSolid(HDC hdc, const RECT* prc, int r, COLORREF fill);
+static void DrawStatusDot(HDC hdc, int cx, int cy, int r, COLORREF clr);
+// Status card
+static void StatusCard_Activate(const char* initialStatus);
+static void StatusCard_UpdateStatus(const char* statusText);
+static void StatusCard_UpdateTool(const char* toolText);
+static void StatusCard_Deactivate(void);
+static int  MeasureStatusCardHeight(HDC hdc, int chatW);
+static void PaintStatusCard(HDC hdc, int cx, int y);
+// Activity GIF
+static ActivityCategory ClassifyToolActivity(const char* toolText);
+static void StatusGif_StartDownload(ActivityCategory category);
+static BOOL LoadStatusGif(const WCHAR* wszPath);
+static void FreeStatusGif(void);
 static BOOL ExtractGifUrl(const char* text, char* outUrl, int cchOut)
 {
     if (!text || !outUrl || cchOut <= 1) return FALSE;
@@ -516,6 +618,9 @@ static void UpdateGifTimerState(void)
             break;
         }
     }
+    // Also check status card GIF
+    if (s_pStatusGif && s_statusGifFrameCount > 1)
+        hasAnimatedGif = TRUE;
     if (hasAnimatedGif)
         SetTimer(s_hwndChat, CHAT_GIF_TIMER_ID, CHAT_GIF_TIMER_MS, NULL);
     else
@@ -541,6 +646,18 @@ static void AdvanceGifFrames(void)
             changed = TRUE;
         }
     }
+    // Advance status card GIF
+    if (s_pStatusGif && s_statusGifFrameCount > 1 && s_statusGifDelaysCs)
+    {
+        UINT delayMs = max(40U, s_statusGifDelaysCs[s_statusGifFrameIndex] * 10U);
+        if (now - s_statusGifLastTick >= delayMs)
+        {
+            s_statusGifFrameIndex = (s_statusGifFrameIndex + 1) % s_statusGifFrameCount;
+            s_pStatusGif->SelectActiveFrame(&s_statusGifFrameGuid, s_statusGifFrameIndex);
+            s_statusGifLastTick = now;
+            changed = TRUE;
+        }
+    }
     if (changed && s_hwndChat)
         InvalidateRect(s_hwndChat, NULL, FALSE);
 }
@@ -548,6 +665,374 @@ static BOOL TryAttachInlineGif(ChatMsg* msg, const char* sourceText);
 static void UpdateGifTimerState(void);
 static void AdvanceGifFrames(void);
 static char* SanitizeAIResponseForDisplay(const char* text, BOOL hideGifUrls);
+
+//=============================================================================
+// Activity GIF: classify tool, load, free, download
+//=============================================================================
+
+static ActivityCategory ClassifyToolActivity(const char* toolText)
+{
+    if (!toolText || !toolText[0]) return ACTIVITY_THINKING;
+    const char* p = toolText;
+    if (*p == '[') p++;
+
+    if (StrCmpNIA(p, "read_file", 9) == 0 ||
+        StrCmpNIA(p, "list_dir", 8) == 0 ||
+        StrCmpNIA(p, "get_active_document", 19) == 0)
+        return ACTIVITY_READING;
+
+    if (StrCmpNIA(p, "write_file", 10) == 0 ||
+        StrCmpNIA(p, "replace_in_file", 15) == 0 ||
+        StrCmpNIA(p, "replace_editor", 14) == 0 ||
+        StrCmpNIA(p, "new_file_in_editor", 18) == 0 ||
+        StrCmpNIA(p, "insert_in_editor", 16) == 0)
+        return ACTIVITY_WRITING;
+
+    if (StrCmpNIA(p, "run_command", 11) == 0 ||
+        StrCmpNIA(p, "make_dir", 8) == 0 ||
+        StrCmpNIA(p, "init_repo", 9) == 0)
+        return ACTIVITY_RUNNING;
+
+    return ACTIVITY_THINKING;
+}
+
+static void FreeStatusGif(void)
+{
+    if (s_pStatusGif) { delete s_pStatusGif; s_pStatusGif = NULL; }
+    if (s_statusGifDelaysCs) { n2e_Free(s_statusGifDelaysCs); s_statusGifDelaysCs = NULL; }
+    s_statusGifFrameCount = 0;
+    s_statusGifFrameIndex = 0;
+    s_statusGifDrawW = 0;
+    s_statusGifDrawH = 0;
+    s_wszStatusGifPath[0] = L'\0';
+}
+
+static BOOL LoadStatusGif(const WCHAR* wszPath)
+{
+    if (!wszPath || !wszPath[0] || !EnsureGdiplus())
+        return FALSE;
+
+    FreeStatusGif();
+
+    Gdiplus::Image* img = Gdiplus::Image::FromFile(wszPath, FALSE);
+    if (!img || img->GetLastStatus() != Gdiplus::Ok)
+    {
+        if (img) delete img;
+        return FALSE;
+    }
+
+    UINT imgW = img->GetWidth();
+    UINT imgH = img->GetHeight();
+    if (imgW == 0 || imgH == 0) { delete img; return FALSE; }
+
+    s_pStatusGif = img;
+    s_statusGifDrawW = STATUS_GIF_MAX_W;
+    s_statusGifDrawH = (int)((double)imgH * s_statusGifDrawW / (double)imgW);
+    if (s_statusGifDrawH > STATUS_GIF_MAX_H) {
+        s_statusGifDrawH = STATUS_GIF_MAX_H;
+        s_statusGifDrawW = (int)((double)imgW * s_statusGifDrawH / (double)imgH);
+    }
+    if (s_statusGifDrawW < 60) s_statusGifDrawW = 60;
+    if (s_statusGifDrawH < 36) s_statusGifDrawH = 36;
+
+    UINT dimCount = img->GetFrameDimensionsCount();
+    s_statusGifFrameCount = 1;
+    s_statusGifFrameIndex = 0;
+    if (dimCount > 0) {
+        GUID guid;
+        if (img->GetFrameDimensionsList(&guid, 1) == Gdiplus::Ok) {
+            s_statusGifFrameGuid = guid;
+            s_statusGifFrameCount = img->GetFrameCount(&guid);
+            if (s_statusGifFrameCount > 1) {
+                UINT sz = img->GetPropertyItemSize(PropertyTagFrameDelay);
+                if (sz > 0) {
+                    Gdiplus::PropertyItem* pItem = (Gdiplus::PropertyItem*)n2e_Alloc(sz);
+                    if (pItem && img->GetPropertyItem(PropertyTagFrameDelay, sz, pItem) == Gdiplus::Ok) {
+                        s_statusGifDelaysCs = (UINT*)n2e_Alloc(s_statusGifFrameCount * sizeof(UINT));
+                        if (s_statusGifDelaysCs) {
+                            for (UINT i = 0; i < s_statusGifFrameCount; i++) {
+                                UINT delay = ((UINT*)pItem->value)[i];
+                                if (delay == 0) delay = 8;
+                                s_statusGifDelaysCs[i] = delay;
+                            }
+                        }
+                    }
+                    if (pItem) n2e_Free(pItem);
+                }
+            }
+        }
+    }
+    s_statusGifLastTick = GetTickCount();
+    StringCchCopyW(s_wszStatusGifPath, MAX_PATH, wszPath);
+    return TRUE;
+}
+
+typedef struct {
+    char     url[1024];
+    WCHAR    destPath[MAX_PATH];
+    HWND     hwndChat;
+} StatusGifDownloadCtx;
+
+static unsigned __stdcall StatusGifDownloadThread(void* pArg)
+{
+    StatusGifDownloadCtx* ctx = (StatusGifDownloadCtx*)pArg;
+    WCHAR wszUrl[1024];
+    MultiByteToWideChar(CP_UTF8, 0, ctx->url, -1, wszUrl, ARRAYSIZE(wszUrl));
+
+    HRESULT hr = URLDownloadToFileW(NULL, wszUrl, ctx->destPath, 0, NULL);
+    if (SUCCEEDED(hr)) {
+        WCHAR* pathCopy = (WCHAR*)malloc((wcslen(ctx->destPath) + 1) * sizeof(WCHAR));
+        if (pathCopy) {
+            wcscpy(pathCopy, ctx->destPath);
+            PostMessage(ctx->hwndChat, WM_STATUS_GIF_READY, 0, (LPARAM)pathCopy);
+        }
+    }
+    InterlockedExchange(&s_statusGifDownloading, 0);
+    free(ctx);
+    return 0;
+}
+
+static void StatusGif_StartDownload(ActivityCategory category)
+{
+    if (InterlockedCompareExchange(&s_statusGifDownloading, 1, 0) != 0)
+        return;
+
+    if (!EnsureAttachmentTempDir()) {
+        InterlockedExchange(&s_statusGifDownloading, 0);
+        return;
+    }
+
+    int idx = GetTickCount() % 3;
+    const char* url = s_activityGifUrls[category][idx];
+
+    StatusGifDownloadCtx* ctx = (StatusGifDownloadCtx*)malloc(sizeof(*ctx));
+    if (!ctx) { InterlockedExchange(&s_statusGifDownloading, 0); return; }
+
+    StringCchCopyA(ctx->url, ARRAYSIZE(ctx->url), url);
+    WCHAR tmpName[MAX_PATH];
+    GetTempFileNameW(s_wszAttachmentDir, L"aig", 0, tmpName);
+    DeleteFileW(tmpName);
+    StringCchPrintfW(ctx->destPath, MAX_PATH, L"%s.gif", tmpName);
+    ctx->hwndChat = s_hwndChat;
+
+    HANDLE hThread = (HANDLE)_beginthreadex(NULL, 0, StatusGifDownloadThread, ctx, 0, NULL);
+    if (hThread)
+        CloseHandle(hThread);
+    else {
+        free(ctx);
+        InterlockedExchange(&s_statusGifDownloading, 0);
+    }
+}
+
+//=============================================================================
+// Status Card: activate / update / deactivate
+//=============================================================================
+
+static void StatusCard_Activate(const char* initialStatus)
+{
+    s_bAIWorking = TRUE;
+    StringCchCopyA(s_szStatusText, ARRAYSIZE(s_szStatusText),
+                   initialStatus ? initialStatus : "Thinking...");
+    s_szToolText[0] = '\0';
+    MultiByteToWideChar(CP_UTF8, 0, s_szStatusText, -1,
+                        s_wszStatusText, ARRAYSIZE(s_wszStatusText));
+    s_wszToolText[0] = L'\0';
+    s_statusDotPhase = 0;
+    s_statusDotTick = GetTickCount();
+    s_currentActivity = ACTIVITY_THINKING;
+
+    if (s_hwndChat)
+        SetTimer(s_hwndChat, STATUS_DOT_TIMER_ID, STATUS_DOT_TIMER_MS, NULL);
+
+    StatusGif_StartDownload(ACTIVITY_THINKING);
+
+    InvalidateAllHeights();
+    if (s_hwndChat) {
+        HDC hdc = GetDC(s_hwndChat);
+        RECT rc;
+        GetClientRect(s_hwndChat, &rc);
+        s_contentH = ComputeContentHeight(hdc, rc.right);
+        ReleaseDC(s_hwndChat, hdc);
+        EnsureScrollEnd();
+        InvalidateRect(s_hwndChat, NULL, FALSE);
+    }
+}
+
+static void StatusCard_UpdateStatus(const char* statusText)
+{
+    if (!s_bAIWorking) return;
+    StringCchCopyA(s_szStatusText, ARRAYSIZE(s_szStatusText), statusText);
+    MultiByteToWideChar(CP_UTF8, 0, s_szStatusText, -1,
+                        s_wszStatusText, ARRAYSIZE(s_wszStatusText));
+    if (s_hwndChat) {
+        HDC hdc = GetDC(s_hwndChat);
+        RECT rc;
+        GetClientRect(s_hwndChat, &rc);
+        s_contentH = ComputeContentHeight(hdc, rc.right);
+        ReleaseDC(s_hwndChat, hdc);
+        EnsureScrollEnd();
+        InvalidateRect(s_hwndChat, NULL, FALSE);
+    }
+}
+
+static void StatusCard_UpdateTool(const char* toolText)
+{
+    if (!s_bAIWorking) return;
+
+    // Parse "[toolName: detail]" -> "toolName: detail"
+    const char* src = toolText;
+    if (src[0] == '[') src++;
+    char clean[512];
+    StringCchCopyA(clean, ARRAYSIZE(clean), src);
+    int len = (int)strlen(clean);
+    if (len > 0 && clean[len - 1] == ']') clean[len - 1] = '\0';
+
+    StringCchCopyA(s_szToolText, ARRAYSIZE(s_szToolText), clean);
+    MultiByteToWideChar(CP_UTF8, 0, s_szToolText, -1,
+                        s_wszToolText, ARRAYSIZE(s_wszToolText));
+
+    // Check if activity category changed
+    ActivityCategory newCat = ClassifyToolActivity(toolText);
+    if (newCat != s_currentActivity) {
+        s_currentActivity = newCat;
+        FreeStatusGif();
+        StatusGif_StartDownload(newCat);
+    }
+
+    if (s_hwndChat) {
+        HDC hdc = GetDC(s_hwndChat);
+        RECT rc;
+        GetClientRect(s_hwndChat, &rc);
+        s_contentH = ComputeContentHeight(hdc, rc.right);
+        ReleaseDC(s_hwndChat, hdc);
+        EnsureScrollEnd();
+        InvalidateRect(s_hwndChat, NULL, FALSE);
+    }
+}
+
+static void StatusCard_Deactivate(void)
+{
+    s_bAIWorking = FALSE;
+    s_szStatusText[0] = '\0';
+    s_szToolText[0] = '\0';
+    s_wszStatusText[0] = L'\0';
+    s_wszToolText[0] = L'\0';
+    if (s_hwndChat)
+        KillTimer(s_hwndChat, STATUS_DOT_TIMER_ID);
+    FreeStatusGif();
+    UpdateGifTimerState();
+    if (s_hwndChat) InvalidateRect(s_hwndChat, NULL, FALSE);
+}
+
+//=============================================================================
+// Status Card: measure and paint
+//=============================================================================
+
+static int MeasureStatusCardHeight(HDC hdc, int chatW)
+{
+    if (!s_bAIWorking) return 0;
+
+    int cardInnerW = chatW - 2 * STATUS_CARD_MARGIN - 2 * STATUS_CARD_PAD_H;
+    int totalH = STATUS_CARD_PAD_V;
+
+    // GIF area
+    if (s_pStatusGif) {
+        totalH += s_statusGifDrawH + CHAT_INLINE_GIF_FRAME_PAD * 2 + STATUS_GIF_GAP;
+    }
+
+    // Status text line (with dot offset)
+    int textW = cardInnerW - STATUS_DOT_R * 2 - STATUS_TEXT_GAP - 8;
+    if (textW < 40) textW = 40;
+    HFONT hOld = (HFONT)SelectObject(hdc, s_hFontBubble);
+    RECT rc = { 0, 0, textW, 0 };
+    if (s_wszStatusText[0]) {
+        DrawTextW(hdc, s_wszStatusText, -1, &rc,
+                  DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        totalH += rc.bottom + STATUS_TOOL_GAP;
+    } else {
+        totalH += 18;
+    }
+    SelectObject(hdc, hOld);
+
+    // Tool text line
+    if (s_wszToolText[0]) {
+        hOld = (HFONT)SelectObject(hdc, s_hFontStatus);
+        RECT rcTool = { 0, 0, cardInnerW, 0 };
+        DrawTextW(hdc, s_wszToolText, -1, &rcTool,
+                  DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+        totalH += rcTool.bottom;
+        SelectObject(hdc, hOld);
+    }
+
+    totalH += STATUS_CARD_PAD_V;
+    return totalH;
+}
+
+static void PaintStatusCard(HDC hdc, int cx, int y)
+{
+    if (!s_bAIWorking) return;
+
+    int cardX = STATUS_CARD_MARGIN;
+    int cardW = cx - 2 * STATUS_CARD_MARGIN;
+    int cardH = MeasureStatusCardHeight(hdc, cx);
+
+    RECT rcCard = { cardX, y, cardX + cardW, y + cardH };
+    FillRoundRect(hdc, &rcCard, STATUS_CARD_RADIUS, CP_AI_BG, CP_BORDER);
+
+    int contentX = cardX + STATUS_CARD_PAD_H;
+    int contentY = y + STATUS_CARD_PAD_V;
+    int contentW = cardW - 2 * STATUS_CARD_PAD_H;
+
+    // Draw GIF if available
+    if (s_pStatusGif) {
+        int frameW = s_statusGifDrawW + CHAT_INLINE_GIF_FRAME_PAD * 2;
+        int frameH = s_statusGifDrawH + CHAT_INLINE_GIF_FRAME_PAD * 2;
+        RECT rcFrame = { contentX, contentY, contentX + frameW, contentY + frameH };
+        FillRoundRect(hdc, &rcFrame, CHAT_INLINE_GIF_FRAME_RAD, CP_BG, CP_BORDER);
+
+        int gifX = contentX + CHAT_INLINE_GIF_FRAME_PAD;
+        int gifY = contentY + CHAT_INLINE_GIF_FRAME_PAD;
+        Gdiplus::Graphics g(hdc);
+        g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+        g.DrawImage(s_pStatusGif, gifX, gifY, s_statusGifDrawW, s_statusGifDrawH);
+
+        contentY += frameH + STATUS_GIF_GAP;
+    }
+
+    // Pulsing dot - 3 brightness phases
+    COLORREF dotColor;
+    switch (s_statusDotPhase) {
+        case 0:  dotColor = CP_ACCENT; break;
+        case 1:  dotColor = BikodeTheme_Mix(CP_ACCENT, CP_AI_BG, 160); break;
+        default: dotColor = BikodeTheme_Mix(CP_ACCENT, CP_AI_BG, 80); break;
+    }
+    int dotCenterX = contentX + STATUS_DOT_R;
+    int dotCenterY = contentY + 9;
+    DrawStatusDot(hdc, dotCenterX, dotCenterY, STATUS_DOT_R, dotColor);
+
+    // Status text
+    int textX = dotCenterX + STATUS_DOT_R + STATUS_TEXT_GAP;
+    HFONT hOld = (HFONT)SelectObject(hdc, s_hFontBubble);
+    SetTextColor(hdc, CP_TEXT_PRIMARY);
+    RECT rcStatus = { textX, contentY, contentX + contentW, contentY + 200 };
+    DrawTextW(hdc, s_wszStatusText, -1, &rcStatus,
+              DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+    RECT rcCalc = { 0, 0, contentX + contentW - textX, 0 };
+    DrawTextW(hdc, s_wszStatusText, -1, &rcCalc,
+              DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+    contentY += rcCalc.bottom + STATUS_TOOL_GAP;
+    SelectObject(hdc, hOld);
+
+    // Tool text (muted, smaller)
+    if (s_wszToolText[0]) {
+        hOld = (HFONT)SelectObject(hdc, s_hFontStatus);
+        SetTextColor(hdc, CP_TEXT_SECONDARY);
+        RECT rcTool = { textX, contentY, contentX + contentW, contentY + 100 };
+        DrawTextW(hdc, s_wszToolText, -1, &rcTool,
+                  DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        SelectObject(hdc, hOld);
+    }
+}
 
 //=============================================================================
 // Class registration
@@ -1608,6 +2093,11 @@ static int ComputeContentHeight(HDC hdc, int chatW)
         if (i < s_nMsgs - 1)
             totalH += CHAT_MSG_SPACING;
     }
+    // Add status card height if AI is working
+    if (s_bAIWorking) {
+        totalH += CHAT_MSG_SPACING;
+        totalH += MeasureStatusCardHeight(hdc, chatW);
+    }
     totalH += 8;  // bottom padding
     return totalH;
 }
@@ -1642,9 +2132,7 @@ static void PaintChatView(HWND hwnd, HDC hdc, int cx, int cy)
 
     // Background
     RECT rcBg = { 0, 0, cx, cy };
-    HBRUSH hBg = CreateSolidBrush(CP_BG);
-    FillRect(hdc, &rcBg, hBg);
-    DeleteObject(hBg);
+    BikodeTheme_FillHalftone(hdc, &rcBg, CP_BG);
 
     SetBkMode(hdc, TRANSPARENT);
 
@@ -1769,7 +2257,7 @@ static void PaintChatView(HWND hwnd, HDC hdc, int cx, int cy)
                 int frameW = m->gifDrawW + CHAT_INLINE_GIF_FRAME_PAD * 2;
                 int frameH = m->gifDrawH + CHAT_INLINE_GIF_FRAME_PAD * 2;
                 RECT rcFrame = { frameX, frameY, frameX + frameW, frameY + frameH };
-                FillRoundRect(hdc, &rcFrame, CHAT_INLINE_GIF_FRAME_RAD, RGB(34, 34, 38), RGB(74, 74, 80));
+                FillRoundRect(hdc, &rcFrame, CHAT_INLINE_GIF_FRAME_RAD, CP_BG, CP_BORDER);
 
                 int gifX = frameX + CHAT_INLINE_GIF_FRAME_PAD;
                 int gifY = frameY + CHAT_INLINE_GIF_FRAME_PAD;
@@ -1780,6 +2268,11 @@ static void PaintChatView(HWND hwnd, HDC hdc, int cx, int cy)
         }
 
         y += msgH + CHAT_MSG_SPACING;
+    }
+
+    // Draw status card if AI is working
+    if (s_bAIWorking) {
+        PaintStatusCard(hdc, cx, y);
     }
 
     // Draw mini scrollbar
@@ -1894,9 +2387,36 @@ static LRESULT CALLBACK ChatViewWndProc(HWND hwnd, UINT msg,
             AdvanceGifFrames();
             return 0;
         }
+        if (wParam == STATUS_DOT_TIMER_ID)
+        {
+            s_statusDotPhase = (s_statusDotPhase + 1) % 3;
+            if (s_hwndChat) InvalidateRect(s_hwndChat, NULL, FALSE);
+            return 0;
+        }
         break;
 
     default:
+        if (msg == WM_STATUS_GIF_READY) {
+            WCHAR* path = (WCHAR*)lParam;
+            if (path) {
+                if (s_bAIWorking) {
+                    LoadStatusGif(path);
+                    UpdateGifTimerState();
+                    InvalidateAllHeights();
+                    if (s_hwndChat) {
+                        HDC hdc = GetDC(s_hwndChat);
+                        RECT rc;
+                        GetClientRect(s_hwndChat, &rc);
+                        s_contentH = ComputeContentHeight(hdc, rc.right);
+                        ReleaseDC(s_hwndChat, hdc);
+                        EnsureScrollEnd();
+                        InvalidateRect(s_hwndChat, NULL, FALSE);
+                    }
+                }
+                free(path);
+            }
+            return 0;
+        }
         break;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
@@ -2019,6 +2539,8 @@ void ChatPanel_Destroy(void)
 
     FreeMessages();
     PendingAttachments_Reset();
+    StatusCard_Deactivate();
+    FreeStatusGif();
 
     for (int i = 0; i < s_iHistoryCount; i++) {
         if (s_chatHistory[i]) n2e_Free(s_chatHistory[i]);
@@ -2232,17 +2754,9 @@ void ChatPanel_AppendUserMessage(const char* pszMessage,
 
 void ChatPanel_AppendResponse(const char* pszResponse)
 {
-    // Remove "Thinking..." system message if present
-    if (s_nMsgs > 0 && s_msgs[s_nMsgs - 1].role == MSG_SYSTEM)
-    {
-        ChatMsg* last = &s_msgs[s_nMsgs - 1];
-        if (last->text && strstr(last->text, "Thinking"))
-        {
-            if (last->text) n2e_Free(last->text);
-            if (last->wtext) n2e_Free(last->wtext);
-            s_nMsgs--;
-        }
-    }
+    // Deactivate the status card (replaces old "remove Thinking" logic)
+    StatusCard_Deactivate();
+
     AddMessage(MSG_AI, pszResponse, NULL, 0);
     if (s_hwndChat) {
         HDC hdc = GetDC(s_hwndChat);
@@ -2314,7 +2828,7 @@ void ChatPanel_SendInput(void)
 
         const AIProviderConfig* pCfg = AIBridge_GetProviderConfig();
         if (pCfg && pCfg->szApiKey[0]) {
-            ChatPanel_AppendSystem("Thinking\xe2\x80\xa6");
+            StatusCard_Activate("Thinking\xe2\x80\xa6");
             HWND hwndMainWnd = GetParent(s_hwndPanel);
 
             if (!AIAgent_ChatAsync(pCfg, displayText, cAtt > 0 ? aiAttachments : NULL, cAtt, s_hwndPanel, hwndMainWnd))
@@ -2356,7 +2870,7 @@ void ChatPanel_SendSearchInput(void)
             
             const AIProviderConfig* pCfg = AIBridge_GetProviderConfig();
             if (pCfg && pCfg->szApiKey[0]) {
-                ChatPanel_AppendSystem("Searching web\xe2\x80\xa6");
+                StatusCard_Activate("Searching web\xe2\x80\xa6");
                 HWND hwndMainWnd = GetParent(s_hwndPanel);
                 if (!AIAgent_ChatAsync(pCfg, searchPrompt, NULL, 0, s_hwndPanel, hwndMainWnd))
                     ChatPanel_AppendSystem("AI is busy. Please wait.");
@@ -2452,9 +2966,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
 
         // Background
         {
-            HBRUSH hBg = CreateSolidBrush(CP_BG);
-            FillRect(hm, &rc, hBg);
-            DeleteObject(hBg);
+            BikodeTheme_FillHalftone(hm, &rc, CP_BG);
         }
 
         // Header - mission-control chrome
@@ -2806,7 +3318,10 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
         if (msg == WM_AI_AGENT_STATUS) {
             char* pszStatus = (char*)lParam;
             if (pszStatus) {
-                ChatPanel_AppendSystem(pszStatus);
+                if (!s_bAIWorking)
+                    StatusCard_Activate(pszStatus);
+                else
+                    StatusCard_UpdateStatus(pszStatus);
                 free(pszStatus);
             }
             return 0;
@@ -2814,7 +3329,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
         if (msg == WM_AI_AGENT_TOOL) {
             char* pszTool = (char*)lParam;
             if (pszTool) {
-                ChatPanel_AppendSystem(pszTool);
+                StatusCard_UpdateTool(pszTool);
                 free(pszTool);
             }
             return 0;

@@ -54,18 +54,18 @@ static BOOL g_havePTY = FALSE;
 #define WM_TERMDATA           (WM_USER + 200)
 
 /* colours */
-#define C_DKBG     RGB(8,11,17)
-#define C_DKFG     RGB(243,245,247)
-#define C_DKHDR    RGB(23,28,36)
-#define C_DKSPLIT  RGB(42,49,64)
-#define C_DKTXT    RGB(243,245,247)
-#define C_DKDIM    RGB(168,179,194)
-#define C_DKROWALT RGB(10,14,20)
-#define C_DKSEL    RGB(22,47,63)
+#define C_DKBG     RGB(24,24,24)
+#define C_DKFG     RGB(230,230,230)
+#define C_DKHDR    RGB(48,50,58)
+#define C_DKSPLIT  RGB(50,50,50)
+#define C_DKTXT    RGB(230,230,230)
+#define C_DKDIM    RGB(150,150,150)
+#define C_DKROWALT RGB(30,30,30)
+#define C_DKSEL    RGB(48,50,58)
 #define C_DKCARET  RGB(255,212,0)
-#define C_DKBTN    RGB(29,36,48)
-#define C_DKBORD   RGB(42,49,64)
-#define C_DKDROP   RGB(17,21,28)
+#define C_DKBTN    RGB(36,36,36)
+#define C_DKBORD   RGB(55,55,55)
+#define C_DKDROP   RGB(36,36,36)
 
 #define C_LTBG     RGB(255,255,255)
 #define C_LTFG     RGB(17,24,39)
@@ -1070,6 +1070,18 @@ static COLORREF ToneAccent(RowTone tone) {
     }
 }
 
+static void FillPanelSurface(HDC hdc, const RECT* rc, COLORREF color, BOOL textured) {
+    if (!rc) return;
+    if (textured) {
+        BikodeTheme_FillHalftone(hdc, rc, color);
+        return;
+    }
+
+    HBRUSH hBrush = CreateSolidBrush(color);
+    FillRect(hdc, rc, hBrush);
+    DeleteObject(hBrush);
+}
+
 /* Selection helper */
 static BOOL InSel(int r, int c) {
     if (!g_hasSel) return FALSE;
@@ -1145,12 +1157,10 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         HBITMAP bmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
         HBITMAP obmp = SelectObject(mem, bmp);
 
-        HBRUSH bgBr = CreateSolidBrush(defBg);
-        FillRect(mem, &rc, bgBr); DeleteObject(bgBr);
+        FillPanelSurface(mem, &rc, defBg, dk);
 
         HFONT ofont = NULL;
         if (g_fontGrid) ofont = SelectObject(mem, g_fontGrid);
-        SetBkMode(mem, OPAQUE);
 
         int viewBase = GridBase(g) - g->scrollOff;
         if (viewBase < 0) viewBase = 0;
@@ -1164,6 +1174,10 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             COLORREF rowBaseBg = (dk && (absLine & 1)) ? C_DKROWALT : defBg;
             COLORREF accent = ToneAccent(tone);
             rowBaseBg = ToneRowBackground(tone, rowBaseBg);
+            if (rowBaseBg != defBg) {
+                RECT rowRc = { 0, y, rc.right, min(y + g_cellH, rc.bottom) };
+                FillPanelSurface(mem, &rowRc, rowBaseBg, dk);
+            }
             if (dk && tone != ROW_NORMAL) {
                 RECT accentRc = { 0, y, 3, y + g_cellH };
                 HBRUSH hAcc = CreateSolidBrush(accent);
@@ -1173,6 +1187,7 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             int c = 0;
             while (c < g->cols) {
                 BOOL sel = InSel(r, c);
+                BOOL opaqueBg = sel || row[c].bg != 0;
                 COLORREF fg = sel ? (dk ? RGB(255,255,255) : RGB(0,0,0)) : GetFG(row[c].fg);
                 COLORREF bg = sel ? (dk ? C_DKSEL : RGB(180,215,255))
                                   : (row[c].bg == 0 ? rowBaseBg : GetBG(row[c].bg));
@@ -1183,31 +1198,28 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 int cs = c;
                 while (c < g->cols && rl < 511) {
                     BOOL cs2 = InSel(r, c);
+                    BOOL opaqueBg2 = cs2 || row[c].bg != 0;
                     COLORREF f2 = cs2 ? (dk?RGB(255,255,255):RGB(0,0,0)) : GetFG(row[c].fg);
                     COLORREF b2 = cs2 ? (dk ? C_DKSEL : RGB(180,215,255))
                                       : (row[c].bg == 0 ? rowBaseBg : GetBG(row[c].bg));
                     if (!cs2 && row[c].fg == 7 && dk && tone != ROW_NORMAL) {
                         f2 = BikodeTheme_Mix(accent, C_DKFG, 54);
                     }
-                    if (f2 != fg || b2 != bg) break;
+                    if (opaqueBg2 != opaqueBg || f2 != fg || b2 != bg) break;
                     run[rl++] = row[c].ch;
                     c++;
                 }
                 SetTextColor(mem, fg);
-                SetBkColor(mem, bg);
                 RECT cr = { cs * g_cellW, y, (cs + rl) * g_cellW, y + g_cellH };
-                ExtTextOutW(mem, cs * g_cellW, y, ETO_OPAQUE|ETO_CLIPPED, &cr, run, rl, NULL);
+                if (opaqueBg) {
+                    SetBkMode(mem, OPAQUE);
+                    SetBkColor(mem, bg);
+                    ExtTextOutW(mem, cs * g_cellW, y, ETO_OPAQUE | ETO_CLIPPED, &cr, run, rl, NULL);
+                } else {
+                    SetBkMode(mem, TRANSPARENT);
+                    ExtTextOutW(mem, cs * g_cellW, y, ETO_CLIPPED, &cr, run, rl, NULL);
+                }
             }
-            int rx = g->cols * g_cellW;
-            if (rx < rc.right) {
-                RECT rr = { rx, y, rc.right, y + g_cellH };
-                HBRUSH hb = CreateSolidBrush(defBg); FillRect(mem, &rr, hb); DeleteObject(hb);
-            }
-        }
-        int by = g->rows * g_cellH;
-        if (by < rc.bottom) {
-            RECT rr = { 0, by, rc.right, rc.bottom };
-            HBRUSH hb = CreateSolidBrush(defBg); FillRect(mem, &rr, hb); DeleteObject(hb);
         }
 
         /* Cursor */
@@ -1635,11 +1647,9 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         HDC dc = BeginPaint(hwnd, &ps);
         RECT rc; GetClientRect(hwnd, &rc);
         BOOL dk = DarkMode_IsEnabled();
-        HBRUSH hb = CreateSolidBrush(dk ? C_DKBG : C_LTBG);
-        FillRect(dc, &rc, hb); DeleteObject(hb);
+        FillPanelSurface(dc, &rc, dk ? C_DKBG : C_LTBG, dk);
         RECT rs = rc; rs.bottom = SPLITTER_H;
-        hb = CreateSolidBrush(dk ? C_DKSPLIT : C_LTSPLIT);
-        FillRect(dc, &rs, hb); DeleteObject(hb);
+        FillPanelSurface(dc, &rs, dk ? C_DKSPLIT : C_LTSPLIT, FALSE);
         PaintHeader(hwnd, dc, &rc);
         EndPaint(hwnd, &ps);
         return 0;
@@ -1648,8 +1658,8 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
     case WM_ERASEBKGND: {
         HDC dc = (HDC)wParam;
         RECT rc; GetClientRect(hwnd, &rc);
-        HBRUSH h = CreateSolidBrush(DarkMode_IsEnabled() ? C_DKBG : C_LTBG);
-        FillRect(dc, &rc, h); DeleteObject(h);
+        BOOL dk = DarkMode_IsEnabled();
+        FillPanelSurface(dc, &rc, dk ? C_DKBG : C_LTBG, dk);
         return 1;
     }
 
