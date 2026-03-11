@@ -39,9 +39,9 @@ OutputBaseFilename={#OutputBaseName}
 SetupIconFile={#ProjectRoot}\\res\\biko_white.ico
 WizardImageFile={#ProjectRoot}\\res\\InstallerWizardLarge.bmp
 WizardSmallImageFile={#ProjectRoot}\\res\\InstallerWizardSmall.bmp
-WizardBackColor=$181818
+WizardBackColor=$242424
 WizardBackImageFile={#ProjectRoot}\\res\\InstallerWizardBackground-100.png,{#ProjectRoot}\\res\\InstallerWizardBackground-150.png
-WizardBackImageOpacity=168
+WizardBackImageOpacity=184
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern dark hidebevels includetitlebar
@@ -66,6 +66,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#SourceDir}\\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\\Bikode.ini"; DestDir: "{app}"; Flags: onlyifdoesntexist ignoreversion skipifsourcedoesntexist
 Source: "{#ProjectRoot}\\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ProjectRoot}\\src\\Extension\\tools\\gif-search.js"; DestDir: "{app}\\tools"; Flags: ignoreversion
+Source: "{#ProjectRoot}\\res\\InstallerTasksPreview.bmp"; Flags: dontcopy
 
 [Icons]
 Name: "{autoprograms}\\Bikode"; Filename: "{app}\\{#AppExeName}"
@@ -75,7 +77,13 @@ Name: "{autodesktop}\\Bikode"; Filename: "{app}\\{#AppExeName}"; Tasks: desktopi
 Filename: "{app}\\{#AppExeName}"; Description: "Launch Bikode"; Flags: nowait postinstall skipifsilent
 
 [Code]
+var
+  TasksPreviewImage: TBitmapImage;
+
 procedure InitializeWizard;
+var
+  PreviewSize: Integer;
+  PreviewGap: Integer;
 begin
   WizardForm.WelcomeLabel1.Caption :=
     'Install Bikode by Boondock Labs with the same dark shell, grey grain, and real logo as the editor.';
@@ -84,5 +92,23 @@ begin
   WizardForm.FinishedHeadingLabel.Caption := 'Bikode is ready to launch';
   WizardForm.FinishedLabel.Caption :=
     'Open Bikode to jump into the editor, terminal, and AI workspace at https://www.bikode.co.za/.';
+
+  ExtractTemporaryFile('InstallerTasksPreview.bmp');
+  PreviewSize := ScaleX(220);
+  PreviewGap := ScaleX(12);
+
+  if WizardForm.TasksList.Width > PreviewSize + ScaleX(96) then
+    WizardForm.TasksList.Width := WizardForm.TasksList.Width - PreviewSize - PreviewGap;
+
+  TasksPreviewImage := TBitmapImage.Create(WizardForm);
+  TasksPreviewImage.Parent := WizardForm.SelectTasksPage;
+  TasksPreviewImage.Stretch := True;
+  TasksPreviewImage.AutoSize := False;
+  TasksPreviewImage.Bitmap.LoadFromFile(ExpandConstant('{tmp}\InstallerTasksPreview.bmp'));
+  TasksPreviewImage.SetBounds(
+    WizardForm.TasksList.Left + WizardForm.TasksList.Width + PreviewGap,
+    WizardForm.TasksList.Top - ScaleY(2),
+    PreviewSize,
+    PreviewSize);
 end;
 

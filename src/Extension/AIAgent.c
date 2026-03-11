@@ -1842,8 +1842,18 @@ static char* Tool_GifSearch(const char* query)
     };
 
     BOOL found = FALSE;
+
+    _snprintf_s(scriptPath, MAX_PATH, _TRUNCATE, "%s\\tools\\gif-search.js", moduleDir);
+    {
+        DWORD attrs = GetFileAttributesA(scriptPath);
+        if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY))
+            found = TRUE;
+    }
+
     for (int i = 0; candidates[i]; i++)
     {
+        if (found)
+            break;
         const char* rel = candidates[i];
         if (i < 2) {
             strncpy(scriptPath, rel, MAX_PATH - 1);
@@ -1861,7 +1871,7 @@ static char* Tool_GifSearch(const char* query)
     }
 
     if (!found)
-        return _strdup("Error: gif-search.js not found (expected under src/Extension/tools or src/tools)");
+    return _strdup("Error: gif-search.js not found (expected under app/tools, src/Extension/tools, or src/tools)");
 
     StrBuf cmd;
     sb_init(&cmd, 1024);

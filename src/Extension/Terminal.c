@@ -523,6 +523,12 @@ typedef struct {
     char              szRecentOutput[TERM_AI_OUTPUT_MAX];
 } TerminalAIState;
 
+typedef struct {
+    WCHAR             wszCommand[TERM_CMD_MAX];
+    TermAIRequestMode mode;
+    BOOL              accepted;
+} TerminalAISuggestionDialogData;
+
 static TerminalAIState g_termAI = {0};
 
 /* Forward declarations */
@@ -535,8 +541,10 @@ static void    ShellDetect(void);
 static void    ShowShellMenu(HWND);
 static void    TerminalAI_ResetInputLine(void);
 static void    TerminalAI_RecordSubmittedUtf8(const char* cmd);
+static void    TerminalAI_UnwrapCommand(char* szCommand);
 static BOOL    TerminalAI_StartSuggestion(HWND hwnd, TermAIRequestMode mode, const WCHAR* wszInput, const char* pszFailure);
 static void    TerminalAI_HandleSuggestionResponse(HWND hwnd, char* pszResponse);
+static void    TerminalAI_ExecuteSuggestedCommand(const char* cmd, TermAIRequestMode mode);
 
 /* ═══════════════════════════════════════════════════════════════════
  * Window class registration
@@ -972,6 +980,19 @@ void Terminal_SendCommand(const char *c) {
     TerminalAI_RecordSubmittedUtf8(c);
     Terminal_Write(c, (int)strlen(c));
     Terminal_Write("\r\n", 2);
+}
+
+static void TerminalAI_ExecuteSuggestedCommand(const char* cmd, TermAIRequestMode mode) {
+    if (!cmd || !cmd[0])
+        return;
+
+    if (mode == TERM_AI_TRANSLATE) {
+        TerminalAI_ResetInputLine();
+        Terminal_Write("\x03", 1);
+        Sleep(80);
+    }
+
+    Terminal_SendCommand(cmd);
 }
 
 void Terminal_Focus(void) {
@@ -1419,6 +1440,389 @@ static BOOL TerminalAI_OutputLooksLikeCommandFailure(const char* pszText) {
            StrStrIA(pszText, "No such file or directory") != NULL;
 }
 
+static void TerminalAI_CenterDialogOnParent(HWND hwnd) {
+    HWND hwndParent;
+    RECT rcDlg;
+    RECT rcParent;
+    int x;
+    int y;
+
+    if (!hwnd)
+        return;
+
+    hwndParent = GetWindow(hwnd, GW_OWNER);
+    if (!hwndParent || !IsWindow(hwndParent))
+        hwndParent = g_hwndMain;
+    if (!hwndParent || !IsWindow(hwndParent))
+        return;
+
+    GetWindowRect(hwnd, &rcDlg);
+    GetWindowRect(hwndParent, &rcParent);
+
+    x = rcParent.left + ((rcParent.right - rcParent.left) - (rcDlg.right - rcDlg.left)) / 2;
+    y = rcParent.top + ((rcParent.bottom - rcParent.top) - (rcDlg.bottom - rcDlg.top)) / 2;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+
+    SetWindowPos(hwnd, NULL, x, y, 0, 0, SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+static int TerminalAI_BuildSuggestionDialogTemplate(BYTE* buffer, int cbBuffer) {
+    DLGTEMPLATE* pDlg;
+    DLGITEMTEMPLATE* pItem;
+    WORD* p;
+
+    if (!buffer || cbBuffer < 256)
+        return 0;
+
+    ZeroMemory(buffer, cbBuffer);
+
+    pDlg = (DLGTEMPLATE*)buffer;
+    pDlg->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | WS_VISIBLE;
+    pDlg->cdit = 2;
+    pDlg->x = 0;
+    pDlg->y = 0;
+    pDlg->cx = 232;
+    pDlg->cy = 140;
+
+    p = (WORD*)(pDlg + 1);
+    *p++ = 0;
+    *p++ = 0;
+    {
+        LPCWSTR title = L"Bikode AI Terminal";
+        while (*title) *p++ = *title++;
+        *p++ = 0;
+    }
+
+    if ((ULONG_PTR)p % 4) p++;
+    pItem = (DLGITEMTEMPLATE*)p;
+    pItem->style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_DEFPUSHBUTTON;
+    pItem->x = 132; pItem->y = 118; pItem->cx = 44; pItem->cy = 16;
+    pItem->id = IDOK;
+    p = (WORD*)(pItem + 1);
+    *p++ = 0xFFFF; *p++ = 0x0080;
+    *p++ = 0;
+    *p++ = 0;
+
+    if ((ULONG_PTR)p % 4) p++;
+    pItem = (DLGITEMTEMPLATE*)p;
+    pItem->style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_PUSHBUTTON;
+    pItem->x = 180; pItem->y = 118; pItem->cx = 44; pItem->cy = 16;
+    pItem->id = IDCANCEL;
+    p = (WORD*)(pItem + 1);
+    *p++ = 0xFFFF; *p++ = 0x0080;
+    *p++ = 0;
+    *p++ = 0;
+
+    return (int)((BYTE*)p - buffer);
+}
+
+static void TerminalAI_LayoutSuggestionDialog(HWND hwnd) {
+    RECT rc;
+    HWND hRun;
+    HWND hCancel;
+    int buttonW = 98;
+    int buttonH = 30;
+    int gap = 10;
+    int bottom = 16;
+
+    GetClientRect(hwnd, &rc);
+    hRun = GetDlgItem(hwnd, IDOK);
+    hCancel = GetDlgItem(hwnd, IDCANCEL);
+
+    if (hCancel) {
+        MoveWindow(hCancel,
+            rc.right - buttonW - 16,
+            rc.bottom - buttonH - bottom,
+            buttonW,
+            buttonH,
+            TRUE);
+    }
+    if (hRun) {
+        MoveWindow(hRun,
+            rc.right - (buttonW * 2) - gap - 16,
+            rc.bottom - buttonH - bottom,
+            buttonW,
+            buttonH,
+            TRUE);
+    }
+}
+
+static void TerminalAI_DrawSuggestionDialog(HWND hwnd, HDC hdc) {
+    RECT rcClient;
+    RECT rcCard;
+    RECT rcHeader;
+    RECT rcChip;
+    RECT rcModeChip;
+    RECT rcTitle;
+    RECT rcCmdBox;
+    RECT rcCmdText;
+    RECT rcFooter;
+    RECT rcAccent;
+    RECT rcBlip;
+    HFONT hOldFont;
+    COLORREF oldText;
+    HBRUSH hBrush;
+    TerminalAISuggestionDialogData* data;
+    LPCWSTR wszModeText;
+
+    GetClientRect(hwnd, &rcClient);
+    data = (TerminalAISuggestionDialogData*)GetWindowLongPtr(hwnd, DWLP_USER);
+    wszModeText = (data && data->mode == TERM_AI_CORRECT) ? L"FIXED COMMAND" : L"FRESH PROMPT";
+
+    BikodeTheme_FillHalftone(hdc, &rcClient, BikodeTheme_GetColor(BKCLR_APP_BG));
+
+    rcCard = rcClient;
+    InflateRect(&rcCard, -12, -12);
+    BikodeTheme_DrawRoundedPanel(hdc, &rcCard,
+        BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+        BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        BikodeTheme_GetMetric(BKMETRIC_RADIUS_DIALOG),
+        TRUE);
+
+    rcHeader = rcCard;
+    rcHeader.bottom = rcHeader.top + 44;
+    BikodeTheme_DrawCutCornerPanel(hdc, &rcHeader,
+        BikodeTheme_GetColor(BKCLR_SURFACE_RAISED),
+        BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        12,
+        FALSE);
+
+    rcAccent = rcHeader;
+    rcAccent.left += 10;
+    rcAccent.top += 8;
+    rcAccent.right = rcAccent.left + 6;
+    rcAccent.bottom -= 8;
+    hBrush = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+    FillRect(hdc, &rcAccent, hBrush);
+    DeleteObject(hBrush);
+
+    rcBlip = rcHeader;
+    rcBlip.left = rcHeader.right - 36;
+    rcBlip.right = rcBlip.left + 8;
+    rcBlip.top += 10;
+    rcBlip.bottom = rcBlip.top + 22;
+    hBrush = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_HOT_MAGENTA));
+    FillRect(hdc, &rcBlip, hBrush);
+    DeleteObject(hBrush);
+    OffsetRect(&rcBlip, 12, 0);
+    hBrush = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN));
+    FillRect(hdc, &rcBlip, hBrush);
+    DeleteObject(hBrush);
+
+    rcChip.left = rcHeader.left + 22;
+    rcChip.top = rcHeader.top + 10;
+    rcChip.right = rcChip.left + 112;
+    rcChip.bottom = rcChip.top + 22;
+    BikodeTheme_DrawChip(hdc, &rcChip, L"AI TERMINAL",
+        BikodeTheme_GetColor(BKCLR_SURFACE_ELEVATED),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
+        BikodeTheme_GetFont(BKFONT_UI_SMALL),
+        TRUE,
+        BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+
+    rcModeChip = rcChip;
+    rcModeChip.left = rcChip.right + 10;
+    rcModeChip.right = rcModeChip.left + 108;
+    BikodeTheme_DrawChip(hdc, &rcModeChip, wszModeText,
+        BikodeTheme_GetColor(BKCLR_SURFACE_ELEVATED),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
+        BikodeTheme_GetFont(BKFONT_UI_SMALL),
+        TRUE,
+        data && data->mode == TERM_AI_CORRECT
+            ? BikodeTheme_GetColor(BKCLR_HOT_MAGENTA)
+            : BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN));
+
+    SetBkMode(hdc, TRANSPARENT);
+    oldText = SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+    hOldFont = (HFONT)SelectObject(hdc, BikodeTheme_GetFont(BKFONT_DISPLAY));
+
+    rcTitle.left = rcCard.left + 18;
+    rcTitle.top = rcHeader.bottom + 16;
+    rcTitle.right = rcCard.right - 18;
+    rcTitle.bottom = rcTitle.top + 30;
+    DrawTextW(hdc, L"Run this in the current terminal?", -1, &rcTitle,
+        DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+    rcCmdBox.left = rcCard.left + 18;
+    rcCmdBox.top = rcTitle.bottom + 10;
+    rcCmdBox.right = rcCard.right - 18;
+    rcCmdBox.bottom = rcCard.bottom - 58;
+    BikodeTheme_DrawRoundedPanel(hdc, &rcCmdBox,
+        BikodeTheme_GetColor(BKCLR_EDITOR_BG),
+        BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        BikodeTheme_GetMetric(BKMETRIC_RADIUS_PANEL),
+        FALSE);
+
+    rcAccent = rcCmdBox;
+    rcAccent.left += 10;
+    rcAccent.top += 10;
+    rcAccent.right = rcAccent.left + 5;
+    rcAccent.bottom -= 10;
+    hBrush = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+    FillRect(hdc, &rcAccent, hBrush);
+    DeleteObject(hBrush);
+
+    rcCmdText = rcCmdBox;
+    rcCmdText.left += 24;
+    rcCmdText.top += 12;
+    rcCmdText.right -= 12;
+    rcCmdText.bottom -= 12;
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+    SelectObject(hdc, BikodeTheme_GetFont(BKFONT_MONO));
+    DrawTextW(hdc,
+        (data && data->wszCommand[0]) ? data->wszCommand : L"",
+        -1,
+        &rcCmdText,
+        DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
+
+    rcFooter.left = rcCard.left + 18;
+    rcFooter.top = rcCmdBox.bottom + 10;
+    rcFooter.right = rcCard.right - 150;
+    rcFooter.bottom = rcCard.bottom - 12;
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
+    SelectObject(hdc, BikodeTheme_GetFont(BKFONT_UI_SMALL));
+    DrawTextW(hdc, L"Enter runs it. Esc cancels it.", -1, &rcFooter,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    SelectObject(hdc, hOldFont);
+    SetTextColor(hdc, oldText);
+}
+
+static INT_PTR CALLBACK TerminalAI_SuggestionDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+    case WM_INITDIALOG:
+        SetWindowLongPtr(hwnd, DWLP_USER, lParam);
+        DarkMode_ApplyToDialog(hwnd);
+        TerminalAI_CenterDialogOnParent(hwnd);
+        TerminalAI_LayoutSuggestionDialog(hwnd);
+        return TRUE;
+
+    case WM_SIZE:
+        TerminalAI_LayoutSuggestionDialog(hwnd);
+        return TRUE;
+
+    case WM_ERASEBKGND:
+        return TRUE;
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        TerminalAI_DrawSuggestionDialog(hwnd, hdc);
+        EndPaint(hwnd, &ps);
+        return TRUE;
+    }
+
+    case WM_DRAWITEM: {
+        const DRAWITEMSTRUCT* dis = (const DRAWITEMSTRUCT*)lParam;
+        RECT rcFocus;
+
+        if (!dis || dis->CtlType != ODT_BUTTON)
+            break;
+
+        BikodeTheme_DrawButton(dis->hDC, &dis->rcItem,
+            dis->CtlID == IDOK ? L"Run It" : L"Cancel",
+            dis->CtlID == IDOK ? BKGLYPH_TERMINAL : BKGLYPH_NONE,
+            (dis->itemState & ODS_HOTLIGHT) != 0,
+            (dis->itemState & ODS_SELECTED) != 0,
+            dis->CtlID == IDOK,
+            FALSE);
+        if (dis->itemState & ODS_FOCUS) {
+            rcFocus = dis->rcItem;
+            InflateRect(&rcFocus, -4, -4);
+            DrawFocusRect(dis->hDC, &rcFocus);
+        }
+        return TRUE;
+    }
+
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL) {
+            TerminalAISuggestionDialogData* data = (TerminalAISuggestionDialogData*)GetWindowLongPtr(hwnd, DWLP_USER);
+            if (data)
+                data->accepted = (LOWORD(wParam) == IDOK);
+            EndDialog(hwnd, LOWORD(wParam));
+            return TRUE;
+        }
+        break;
+    }
+
+    return FALSE;
+}
+
+static BOOL TerminalAI_ShowSuggestionDialog(HWND hwndParent, const WCHAR* wszCommand, TermAIRequestMode mode) {
+    BYTE buffer[512];
+    TerminalAISuggestionDialogData data;
+
+    ZeroMemory(&data, sizeof(data));
+    lstrcpynW(data.wszCommand, wszCommand ? wszCommand : L"", ARRAYSIZE(data.wszCommand));
+    data.mode = mode;
+
+    if (!TerminalAI_BuildSuggestionDialogTemplate(buffer, sizeof(buffer)))
+        return FALSE;
+
+    DialogBoxIndirectParamW(GetModuleHandle(NULL),
+                            (DLGTEMPLATE*)buffer,
+                            hwndParent,
+                            TerminalAI_SuggestionDlgProc,
+                            (LPARAM)&data);
+    return data.accepted;
+}
+
+static BOOL TerminalAI_ParseSuggestionLooseCommand(const char* pszResponse,
+                                                   char* szCommand, int cchCommand) {
+    const char* start;
+    const char* end;
+    int len;
+    char quote = 0;
+
+    if (!pszResponse || !pszResponse[0] || !szCommand || cchCommand <= 0)
+        return FALSE;
+
+    start = StrStrIA(pszResponse, "\"command\"");
+    if (!start) start = StrStrIA(pszResponse, "'command'");
+    if (!start) start = StrStrIA(pszResponse, "command");
+    if (!start)
+        return FALSE;
+
+    start = strchr(start, ':');
+    if (!start)
+        return FALSE;
+    start++;
+    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')
+        start++;
+    if (!*start)
+        return FALSE;
+
+    if (*start == '"' || *start == '\'' || *start == '`') {
+        quote = *start++;
+        end = start;
+        while (*end && *end != quote) {
+            if (*end == '\\' && end[1])
+                end += 2;
+            else
+                end++;
+        }
+    } else {
+        end = start;
+        while (*end && *end != '\r' && *end != '\n' && *end != ',' && *end != '}')
+            end++;
+    }
+
+    if (end <= start)
+        return FALSE;
+
+    len = (int)min((size_t)(end - start), (size_t)(cchCommand - 1));
+    memcpy(szCommand, start, len);
+    szCommand[len] = 0;
+    TerminalAI_UnwrapCommand(szCommand);
+    return szCommand[0] != 0;
+}
+
 static BOOL TerminalAI_ParseSuggestionJson(const char* pszResponse,
                                            char* szCommand, int cchCommand,
                                            char* szReason, int cchReason) {
@@ -1427,9 +1831,10 @@ static BOOL TerminalAI_ParseSuggestionJson(const char* pszResponse,
     EJsonToken tok;
 
     if (!pszResponse || !pszResponse[0]) return FALSE;
-    if (!szCommand || cchCommand <= 0 || !szReason || cchReason <= 0) return FALSE;
+    if (!szCommand || cchCommand <= 0) return FALSE;
     szCommand[0] = 0;
-    szReason[0] = 0;
+    if (szReason && cchReason > 0)
+        szReason[0] = 0;
 
     while (*pszJson && *pszJson != '{')
         pszJson++;
@@ -1448,7 +1853,7 @@ static BOOL TerminalAI_ParseSuggestionJson(const char* pszResponse,
         tok = JsonReader_Next(&r);
         if ((strcmp(key, "command") == 0 || strcmp(key, "cmd") == 0) && tok == JSON_STRING) {
             lstrcpynA(szCommand, JsonReader_GetString(&r), cchCommand);
-        } else if (strcmp(key, "reason") == 0 && tok == JSON_STRING) {
+        } else if (szReason && cchReason > 0 && strcmp(key, "reason") == 0 && tok == JSON_STRING) {
             lstrcpynA(szReason, JsonReader_GetString(&r), cchReason);
         } else if (!JsonReader_SkipValue(&r) && JsonReader_IsError(&r)) {
             break;
@@ -1456,7 +1861,8 @@ static BOOL TerminalAI_ParseSuggestionJson(const char* pszResponse,
     }
 
     TerminalAI_TrimAnsiInPlace(szCommand);
-    TerminalAI_TrimAnsiInPlace(szReason);
+    if (szReason && cchReason > 0)
+        TerminalAI_TrimAnsiInPlace(szReason);
     return szCommand[0] != 0;
 }
 
@@ -1488,7 +1894,11 @@ static BOOL TerminalAI_ParseSuggestionFallback(const char* pszResponse,
 
     if (!pszResponse || !pszResponse[0]) return FALSE;
     szCommand[0] = 0;
-    szReason[0] = 0;
+    if (szReason && cchReason > 0)
+        szReason[0] = 0;
+
+    if (TerminalAI_ParseSuggestionLooseCommand(pszResponse, szCommand, cchCommand))
+        return TRUE;
 
     start = strstr(pszResponse, "```");
     if (start) {
@@ -1529,7 +1939,7 @@ static BOOL TerminalAI_ParseSuggestionFallback(const char* pszResponse,
     }
 
     TerminalAI_UnwrapCommand(szCommand);
-    if (!szReason[0] && cchReason > 0)
+    if (szReason && cchReason > 0 && !szReason[0])
         lstrcpynA(szReason, "Bikode AI suggested a better terminal command.", cchReason);
     return szCommand[0] != 0;
 }
@@ -1553,12 +1963,12 @@ static BOOL TerminalAI_StartSuggestion(HWND hwnd, TermAIRequestMode mode, const 
     const AIProviderConfig* pCfg;
     const char* pszSystemPrompt =
         "You translate terminal intent into exactly one shell command. "
-        "Return JSON only with keys command and reason. "
+        "Return only the command text. "
         "Respect the named shell. Prefer safe, non-destructive commands. "
         "If the user typed plain English, translate it into the best command for that shell. "
         "If the command failed, suggest the corrected command. "
-        "If you cannot infer a safe command, return an empty command string and explain why. "
-        "Do not use markdown fences or prose outside the JSON object.";
+        "If you cannot infer a safe command, return an empty response. "
+        "Do not use JSON, markdown fences, labels, quotes, or explanation.";
 
     if (g_termAI.bPending)
         return FALSE;
@@ -1605,11 +2015,6 @@ static BOOL TerminalAI_StartSuggestion(HWND hwnd, TermAIRequestMode mode, const 
     if (mode == TERM_AI_CORRECT)
         g_termAI.bCommandFailureSuggested = TRUE;
 
-    Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd,
-        mode == TERM_AI_CORRECT
-            ? "\r\n[Bikode AI] Checking that failed command...\r\n"
-            : "\r\n[Bikode AI] Translating your terminal request...\r\n");
-
     if (!AIDirectCall_ChatAsync(pCfg, pszSystemPrompt, szUserPrompt, g_hwndPanel ? g_hwndPanel : hwnd)) {
         g_termAI.bPending = FALSE;
         Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd,
@@ -1622,11 +2027,8 @@ static BOOL TerminalAI_StartSuggestion(HWND hwnd, TermAIRequestMode mode, const 
 
 static void TerminalAI_HandleSuggestionResponse(HWND hwnd, char* pszResponse) {
     char szCommand[TERM_CMD_MAX];
-    char szReason[512];
-    WCHAR wszMessage[2048];
     WCHAR wszCommand[TERM_CMD_MAX];
-    WCHAR wszReason[512];
-    int answer;
+    TermAIRequestMode mode = g_termAI.mode;
 
     g_termAI.bPending = FALSE;
 
@@ -1643,33 +2045,16 @@ static void TerminalAI_HandleSuggestionResponse(HWND hwnd, char* pszResponse) {
         return;
     }
 
-    if (!TerminalAI_ParseSuggestion(pszResponse, szCommand, ARRAYSIZE(szCommand), szReason, ARRAYSIZE(szReason))) {
+    if (!TerminalAI_ParseSuggestion(pszResponse, szCommand, ARRAYSIZE(szCommand), NULL, 0)) {
         Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd,
             "\r\n[Bikode AI] I could not turn that into a terminal command.\r\n");
         return;
     }
 
     MultiByteToWideChar(CP_UTF8, 0, szCommand, -1, wszCommand, ARRAYSIZE(wszCommand));
-    MultiByteToWideChar(CP_UTF8, 0, szReason, -1, wszReason, ARRAYSIZE(wszReason));
 
-    Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, "\r\n[Bikode AI] Suggested command:\r\n> ");
-    Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, szCommand);
-    Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, "\r\n");
-    if (szReason[0]) {
-        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, "[Bikode AI] Why: ");
-        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, szReason);
-        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, "\r\n");
-    }
-
-    swprintf_s(wszMessage, ARRAYSIZE(wszMessage),
-        L"Execute this command in the current terminal?\n\n%s\n\n%s",
-        wszCommand,
-        wszReason[0] ? wszReason : L"Bikode AI found a better match for what you typed.");
-    answer = MessageBoxW(g_hwndMain ? g_hwndMain : hwnd, wszMessage,
-                         L"Bikode AI Terminal Suggestion",
-                         MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON1);
-    if (answer == IDYES)
-        Terminal_SendCommand(szCommand);
+    if (TerminalAI_ShowSuggestionDialog(g_hwndMain ? g_hwndMain : hwnd, wszCommand, mode))
+        TerminalAI_ExecuteSuggestedCommand(szCommand, mode);
 }
 
 static void FillPanelSurface(HDC hdc, const RECT* rc, COLORREF color, BOOL textured) {

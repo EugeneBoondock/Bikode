@@ -83,8 +83,8 @@ static WelcomeButton s_buttons[NUM_BUTTONS] = {
     { IDC_BTN_CHAT,     L"Bikode AI",          L"Open the AI-first coding assistant",L""        },
 };
 
-#define WELCOME_HERO_TEXT       L"I write what I like. Build, debug, and ship inside an AI-first IDE."
-#define WELCOME_HERO_TOP        186
+#define WELCOME_HERO_TEXT       L"I write what I like. Build, debug, and ship inside an AI-first IDE with a native comic-noir shell."
+#define WELCOME_HERO_TOP        170
 #define WELCOME_HERO_MIN_HEIGHT 48
 #define WELCOME_HERO_PAD_X      18
 #define WELCOME_HERO_PAD_Y      10
@@ -96,6 +96,7 @@ static WelcomeButton s_buttons[NUM_BUTTONS] = {
 static HWND     s_hwndWelcome = NULL;
 static HICON    s_hLogo = NULL;
 static HFONT    s_hFontTitle = NULL;
+static HFONT    s_hFontWordmark = NULL;
 static HFONT    s_hFontTagline = NULL;
 static HFONT    s_hFontBtnLabel = NULL;
 static HFONT    s_hFontBtnDesc = NULL;
@@ -118,7 +119,12 @@ static void EnsureFonts(void)
 {
     if (s_hFontTitle) return;
     s_hFontTitle = BikodeTheme_GetFont(BKFONT_DISPLAY);
-    s_hFontTagline = BikodeTheme_GetFont(BKFONT_UI);
+    s_hFontWordmark = CreateFontW(-72, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        VARIABLE_PITCH | FF_ROMAN, L"Georgia");
+    if (!s_hFontWordmark)
+        s_hFontWordmark = BikodeTheme_GetFont(BKFONT_DISPLAY);
+    s_hFontTagline = BikodeTheme_GetFont(BKFONT_MONO);
     s_hFontBtnLabel = BikodeTheme_GetFont(BKFONT_UI_BOLD);
     s_hFontBtnDesc = BikodeTheme_GetFont(BKFONT_UI_SMALL);
     s_hFontShortcut = BikodeTheme_GetFont(BKFONT_MONO_SMALL);
@@ -128,6 +134,9 @@ static void EnsureFonts(void)
 static void DestroyFonts(void)
 {
     s_hFontTitle = NULL;
+    if (s_hFontWordmark && s_hFontWordmark != BikodeTheme_GetFont(BKFONT_DISPLAY))
+        DeleteObject(s_hFontWordmark);
+    s_hFontWordmark = NULL;
     s_hFontTagline = NULL;
     s_hFontBtnLabel = NULL;
     s_hFontBtnDesc = NULL;
@@ -181,6 +190,48 @@ static void FillRoundRect(HDC hdc, const RECT* rc, int r, COLORREF fill, COLORRE
     SelectObject(hdc, hOldPn);
     DeleteObject(hBr);
     DeleteObject(hPn);
+}
+
+static void DrawWebsiteWordmark(HDC hdc, int centerX, int top)
+{
+    SIZE szBi = { 0 };
+    SIZE szKo = { 0 };
+    SIZE szDe = { 0 };
+    HFONT hOld;
+    int x;
+    int iconSize = 46;
+    int iconGap = 12;
+    int wordmarkW;
+    int totalW;
+
+    EnsureFonts();
+    hOld = (HFONT)SelectObject(hdc, s_hFontWordmark);
+    GetTextExtentPoint32W(hdc, L"Bi", 2, &szBi);
+    GetTextExtentPoint32W(hdc, L"ko", 2, &szKo);
+    GetTextExtentPoint32W(hdc, L"de.", 3, &szDe);
+
+    wordmarkW = szBi.cx + szKo.cx + szDe.cx;
+    totalW = wordmarkW + ((s_hLogo != NULL) ? (iconSize + iconGap) : 0);
+    x = centerX - (totalW / 2);
+    SetBkMode(hdc, TRANSPARENT);
+
+    if (s_hLogo) {
+        DrawIconEx(hdc, x, top + 8, s_hLogo, iconSize, iconSize, 0, NULL, DI_NORMAL);
+        x += iconSize + iconGap;
+    }
+
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+    TextOutW(hdc, x, top, L"Bi", 2);
+
+    x += szBi.cx;
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN));
+    TextOutW(hdc, x, top, L"ko", 2);
+
+    x += szKo.cx;
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+    TextOutW(hdc, x, top, L"de.", 3);
+
+    SelectObject(hdc, hOld);
 }
 
 static void DrawButtonCard(HDC hdc, WelcomeButton* btn)
@@ -320,18 +371,10 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         if (startY < 30) startY = 30;
         int centerX = cx / 2;
 
-        // --- Logo icon ---
-        if (s_hLogo)
-        {
-            int iconSz = 72;
-            DrawIconEx(hm, centerX - iconSz / 2, startY + 16, s_hLogo,
-                       iconSz, iconSz, 0, NULL, DI_NORMAL);
-        }
-
         // Chapter chip
         {
-            RECT rcChip = { centerX - 112, startY + 2, centerX + 112, startY + 28 };
-            BikodeTheme_DrawChip(hm, &rcChip, L"ISSUE 01  COMIC CONTROL ROOM",
+            RECT rcChip = { centerX - 120, startY + 4, centerX + 120, startY + 30 };
+            BikodeTheme_DrawChip(hm, &rcChip, L"ISSUE 01  BIKODE CONTROL ROOM",
                 BikodeTheme_GetColor(BKCLR_SURFACE_ELEVATED),
                 BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
                 BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
@@ -339,16 +382,13 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         }
 
         // --- Title ---
-        SelectObject(hm, s_hFontTitle);
-        SetTextColor(hm, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
-        RECT rcT = { 0, startY + 92, cx, startY + 146 };
-        DrawTextW(hm, L"Bikode", -1, &rcT, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+        DrawWebsiteWordmark(hm, centerX, startY + 52);
 
         // --- Tagline ---
         SelectObject(hm, s_hFontTagline);
         SetTextColor(hm, BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
-        RECT rcQ = { centerX - 230, startY + 148, centerX + 230, startY + 184 };
-        DrawTextW(hm, L"Comic-book noir shell. Native speed. Serious code.", -1, &rcQ,
+        RECT rcQ = { centerX - 270, startY + 124, centerX + 270, startY + 156 };
+        DrawTextW(hm, L"AN AI IDE THAT CODES WHAT IT LIKES", -1, &rcQ,
                   DT_CENTER | DT_SINGLELINE | DT_VCENTER);
 
         // --- Hero card ---
@@ -383,8 +423,20 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
         SelectObject(hm, s_hFontFooter);
         SetTextColor(hm, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
         RECT rcF = { 0, cy - 32, cx, cy - 12 };
-        DrawTextW(hm, L"Bikode  •  Native editor core  •  Mission control shell",
+        DrawTextW(hm, L"Bikode  •  AI-first IDE  •  bikode.co.za",
                   -1, &rcF, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+
+        {
+            RECT rcFooter = { centerX - 190, cy - 42, centerX + 190, cy - 8 };
+            if (rcFooter.left < 16) rcFooter.left = 16;
+            if (rcFooter.right > cx - 16) rcFooter.right = cx - 16;
+            BikodeTheme_DrawChip(hm, &rcFooter, L"BIKODE | AI-FIRST IDE | bikode.co.za",
+                BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+                BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+                BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
+                BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE,
+                BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN));
+        }
 
         // Blit
         BitBlt(hdc, 0, 0, cx, cy, hm, 0, 0, SRCCOPY);
@@ -469,7 +521,7 @@ static LRESULT CALLBACK WelcomeWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 break;
             case IDC_BTN_CHAT:
                 WelcomeScreen_Hide();
-                ChatPanel_Toggle(hwndMain);
+                ChatPanel_Show(hwndMain);
                 break;
             }
             return 0;

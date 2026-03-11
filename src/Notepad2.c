@@ -884,6 +884,9 @@ HWND InitInstance(HINSTANCE hInstance, LPSTR pszCmdLine, int nCmdShow)
     }
   }
 
+  if (!flagStartAsTrayIcon && !ChatPanel_IsVisible())
+    ChatPanel_ShowPassive(hwndMain);
+
   // Encoding
   if (0 != flagSetEncoding)
   {

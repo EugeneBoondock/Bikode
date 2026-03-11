@@ -120,7 +120,7 @@
 #define CHAT_EMPTY_CHIP_H       24
 #define CHAT_EMPTY_CHIP_GAP      8
 #define CHAT_EMPTY_TITLE        L"I write what I like."
-#define CHAT_EMPTY_BODY         L"Bikode AI powers an AI-first workflow: trace a crash, explain a symbol, search the repo, or draft a patch from the current file while protecting your voice and intent."
+#define CHAT_EMPTY_BODY         L"Bikode AI keeps the website's voice inside the editor: trace a crash, explain a symbol, search the repo, or draft a patch from the current file while protecting your voice and intent."
 #define CHAT_EMPTY_HINT         L"Paste screenshots, drop files, or use search to pull repo context into the thread."
 #define CHAT_COMPOSER_TAG_H     20
 #define CHAT_COMPOSER_HINT_H    16
@@ -221,6 +221,7 @@ static HFONT    s_hFontInput   = NULL;
 static HFONT    s_hFontStatus  = NULL;
 static HFONT    s_hFontLabel   = NULL;
 static HFONT    s_hFontBubble  = NULL;
+static HFONT    s_hFontBrandWordmark = NULL;
 
 // Logo icon
 static HICON    s_hIconLogo    = NULL;
@@ -1234,6 +1235,11 @@ static void CreateFonts(void)
     s_hFontStatus = BikodeTheme_GetFont(BKFONT_MONO_SMALL);
     s_hFontLabel = BikodeTheme_GetFont(BKFONT_UI_BOLD);
     s_hFontBubble = BikodeTheme_GetFont(BKFONT_UI);
+    s_hFontBrandWordmark = CreateFontW(-23, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        VARIABLE_PITCH | FF_ROMAN, L"Georgia");
+    if (!s_hFontBrandWordmark)
+        s_hFontBrandWordmark = BikodeTheme_GetFont(BKFONT_TITLE);
 }
 
 static void DestroyFonts(void)
@@ -1243,6 +1249,9 @@ static void DestroyFonts(void)
     s_hFontStatus = NULL;
     s_hFontLabel = NULL;
     s_hFontBubble = NULL;
+    if (s_hFontBrandWordmark && s_hFontBrandWordmark != BikodeTheme_GetFont(BKFONT_TITLE))
+        DeleteObject(s_hFontBrandWordmark);
+    s_hFontBrandWordmark = NULL;
 }
 
 //=============================================================================
@@ -1340,6 +1349,53 @@ static void DrawAddIcon(HDC hdc, int cx, int cy, COLORREF clr)
     MoveToEx(hdc, cx - 6, cy, NULL); LineTo(hdc, cx + 6, cy);
     SelectObject(hdc, hOldPen);
     DeleteObject(hPen);
+}
+
+static int DrawBrandWordmark(HDC hdc, int left, int top)
+{
+    SIZE szBi = { 0 };
+    SIZE szKo = { 0 };
+    SIZE szDe = { 0 };
+    HFONT hOld;
+    int x = left;
+
+    if (s_hIconLogo) {
+        DrawIconEx(hdc, x, top + 2, s_hIconLogo, 18, 18, 0, NULL, DI_NORMAL);
+        x += 24;
+    }
+
+    hOld = (HFONT)SelectObject(hdc, s_hFontBrandWordmark ? s_hFontBrandWordmark : s_hFontHeader);
+    SetBkMode(hdc, TRANSPARENT);
+    GetTextExtentPoint32W(hdc, L"Bi", 2, &szBi);
+    GetTextExtentPoint32W(hdc, L"ko", 2, &szKo);
+    GetTextExtentPoint32W(hdc, L"de.", 3, &szDe);
+
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+    TextOutW(hdc, x, top, L"Bi", 2);
+    x += szBi.cx;
+
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN));
+    TextOutW(hdc, x, top, L"ko", 2);
+    x += szKo.cx;
+
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+    TextOutW(hdc, x, top, L"de.", 3);
+    x += szDe.cx + 8;
+
+    SelectObject(hdc, hOld);
+
+    {
+        RECT rcAI = { x, top + 3, x + 42, top + 21 };
+        BikodeTheme_DrawChip(hdc, &rcAI, L"AI",
+            BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
+            BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+            BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
+            BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE,
+            BikodeTheme_GetColor(BKCLR_HOT_MAGENTA));
+        x = rcAI.right;
+    }
+
+    return x;
 }
 
 static void DrawButtonFace(HDC hdc, const RECT* rc, BOOL hover, BOOL down, BOOL primary)
@@ -1583,6 +1639,7 @@ static void PaintMissionEmptyState(HDC hdc, int cx, int cy)
     int contentLeft;
     int contentRight;
     int contentWidth;
+    int brandH = 28;
     int titleH;
     int bodyH;
     int hintH;
@@ -1612,7 +1669,7 @@ static void PaintMissionEmptyState(HDC hdc, int cx, int cy)
     if (contentWidth <= 40)
         return;
 
-    titleH = max(28, MeasureWrappedTextHeight(hdc, BikodeTheme_GetFont(BKFONT_TITLE),
+    titleH = max(18, MeasureWrappedTextHeight(hdc, BikodeTheme_GetFont(BKFONT_MONO),
         CHAT_EMPTY_TITLE, contentWidth));
     bodyH = MeasureWrappedTextHeight(hdc, BikodeTheme_GetFont(BKFONT_UI),
         CHAT_EMPTY_BODY,
@@ -1635,7 +1692,7 @@ static void PaintMissionEmptyState(HDC hdc, int cx, int cy)
     }
     chipBottom = chipY + CHAT_EMPTY_CHIP_H;
 
-    curY = 18 + 24 + 14 + titleH + 8 + bodyH + 12 + chipBottom + 12 + hintH + 16;
+    curY = 18 + 24 + 14 + brandH + 8 + titleH + 8 + bodyH + 12 + chipBottom + 12 + hintH + 16;
     rcHero.bottom = min(cy - CHAT_EMPTY_CARD_INSET, rcHero.top + max(curY, 228));
 
     BikodeTheme_DrawCutCornerPanel(hdc, &rcHero,
@@ -1668,13 +1725,16 @@ static void PaintMissionEmptyState(HDC hdc, int cx, int cy)
         BikodeTheme_GetColor(BKCLR_HOT_MAGENTA));
 
     curY = rcEyebrow.bottom + 14;
+    DrawBrandWordmark(hdc, contentLeft, curY);
+    curY += brandH;
+
     rcTitle.left = contentLeft;
     rcTitle.top = curY;
     rcTitle.right = contentRight;
     rcTitle.bottom = rcTitle.top + titleH;
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
-    SelectObject(hdc, BikodeTheme_GetFont(BKFONT_TITLE));
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
+    SelectObject(hdc, BikodeTheme_GetFont(BKFONT_MONO));
     DrawTextW(hdc, CHAT_EMPTY_TITLE, -1, &rcTitle,
         DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
 
@@ -2570,18 +2630,29 @@ void ChatPanel_Toggle(HWND hwndParent)
     else ChatPanel_Show(hwndParent);
 }
 
-void ChatPanel_Show(HWND hwndParent)
+static void ChatPanel_ShowInternal(HWND hwndParent, BOOL focusInput)
 {
     if (!s_hwndPanel) ChatPanel_Create(hwndParent);
     if (s_hwndPanel) {
-        ShowWindow(s_hwndPanel, SW_SHOW);
+        ShowWindow(s_hwndPanel, focusInput ? SW_SHOW : SW_SHOWNA);
         s_bVisible = TRUE;
         RECT rc;
         GetClientRect(hwndParent, &rc);
         SendMessage(hwndParent, WM_SIZE, SIZE_RESTORED,
                     MAKELPARAM(rc.right - rc.left, rc.bottom - rc.top));
-        ChatPanel_FocusInput();
+        if (focusInput)
+            ChatPanel_FocusInput();
     }
+}
+
+void ChatPanel_Show(HWND hwndParent)
+{
+    ChatPanel_ShowInternal(hwndParent, TRUE);
+}
+
+void ChatPanel_ShowPassive(HWND hwndParent)
+{
+    ChatPanel_ShowInternal(hwndParent, FALSE);
 }
 
 void ChatPanel_Hide(void)
@@ -2989,8 +3060,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             int statusW;
             int availableChipsW;
             int totalChipW;
-            int iconX = 14;
-            int iconY = 11;
+            int chipsLeft;
 
             rcHeaderCard.left = 8;
             rcHeaderCard.top = 4;
@@ -3012,16 +3082,8 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
                 FillRect(hm, &rcAccent, hAcc);
                 DeleteObject(hAcc);
             }
-            if (s_hIconLogo)
-                DrawIconEx(hm, iconX, iconY, s_hIconLogo,
-                           18, 18, 0, NULL, DI_NORMAL);
-
-            if (s_hFontHeader) SelectObject(hm, s_hFontHeader);
-            SetTextColor(hm, CP_TEXT_PRIMARY);
-            RECT rcTitle = { iconX + 18 + 8, rcHeaderCard.top + 2,
-                             s_rcCloseBtn.left - 10, rcHeaderCard.top + 22 };
-            DrawTextW(hm, L"Bikode AI", -1, &rcTitle,
-                      DT_SINGLELINE | DT_VCENTER | DT_LEFT);
+            chipsLeft = rcHeaderCard.left + 14;
+            DrawBrandWordmark(hm, chipsLeft, rcHeaderCard.top + 3);
 
             BuildMissionModelLabel(wszModel, ARRAYSIZE(wszModel));
             BuildMissionStatusLabel(wszStatus, ARRAYSIZE(wszStatus), &statusAccent, &progressPct);
@@ -3038,7 +3100,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             modelW = min(126, max(84, MeasureThemeTextWidth(hm, BikodeTheme_GetFont(BKFONT_MONO_SMALL), wszModel) + 26));
             contextW = min(116, max(84, MeasureThemeTextWidth(hm, BikodeTheme_GetFont(BKFONT_MONO_SMALL), wszContext) + 26));
             statusW = min(112, max(84, MeasureThemeTextWidth(hm, BikodeTheme_GetFont(BKFONT_UI_SMALL), wszStatus) + 26));
-            availableChipsW = (s_rcCloseBtn.left - 8) - rcTitle.left;
+            availableChipsW = (s_rcCloseBtn.left - 8) - chipsLeft;
             totalChipW = modelW + contextW + statusW + 12;
             if (totalChipW > availableChipsW)
             {
@@ -3053,8 +3115,8 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
                 statusW -= shrink;
             }
 
-            rcModel.left = rcTitle.left;
-            rcModel.top = rcTitle.bottom + 3;
+            rcModel.left = chipsLeft;
+            rcModel.top = rcHeaderCard.top + 24;
             rcModel.right = rcModel.left + modelW;
             rcModel.bottom = rcModel.top + 20;
             rcContext = rcModel;
@@ -3083,7 +3145,7 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
                 BikodeTheme_GetFont(BKFONT_UI_SMALL), TRUE,
                 statusAccent);
 
-            rcProgress.left = rcTitle.left;
+            rcProgress.left = chipsLeft;
             rcProgress.right = s_rcCloseBtn.left - 8;
             rcProgress.top = rcStatus.bottom + 5;
             rcProgress.bottom = rcProgress.top + 4;

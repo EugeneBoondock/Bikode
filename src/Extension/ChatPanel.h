@@ -48,6 +48,7 @@ void    ChatPanel_Toggle(HWND hwndParent);
 
 // Show/hide explicitly.
 void    ChatPanel_Show(HWND hwndParent);
+void    ChatPanel_ShowPassive(HWND hwndParent);
 void    ChatPanel_Hide(void);
 
 BOOL    ChatPanel_IsVisible(void);

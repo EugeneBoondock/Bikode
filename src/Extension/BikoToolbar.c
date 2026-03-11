@@ -30,8 +30,26 @@ static BOOL s_hoverPreview = FALSE;
 static RECT s_rcPreview = { 0 };
 static BOOL s_hoverOpen = FALSE;
 static RECT s_rcOpen = { 0 };
+static HICON s_hBrandIcon = NULL;
+static HFONT s_hBrandFont = NULL;
 
 static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+
+static void EnsureBrandAssets(void)
+{
+    if (!s_hBrandFont) {
+        s_hBrandFont = CreateFontW(-19, 0, 0, 0, FW_HEAVY, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            VARIABLE_PITCH | FF_SWISS, L"Segoe UI Black");
+        if (!s_hBrandFont)
+            s_hBrandFont = BikodeTheme_GetFont(BKFONT_UI_BOLD);
+    }
+
+    if (!s_hBrandIcon) {
+        s_hBrandIcon = (HICON)LoadImageW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDR_MAINWND),
+            IMAGE_ICON, 20, 20, LR_DEFAULTCOLOR);
+    }
+}
 
 static int MeasureTextWidth(HDC hdc, HFONT hFont, LPCWSTR text)
 {
@@ -83,7 +101,7 @@ static void BuildWorkspaceChip(WCHAR* wszBuf, int cchBuf)
     }
     leaf = wcsrchr(root, L'\\');
     leaf = (leaf && leaf[1]) ? leaf + 1 : root;
-    _snwprintf_s(wszBuf, cchBuf, _TRUNCATE, L"WS %s", leaf);
+    swprintf_s(wszBuf, cchBuf, L"WS %s", leaf);
 }
 
 static int DrawChipAuto(HDC hdc, int right, int top, LPCWSTR text, COLORREF accent, BOOL strong)
@@ -103,6 +121,42 @@ static int DrawChipAuto(HDC hdc, int right, int top, LPCWSTR text, COLORREF acce
         strong ? BikodeTheme_GetFont(BKFONT_UI_SMALL) : BikodeTheme_GetFont(BKFONT_MONO_SMALL),
         TRUE, accent);
     return width;
+}
+
+static int DrawBrandWordmark(HDC hdc, int left, int top)
+{
+    SIZE szBi = { 0 };
+    SIZE szKo = { 0 };
+    SIZE szDe = { 0 };
+    HFONT hOld;
+    int iconSz = 20;
+    int textX;
+    int textY = top + 5;
+
+    EnsureBrandAssets();
+    hOld = (HFONT)SelectObject(hdc, s_hBrandFont);
+    GetTextExtentPoint32W(hdc, L"BI", 2, &szBi);
+    GetTextExtentPoint32W(hdc, L"KO", 2, &szKo);
+    GetTextExtentPoint32W(hdc, L"DE", 2, &szDe);
+
+    if (s_hBrandIcon)
+        DrawIconEx(hdc, left, top + 6, s_hBrandIcon, iconSz, iconSz, 0, NULL, DI_NORMAL);
+
+    textX = left + (s_hBrandIcon ? iconSz + 8 : 0);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+    TextOutW(hdc, textX, textY, L"BI", 2);
+
+    textX += szBi.cx;
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN));
+    TextOutW(hdc, textX, textY, L"KO", 2);
+
+    textX += szKo.cx;
+    SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+    TextOutW(hdc, textX, textY, L"DE", 2);
+
+    SelectObject(hdc, hOld);
+    return (s_hBrandIcon ? iconSz + 8 : 0) + szBi.cx + szKo.cx + szDe.cx;
 }
 
 static void Paint(HWND hwnd, HDC hdc)
@@ -147,18 +201,12 @@ static void Paint(HWND hwnd, HDC hdc)
     BuildWorkspaceChip(wszWorkspace, ARRAYSIZE(wszWorkspace));
     AICommands_GetStatusText(wszAI, ARRAYSIZE(wszAI));
 
-    rcBrand.left = 8;
-    rcBrand.top = 5;
-    rcBrand.right = 84;
-    rcBrand.bottom = height - 5;
-    BikodeTheme_DrawChip(mem, &rcBrand, L"BIKODE",
-        BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 48),
-        BikodeTheme_GetColor(BKCLR_STROKE_DARK),
-        BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
-        BikodeTheme_GetFont(BKFONT_TITLE), TRUE,
-        BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+    rcBrand.left = 10;
+    rcBrand.top = 0;
+    rcBrand.right = rcBrand.left + DrawBrandWordmark(mem, rcBrand.left, rcBrand.top);
+    rcBrand.bottom = height;
 
-    rcProject.left = rcBrand.right + 10;
+    rcProject.left = rcBrand.right + 14;
     rcProject.top = 0;
     rcProject.right = rcProject.left + 220;
     rcProject.bottom = height;
@@ -346,6 +394,14 @@ void BikoToolbar_Destroy(void)
         DestroyWindow(s_hwnd);
         s_hwnd = NULL;
     }
+    if (s_hBrandIcon) {
+        DestroyIcon(s_hBrandIcon);
+        s_hBrandIcon = NULL;
+    }
+    if (s_hBrandFont && s_hBrandFont != BikodeTheme_GetFont(BKFONT_UI_BOLD)) {
+        DeleteObject(s_hBrandFont);
+    }
+    s_hBrandFont = NULL;
 }
 
 int BikoToolbar_GetHeight(void)
