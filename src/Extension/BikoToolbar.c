@@ -16,6 +16,7 @@
 #include "PreviewTab.h"
 #include "../resource.h"
 #include <windowsx.h>
+#include <stdio.h>
 #include <string.h>
 
 extern WCHAR szCurFile[MAX_PATH + 40];
@@ -30,8 +31,14 @@ static BOOL s_hoverPreview = FALSE;
 static RECT s_rcPreview = { 0 };
 static BOOL s_hoverOpen = FALSE;
 static RECT s_rcOpen = { 0 };
+static BOOL s_hoverThemeSun = FALSE;
+static BOOL s_hoverThemeMoon = FALSE;
+static RECT s_rcThemeDock = { 0 };
+static RECT s_rcThemeSun = { 0 };
+static RECT s_rcThemeMoon = { 0 };
 static HICON s_hBrandIcon = NULL;
 static HFONT s_hBrandFont = NULL;
+static HFONT s_hThemeGlyphFont = NULL;
 
 static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 
@@ -48,6 +55,12 @@ static void EnsureBrandAssets(void)
     if (!s_hBrandIcon) {
         s_hBrandIcon = (HICON)LoadImageW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDR_MAINWND),
             IMAGE_ICON, 20, 20, LR_DEFAULTCOLOR);
+    }
+
+    if (!s_hThemeGlyphFont) {
+        s_hThemeGlyphFont = CreateFontW(-15, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+            VARIABLE_PITCH | FF_DONTCARE, L"Segoe UI Symbol");
     }
 }
 
@@ -159,6 +172,89 @@ static int DrawBrandWordmark(HDC hdc, int left, int top)
     return (s_hBrandIcon ? iconSz + 8 : 0) + szBi.cx + szKo.cx + szDe.cx;
 }
 
+static void DrawThemeGlyph(HDC hdc, const RECT* rc, BOOL sun, COLORREF color)
+{
+    HFONT hOld;
+
+    if (!rc)
+        return;
+
+    EnsureBrandAssets();
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, color);
+    hOld = (HFONT)SelectObject(hdc, s_hThemeGlyphFont ? s_hThemeGlyphFont : BikodeTheme_GetFont(BKFONT_UI_BOLD));
+    DrawTextW(hdc, sun ? L"\x2600" : L"\x263D", 1, (LPRECT)rc,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(hdc, hOld);
+}
+
+static void PaintThemeToggle(HDC hdc, const RECT* rcDock)
+{
+    RECT rcSun;
+    RECT rcMoon;
+    RECT rcGlyph;
+    BOOL darkEnabled = DarkMode_IsEnabled();
+    COLORREF dockFill = BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), BikodeTheme_GetColor(BKCLR_APP_BG), 228);
+    COLORREF dockInner = BikodeTheme_GetColor(BKCLR_STROKE_SOFT);
+    COLORREF sunAccent = BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW);
+    COLORREF moonAccent = BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
+    COLORREF fill;
+    COLORREF border;
+    COLORREF glyph;
+
+    if (!rcDock)
+        return;
+
+    s_rcThemeDock = *rcDock;
+    BikodeTheme_DrawRoundedPanel(hdc, rcDock, dockFill,
+        BikodeTheme_GetColor(BKCLR_STROKE_DARK), dockInner,
+        BikodeTheme_GetMetric(BKMETRIC_RADIUS_BUTTON), FALSE);
+
+    rcSun = *rcDock;
+    rcMoon = *rcDock;
+    InflateRect(&rcSun, -3, -3);
+    InflateRect(&rcMoon, -3, -3);
+    rcSun.right = rcDock->left + ((rcDock->right - rcDock->left) / 2) - 1;
+    rcMoon.left = rcSun.right + 2;
+
+    s_rcThemeSun = rcSun;
+    s_rcThemeMoon = rcMoon;
+
+    fill = (!darkEnabled)
+        ? BikodeTheme_Mix(sunAccent, BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 96)
+        : (s_hoverThemeSun
+            ? BikodeTheme_Mix(sunAccent, BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 34)
+            : dockFill);
+    border = (!darkEnabled) ? sunAccent
+        : (s_hoverThemeSun ? BikodeTheme_Mix(sunAccent, BikodeTheme_GetColor(BKCLR_STROKE_SOFT), 120) : dockFill);
+    glyph = (!darkEnabled)
+        ? BikodeTheme_GetColor(BKCLR_STROKE_DARK)
+        : (s_hoverThemeSun ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY) : BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
+    if (!darkEnabled || s_hoverThemeSun) {
+        BikodeTheme_DrawRoundedPanel(hdc, &rcSun, fill, fill, border,
+            BikodeTheme_GetMetric(BKMETRIC_RADIUS_BUTTON) - 2, FALSE);
+    }
+    rcGlyph = rcSun;
+    DrawThemeGlyph(hdc, &rcGlyph, TRUE, glyph);
+
+    fill = darkEnabled
+        ? BikodeTheme_Mix(moonAccent, BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 76)
+        : (s_hoverThemeMoon
+            ? BikodeTheme_Mix(moonAccent, BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 30)
+            : dockFill);
+    border = darkEnabled ? moonAccent
+        : (s_hoverThemeMoon ? BikodeTheme_Mix(moonAccent, BikodeTheme_GetColor(BKCLR_STROKE_SOFT), 116) : dockFill);
+    glyph = darkEnabled
+        ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY)
+        : (s_hoverThemeMoon ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY) : BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
+    if (darkEnabled || s_hoverThemeMoon) {
+        BikodeTheme_DrawRoundedPanel(hdc, &rcMoon, fill, fill, border,
+            BikodeTheme_GetMetric(BKMETRIC_RADIUS_BUTTON) - 2, FALSE);
+    }
+    rcGlyph = rcMoon;
+    DrawThemeGlyph(hdc, &rcGlyph, FALSE, glyph);
+}
+
 static void Paint(HWND hwnd, HDC hdc)
 {
     RECT rc;
@@ -172,6 +268,7 @@ static void Paint(HWND hwnd, HDC hdc)
     int height = BikodeTheme_GetMetric(BKMETRIC_TITLE_HEIGHT);
     int chipRight;
     int commandW;
+    int themeW = 74;
 
     GetClientRect(hwnd, &rc);
     if (rc.right <= 0 || rc.bottom <= 0)
@@ -215,7 +312,13 @@ static void Paint(HWND hwnd, HDC hdc)
     SelectObject(mem, BikodeTheme_GetFont(BKFONT_UI_BOLD));
     DrawTextW(mem, wszProject, -1, &rcProject, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
-    chipRight = rc.right - 10;
+    s_rcThemeDock.right = rc.right - 10;
+    s_rcThemeDock.left = s_rcThemeDock.right - themeW;
+    s_rcThemeDock.top = 4;
+    s_rcThemeDock.bottom = height - 4;
+    PaintThemeToggle(mem, &s_rcThemeDock);
+
+    chipRight = s_rcThemeDock.left - 10;
     chipRight -= DrawChipAuto(mem, chipRight, 5, wszAI, BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), TRUE) + 8;
     chipRight -= DrawChipAuto(mem, chipRight, 5, (branch && *branch) ? branch : L"No Branch", BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), FALSE) + 8;
     chipRight -= DrawChipAuto(mem, chipRight, 5, wszWorkspace, BikodeTheme_GetColor(BKCLR_HOT_MAGENTA), FALSE) + 8;
@@ -305,15 +408,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         BOOL hoverCommand = PtInRect(&s_rcCommand, pt);
         BOOL hoverPreview = PtInRect(&s_rcPreview, pt);
         BOOL hoverOpen = PtInRect(&s_rcOpen, pt);
+        BOOL hoverThemeSun = PtInRect(&s_rcThemeSun, pt);
+        BOOL hoverThemeMoon = PtInRect(&s_rcThemeMoon, pt);
         if (!s_tracking) {
             TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
             TrackMouseEvent(&tme);
             s_tracking = TRUE;
         }
-        if (hoverCommand != s_hoverCommand || hoverPreview != s_hoverPreview || hoverOpen != s_hoverOpen) {
+        if (hoverCommand != s_hoverCommand || hoverPreview != s_hoverPreview ||
+            hoverOpen != s_hoverOpen || hoverThemeSun != s_hoverThemeSun ||
+            hoverThemeMoon != s_hoverThemeMoon) {
             s_hoverCommand = hoverCommand;
             s_hoverPreview = hoverPreview;
             s_hoverOpen = hoverOpen;
+            s_hoverThemeSun = hoverThemeSun;
+            s_hoverThemeMoon = hoverThemeMoon;
             InvalidateRect(hwnd, NULL, FALSE);
         }
         return 0;
@@ -324,11 +433,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         s_hoverCommand = FALSE;
         s_hoverPreview = FALSE;
         s_hoverOpen = FALSE;
+        s_hoverThemeSun = FALSE;
+        s_hoverThemeMoon = FALSE;
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
 
     case WM_SETCURSOR:
-        if (LOWORD(lParam) == HTCLIENT && (s_hoverCommand || s_hoverPreview || s_hoverOpen)) {
+        if (LOWORD(lParam) == HTCLIENT &&
+            (s_hoverCommand || s_hoverPreview || s_hoverOpen || s_hoverThemeSun || s_hoverThemeMoon)) {
             SetCursor(LoadCursor(NULL, IDC_HAND));
             return TRUE;
         }
@@ -347,6 +459,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         if (PtInRect(&s_rcOpen, pt)) {
             FileManager_BrowseForFolder(GetParent(hwnd));
+            return 0;
+        }
+        if (PtInRect(&s_rcThemeSun, pt)) {
+            if (DarkMode_IsEnabled()) {
+                PostMessage(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(IDM_VIEW_DARKMODE, 0), 0);
+            }
+            return 0;
+        }
+        if (PtInRect(&s_rcThemeMoon, pt)) {
+            if (!DarkMode_IsEnabled()) {
+                PostMessage(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(IDM_VIEW_DARKMODE, 0), 0);
+            }
             return 0;
         }
         break;
@@ -402,6 +526,10 @@ void BikoToolbar_Destroy(void)
         DeleteObject(s_hBrandFont);
     }
     s_hBrandFont = NULL;
+    if (s_hThemeGlyphFont) {
+        DeleteObject(s_hThemeGlyphFont);
+        s_hThemeGlyphFont = NULL;
+    }
 }
 
 int BikoToolbar_GetHeight(void)
