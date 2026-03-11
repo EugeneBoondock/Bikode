@@ -5002,7 +5002,7 @@ LRESULT MsgCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
 
 
     case IDM_HELP_MANUAL:
-      if ((int)ShellExecute(hwnd, L"open", L"https://github.com/boondocklabs/bikode#readme", NULL, NULL, SW_SHOWNORMAL) <= 32)
+      if ((int)ShellExecute(hwnd, L"open", L"https://www.bikode.co.za/", NULL, NULL, SW_SHOWNORMAL) <= 32)
       {
         SendMessage(hwndMain, WM_COMMAND, MAKELONG(IDM_HELP_ABOUT, 1), 0);
       }

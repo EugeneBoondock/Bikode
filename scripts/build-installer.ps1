@@ -3,6 +3,7 @@ param(
     [string]$Configuration = "Release",
     [ValidateSet("x64", "Win32")]
     [string]$Platform = "x64",
+    [string]$OutputBaseName,
     [switch]$SkipBuild
 )
 
@@ -48,6 +49,27 @@ function Get-ISCCPath {
     throw "ISCC.exe was not found. Install Inno Setup 6."
 }
 
+function Remove-StaleInstallers {
+    param(
+        [string]$Directory,
+        [string]$KeepFileName
+    )
+
+    if (-not (Test-Path $Directory)) {
+        return
+    }
+
+    Get-ChildItem -Path $Directory -Filter "Bikode-Setup-*.exe" -File |
+        Where-Object { $_.Name -ne $KeepFileName } |
+        ForEach-Object {
+            try {
+                Remove-Item -Path $_.FullName -Force
+            } catch {
+                Write-Warning ("Could not remove old installer: {0}" -f $_.FullName)
+            }
+        }
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $projectFile = Join-Path $repoRoot "Notepad2e.vcxproj"
 $outputDir = Join-Path $repoRoot ("bin\{0}\{1}" -f $Platform, $Configuration)
@@ -55,6 +77,7 @@ $exePath = Join-Path $outputDir "Bikode.exe"
 $iniPath = Join-Path $outputDir "Bikode.ini"
 $defaultIniPath = Join-Path $repoRoot "bin\Bikode.ini"
 $installerScript = Join-Path $repoRoot "installer\Bikode.iss"
+$artScript = Join-Path $repoRoot "scripts\generate-installer-art.ps1"
 $distDir = Join-Path $repoRoot "dist"
 $buildArch = if ($Platform -eq "x64") { "x64" } else { "x86" }
 
@@ -64,6 +87,10 @@ if (-not (Test-Path $projectFile)) {
 
 if (-not (Test-Path $installerScript)) {
     throw "Installer script not found: $installerScript"
+}
+
+if (-not (Test-Path $artScript)) {
+    throw "Installer art script not found: $artScript"
 }
 
 if (-not $SkipBuild) {
@@ -97,8 +124,25 @@ if ([string]::IsNullOrWhiteSpace($appVersion)) {
     $appVersion = "0.0.0"
 }
 $appVersion = $appVersion.Trim()
+$defaultOutputBaseName = "Bikode-Setup-{0}-{1}" -f $appVersion, $buildArch
+$resolvedOutputBaseName = if ([string]::IsNullOrWhiteSpace($OutputBaseName)) {
+    $defaultOutputBaseName
+} else {
+    $OutputBaseName.Trim()
+}
+$targetInstaller = Join-Path $distDir ($resolvedOutputBaseName + ".exe")
 
 New-Item -ItemType Directory -Path $distDir -Force | Out-Null
+
+if (Test-Path $targetInstaller) {
+    try {
+        Remove-Item -Path $targetInstaller -Force
+    } catch {
+        throw "Close the existing installer before rebuilding: $targetInstaller"
+    }
+}
+
+& $artScript -ProjectRoot $repoRoot
 
 $iscc = Get-ISCCPath
 $isccArgs = @(
@@ -106,13 +150,17 @@ $isccArgs = @(
     "/DBuildArch=$buildArch",
     "/DSourceDir=$outputDir",
     "/DProjectRoot=$repoRoot",
-    "/DOutputDir=$distDir",
-    $installerScript
+    "/DOutputDir=$distDir"
+    "/DOutputBaseName=$resolvedOutputBaseName"
 )
+
+$isccArgs += $installerScript
 
 & $iscc @isccArgs
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup build failed with exit code $LASTEXITCODE."
 }
 
-Write-Host "Installer created in $distDir"
+Remove-StaleInstallers -Directory $distDir -KeepFileName ([System.IO.Path]::GetFileName($targetInstaller))
+
+Write-Host "Installer created: $targetInstaller"

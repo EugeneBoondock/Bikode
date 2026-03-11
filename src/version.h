@@ -29,6 +29,10 @@
 #define VERSION_FILEVERSION_SHORT    L"1." VERSION_FILEVERSION_BUILD_STRING
 #define VERSION_LEGALCOPYRIGHT_SHORT L"Copyright � 2004-2011"
 #define VERSION_LEGALCOPYRIGHT_LONG  L"� Florian Balmer and contributors"
+#define VERSION_COMPANYNAME          L"Boondock Labs"
+#define VERSION_PRODUCTNAME          L"Bikode"
+#define VERSION_COMPANYURL           L"https://boondocklabs.co.za/"
+#define VERSION_PRODUCTURL           L"https://www.bikode.co.za/"
 #if defined(ICU_BUILD) && defined(LPEG_LEXER)
 #define VERSION_FILEDESCRIPTION_BASE L"Bikode"
 #elif ICU_BUILD
@@ -56,10 +60,10 @@
 #define VERSION_INTERNALNAME         L"Bikode"
 #define VERSION_ORIGINALFILENAME     L"Bikode.exe"
 #endif
-#define VERSION_AUTHORNAME           L"Florian Balmer"
-#define VERSION_WEBPAGEDISPLAY       L"flo's freeware - http://www.flos-freeware.ch"
+#define VERSION_AUTHORNAME           VERSION_COMPANYNAME
+#define VERSION_WEBPAGEDISPLAY       L"Boondock Labs - https://boondocklabs.co.za/"
 #define VERSION_EMAILDISPLAY         L"florian.balmer@gmail.com"
 #define VERSION_EXT_VERSION          L"Extended Edition � 2013-"BUILD_YEAR_STR
-#define VERSION_EXT_BY               L"By BoondockLabs (wrapper around Notepad2e)"
-#define VERSION_EXT_PAGE             L"https://github.com/boondocklabs/bikode"
+#define VERSION_EXT_BY               L"Built by Boondock Labs - https://boondocklabs.co.za/"
+#define VERSION_EXT_PAGE             VERSION_PRODUCTURL
 #define VERSION_COMMIT               L"6c3f5ac"

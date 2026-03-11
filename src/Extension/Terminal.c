@@ -18,6 +18,9 @@
 ******************************************************************************/
 
 #include "Terminal.h"
+#include "AIBridge.h"
+#include "AIDirectCall.h"
+#include "mono_json.h"
 #include "ui/theme/BikodeTheme.h"
 #include "DarkMode.h"
 #include "CommonUtils.h"
@@ -25,6 +28,7 @@
 #include <shlwapi.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -52,6 +56,10 @@ static BOOL g_havePTY = FALSE;
 #define TIMER_HEALTH          1
 #define TIMER_BLINK           2
 #define WM_TERMDATA           (WM_USER + 200)
+#define TERM_INPUT_MAX        512
+#define TERM_CMD_MAX          1024
+#define TERM_AI_PROMPT_MAX    4096
+#define TERM_AI_OUTPUT_MAX    4096
 
 /* colours */
 #define C_DKBG     RGB(24,24,24)
@@ -498,6 +506,25 @@ static BOOL g_hoverClose = FALSE, g_hoverNew = FALSE, g_hoverDrop = FALSE;
 static BOOL g_selecting = FALSE, g_hasSel = FALSE;
 static int  g_selSR, g_selSC, g_selER, g_selEC;
 
+typedef enum {
+    TERM_AI_IDLE = 0,
+    TERM_AI_TRANSLATE,
+    TERM_AI_CORRECT
+} TermAIRequestMode;
+
+typedef struct {
+    BOOL              bPending;
+    BOOL              bCommandFailureSuggested;
+    TermAIRequestMode mode;
+    WCHAR             wszInputLine[TERM_INPUT_MAX];
+    int               cchInputLine;
+    WCHAR             wszLastSubmitted[TERM_INPUT_MAX];
+    char              szLastSubmitted[TERM_CMD_MAX];
+    char              szRecentOutput[TERM_AI_OUTPUT_MAX];
+} TerminalAIState;
+
+static TerminalAIState g_termAI = {0};
+
 /* Forward declarations */
 static LRESULT CALLBACK PanelProc(HWND, UINT, WPARAM, LPARAM);
 static LRESULT CALLBACK ViewProc(HWND, UINT, WPARAM, LPARAM);
@@ -506,6 +533,10 @@ static BOOL    ShellCreate(Term*, COORD, ShellKind);
 static void    ShellKill(Term*);
 static void    ShellDetect(void);
 static void    ShowShellMenu(HWND);
+static void    TerminalAI_ResetInputLine(void);
+static void    TerminalAI_RecordSubmittedUtf8(const char* cmd);
+static BOOL    TerminalAI_StartSuggestion(HWND hwnd, TermAIRequestMode mode, const WCHAR* wszInput, const char* pszFailure);
+static void    TerminalAI_HandleSuggestionResponse(HWND hwnd, char* pszResponse);
 
 /* ═══════════════════════════════════════════════════════════════════
  * Window class registration
@@ -733,6 +764,7 @@ static BOOL ShellCreate(Term *t, COORD sz, ShellKind sh) {
  * ═══════════════════════════════════════════════════════════════════ */
 static void ShellKill(Term *t) {
     if (!t) return;
+    ZeroMemory(&g_termAI, sizeof(g_termAI));
     InterlockedExchange(&t->alive, FALSE);
     if (t->hPC && pfnClosePC) { pfnClosePC(t->hPC); t->hPC = NULL; }
     if (t->hPipeWr) { CloseHandle(t->hPipeWr); t->hPipeWr = NULL; }
@@ -841,6 +873,7 @@ static BOOL Spawn(HWND hwndParent, ShellKind sh) {
 
     g_curShell = sh;
     g_activeSessionId = ++g_sessionCounter;
+    ZeroMemory(&g_termAI, sizeof(g_termAI));
     InvalidateRect(g_hwndPanel, NULL, TRUE);
     return TRUE;
 }
@@ -936,6 +969,7 @@ void Terminal_Write(const char *d, int n) {
 
 void Terminal_SendCommand(const char *c) {
     if (!c) return;
+    TerminalAI_RecordSubmittedUtf8(c);
     Terminal_Write(c, (int)strlen(c));
     Terminal_Write("\r\n", 2);
 }
@@ -1068,6 +1102,574 @@ static COLORREF ToneAccent(RowTone tone) {
     default:
         return RGB(0, 0, 0);
     }
+}
+
+static BOOL TerminalAI_IsSpaceW(WCHAR ch) {
+    return ch == L' ' || ch == L'\t' || ch == L'\r' || ch == L'\n';
+}
+
+static BOOL TerminalAI_IsSpaceA(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
+static void TerminalAI_TrimWideInPlace(WCHAR* wszText) {
+    int start = 0;
+    int end;
+    if (!wszText) return;
+
+    while (wszText[start] && TerminalAI_IsSpaceW(wszText[start]))
+        start++;
+    if (start > 0)
+        MoveMemory(wszText, wszText + start, (lstrlenW(wszText + start) + 1) * sizeof(WCHAR));
+
+    end = lstrlenW(wszText);
+    while (end > 0 && TerminalAI_IsSpaceW(wszText[end - 1]))
+        wszText[--end] = 0;
+}
+
+static void TerminalAI_TrimAnsiInPlace(char* szText) {
+    int start = 0;
+    int end;
+    if (!szText) return;
+
+    while (szText[start] && TerminalAI_IsSpaceA(szText[start]))
+        start++;
+    if (start > 0)
+        MoveMemory(szText, szText + start, strlen(szText + start) + 1);
+
+    end = (int)strlen(szText);
+    while (end > 0 && TerminalAI_IsSpaceA(szText[end - 1]))
+        szText[--end] = 0;
+}
+
+static void TerminalAI_ResetInputLine(void) {
+    g_termAI.wszInputLine[0] = 0;
+    g_termAI.cchInputLine = 0;
+}
+
+static void TerminalAI_AppendInputChar(WCHAR wch) {
+    if (g_termAI.cchInputLine >= TERM_INPUT_MAX - 1)
+        return;
+    g_termAI.wszInputLine[g_termAI.cchInputLine++] = wch;
+    g_termAI.wszInputLine[g_termAI.cchInputLine] = 0;
+}
+
+static void TerminalAI_BackspaceInputChar(void) {
+    if (g_termAI.cchInputLine <= 0)
+        return;
+    g_termAI.wszInputLine[--g_termAI.cchInputLine] = 0;
+}
+
+static void TerminalAI_AppendInputText(const WCHAR* wszText) {
+    if (!wszText) return;
+    while (*wszText && g_termAI.cchInputLine < TERM_INPUT_MAX - 1) {
+        if (*wszText == L'\r' || *wszText == L'\n') {
+            TerminalAI_ResetInputLine();
+            return;
+        }
+        g_termAI.wszInputLine[g_termAI.cchInputLine++] = *wszText++;
+    }
+    g_termAI.wszInputLine[g_termAI.cchInputLine] = 0;
+}
+
+static void TerminalAI_CopyGridRowText(Grid* g, int row, WCHAR* wszOut, int cchOut) {
+    int end;
+    if (!wszOut || cchOut <= 0) return;
+    wszOut[0] = 0;
+    if (!g || row < 0 || row >= g->rows) return;
+
+    end = g->cols - 1;
+    while (end >= 0 && GridCell(g, row, end)->ch == L' ')
+        end--;
+    if (end < 0) return;
+
+    for (int c = 0; c <= end && c < cchOut - 1; c++) {
+        WCHAR ch = GridCell(g, row, c)->ch;
+        wszOut[c] = ch ? ch : L' ';
+        wszOut[c + 1] = 0;
+    }
+    TerminalAI_TrimWideInPlace(wszOut);
+}
+
+static void TerminalAI_GetPromptLine(WCHAR* wszOut, int cchOut) {
+    if (!wszOut || cchOut <= 0) return;
+    wszOut[0] = 0;
+    if (!g_term || !g_term->grid) return;
+
+    for (int r = g_term->grid->rows - 1; r >= 0; r--) {
+        int line = GridBase(g_term->grid) + r;
+        if (line < 0 || line >= g_term->grid->used)
+            continue;
+        if (ClassifyRowTone(&g_term->grid->buf[line * g_term->grid->cols], g_term->grid->cols) == ROW_PROMPT) {
+            TerminalAI_CopyGridRowText(g_term->grid, r, wszOut, cchOut);
+            if (wszOut[0])
+                return;
+        }
+    }
+}
+
+static const WCHAR* TerminalAI_FindPromptDelimiter(const WCHAR* wszText) {
+    const WCHAR* wszLast = NULL;
+    if (!wszText) return NULL;
+
+    while (*wszText) {
+        if (*wszText == L'>' || *wszText == L'$' || *wszText == L'#' || *wszText == L'%')
+            wszLast = wszText;
+        wszText++;
+    }
+    return wszLast;
+}
+
+static void TerminalAI_ExtractCommandFromPrompt(const WCHAR* wszPrompt, WCHAR* wszOut, int cchOut) {
+    const WCHAR* wszStart;
+    const WCHAR* wszSplit;
+    if (!wszOut || cchOut <= 0) return;
+    wszOut[0] = 0;
+    if (!wszPrompt || !wszPrompt[0]) return;
+
+    wszStart = wszPrompt;
+    wszSplit = TerminalAI_FindPromptDelimiter(wszPrompt);
+    if (wszSplit && wszSplit[1])
+        wszStart = wszSplit + 1;
+
+    while (*wszStart && TerminalAI_IsSpaceW(*wszStart))
+        wszStart++;
+
+    lstrcpynW(wszOut, wszStart, cchOut);
+    TerminalAI_TrimWideInPlace(wszOut);
+}
+
+static void TerminalAI_GetSubmittedLine(WCHAR* wszOut, int cchOut) {
+    WCHAR wszPrompt[TERM_INPUT_MAX];
+    if (!wszOut || cchOut <= 0) return;
+    wszOut[0] = 0;
+
+    if (g_termAI.wszInputLine[0]) {
+        lstrcpynW(wszOut, g_termAI.wszInputLine, cchOut);
+        TerminalAI_TrimWideInPlace(wszOut);
+        return;
+    }
+
+    TerminalAI_GetPromptLine(wszPrompt, ARRAYSIZE(wszPrompt));
+    TerminalAI_ExtractCommandFromPrompt(wszPrompt, wszOut, cchOut);
+}
+static BOOL TerminalAI_IsKnownCommandToken(const WCHAR* wszToken) {
+    static const WCHAR* commands[] = {
+        L"cd", L"chdir", L"cls", L"clear", L"dir", L"ls", L"pwd", L"echo", L"type",
+        L"cat", L"help", L"man", L"git", L"npm", L"pnpm", L"yarn", L"npx", L"node",
+        L"python", L"py", L"pip", L"pip3", L"uv", L"cargo", L"go", L"make", L"cmake",
+        L"msbuild", L"dotnet", L"java", L"javac", L"gradle", L"mvn", L"bash", L"sh",
+        L"wsl", L"cmd", L"powershell", L"pwsh", L"winget", L"choco", L"scoop",
+        L"mkdir", L"md", L"rmdir", L"rd", L"del", L"rm", L"copy", L"cp", L"move",
+        L"mv", L"ren", L"rename", L"start", L"explorer", L"code", L"where", L"which",
+        L"find", L"findstr", L"grep", L"Get-ChildItem", L"Set-Location", L"Get-Location",
+        L"Get-Content", L"Set-Content", NULL
+    };
+
+    if (!wszToken || !wszToken[0]) return FALSE;
+    for (int i = 0; commands[i]; i++) {
+        if (lstrcmpiW(wszToken, commands[i]) == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static BOOL TerminalAI_IsLikelyShellCommand(const WCHAR* wszLine) {
+    WCHAR wszTrimmed[TERM_INPUT_MAX];
+    WCHAR wszToken[96];
+    int i = 0;
+    int j = 0;
+
+    if (!wszLine || !wszLine[0]) return FALSE;
+    lstrcpynW(wszTrimmed, wszLine, ARRAYSIZE(wszTrimmed));
+    TerminalAI_TrimWideInPlace(wszTrimmed);
+    if (!wszTrimmed[0]) return FALSE;
+
+    if (StrStrW(wszTrimmed, L"&&") || StrStrW(wszTrimmed, L"||") ||
+        wcschr(wszTrimmed, L'|') || wcschr(wszTrimmed, L'>') ||
+        wcschr(wszTrimmed, L'<') || wcschr(wszTrimmed, L';'))
+        return TRUE;
+
+    if ((wszTrimmed[0] == L'.' && (wszTrimmed[1] == L'\\' || wszTrimmed[1] == L'/')) ||
+        wszTrimmed[0] == L'/' || wszTrimmed[0] == L'\\')
+        return TRUE;
+
+    while (wszTrimmed[i] && !TerminalAI_IsSpaceW(wszTrimmed[i]) && j < ARRAYSIZE(wszToken) - 1)
+        wszToken[j++] = wszTrimmed[i++];
+    wszToken[j] = 0;
+
+    if (!wszToken[0])
+        return FALSE;
+    if (wcschr(wszToken, L':') || wcschr(wszToken, L'\\') || wcschr(wszToken, L'/'))
+        return TRUE;
+    if (TerminalAI_IsKnownCommandToken(wszToken))
+        return TRUE;
+
+    if (!wcschr(wszTrimmed, L' '))
+        return TRUE;
+
+    if (wcschr(wszTrimmed, L'-') || wcschr(wszTrimmed, L'=') ||
+        wcschr(wszTrimmed, L'%') || wcschr(wszTrimmed, L'$') ||
+        wcschr(wszTrimmed, L'@'))
+        return TRUE;
+
+    return FALSE;
+}
+
+static BOOL TerminalAI_IsLikelyNaturalLanguage(const WCHAR* wszLine) {
+    WCHAR wszTrimmed[TERM_INPUT_MAX];
+    int wordCount = 0;
+    BOOL hasStopWord = FALSE;
+
+    if (!wszLine || !wszLine[0]) return FALSE;
+    lstrcpynW(wszTrimmed, wszLine, ARRAYSIZE(wszTrimmed));
+    TerminalAI_TrimWideInPlace(wszTrimmed);
+    if (!wszTrimmed[0]) return FALSE;
+    if (TerminalAI_IsLikelyShellCommand(wszTrimmed))
+        return FALSE;
+
+    if (wcschr(wszTrimmed, L'?'))
+        return TRUE;
+
+    if (StrStrIW(wszTrimmed, L"can you") || StrStrIW(wszTrimmed, L"could you") ||
+        StrStrIW(wszTrimmed, L"please ") || StrStrIW(wszTrimmed, L"show me") ||
+        StrStrIW(wszTrimmed, L"list ") || StrStrIW(wszTrimmed, L"open ") ||
+        StrStrIW(wszTrimmed, L"run ") || StrStrIW(wszTrimmed, L"build ") ||
+        StrStrIW(wszTrimmed, L"test ") || StrStrIW(wszTrimmed, L"find ") ||
+        StrStrIW(wszTrimmed, L"search ") || StrStrIW(wszTrimmed, L"what ") ||
+        StrStrIW(wszTrimmed, L"where "))
+        return TRUE;
+
+    for (int i = 0; wszTrimmed[i]; ) {
+        while (wszTrimmed[i] && TerminalAI_IsSpaceW(wszTrimmed[i]))
+            i++;
+        if (!wszTrimmed[i])
+            break;
+        wordCount++;
+        if ((wszTrimmed[i] == L't' || wszTrimmed[i] == L'T') && StrCmpNIW(&wszTrimmed[i], L"the", 3) == 0)
+            hasStopWord = TRUE;
+        if ((wszTrimmed[i] == L't' || wszTrimmed[i] == L'T') && StrCmpNIW(&wszTrimmed[i], L"this", 4) == 0)
+            hasStopWord = TRUE;
+        if ((wszTrimmed[i] == L'd' || wszTrimmed[i] == L'D') && StrCmpNIW(&wszTrimmed[i], L"directory", 9) == 0)
+            hasStopWord = TRUE;
+        while (wszTrimmed[i] && !TerminalAI_IsSpaceW(wszTrimmed[i]))
+            i++;
+    }
+
+    return wordCount >= 3 || hasStopWord;
+}
+
+static void TerminalAI_CopyWideToUtf8(const WCHAR* wszText, char* szOut, int cchOut) {
+    if (!szOut || cchOut <= 0) return;
+    szOut[0] = 0;
+    if (!wszText || !wszText[0]) return;
+    WideCharToMultiByte(CP_UTF8, 0, wszText, -1, szOut, cchOut, NULL, NULL);
+}
+
+static void TerminalAI_RecordSubmittedUtf8(const char* cmd) {
+    int n;
+    if (!cmd || !cmd[0]) {
+        g_termAI.wszLastSubmitted[0] = 0;
+        g_termAI.szLastSubmitted[0] = 0;
+        g_termAI.szRecentOutput[0] = 0;
+        g_termAI.bCommandFailureSuggested = FALSE;
+        return;
+    }
+
+    lstrcpynA(g_termAI.szLastSubmitted, cmd, ARRAYSIZE(g_termAI.szLastSubmitted));
+    TerminalAI_TrimAnsiInPlace(g_termAI.szLastSubmitted);
+    n = MultiByteToWideChar(CP_UTF8, 0, g_termAI.szLastSubmitted, -1,
+                            g_termAI.wszLastSubmitted, ARRAYSIZE(g_termAI.wszLastSubmitted));
+    if (n <= 0)
+        g_termAI.wszLastSubmitted[0] = 0;
+    g_termAI.szRecentOutput[0] = 0;
+    g_termAI.bCommandFailureSuggested = FALSE;
+}
+
+static void TerminalAI_AppendOutputChunk(const char* pszText, int cchText) {
+    int curLen;
+    int copyLen;
+    if (!pszText || cchText <= 0)
+        return;
+
+    curLen = (int)strlen(g_termAI.szRecentOutput);
+    copyLen = cchText;
+    if (copyLen >= TERM_AI_OUTPUT_MAX - 1) {
+        pszText += copyLen - (TERM_AI_OUTPUT_MAX - 1);
+        copyLen = TERM_AI_OUTPUT_MAX - 1;
+        curLen = 0;
+    }
+    if (curLen + copyLen >= TERM_AI_OUTPUT_MAX) {
+        int keep = TERM_AI_OUTPUT_MAX - copyLen - 1;
+        if (keep < 0) keep = 0;
+        MoveMemory(g_termAI.szRecentOutput, g_termAI.szRecentOutput + (curLen - keep), keep);
+        g_termAI.szRecentOutput[keep] = 0;
+        curLen = keep;
+    }
+    CopyMemory(g_termAI.szRecentOutput + curLen, pszText, copyLen);
+    g_termAI.szRecentOutput[curLen + copyLen] = 0;
+}
+
+static BOOL TerminalAI_OutputLooksLikeCommandFailure(const char* pszText) {
+    if (!pszText || !pszText[0]) return FALSE;
+    return StrStrIA(pszText, "CommandNotFoundException") != NULL ||
+           StrStrIA(pszText, "is not recognized as the name of a cmdlet") != NULL ||
+           StrStrIA(pszText, "is not recognized as an internal or external command") != NULL ||
+           StrStrIA(pszText, "command not found") != NULL ||
+           StrStrIA(pszText, "No such file or directory") != NULL;
+}
+
+static BOOL TerminalAI_ParseSuggestionJson(const char* pszResponse,
+                                           char* szCommand, int cchCommand,
+                                           char* szReason, int cchReason) {
+    const char* pszJson = pszResponse;
+    JsonReader r;
+    EJsonToken tok;
+
+    if (!pszResponse || !pszResponse[0]) return FALSE;
+    if (!szCommand || cchCommand <= 0 || !szReason || cchReason <= 0) return FALSE;
+    szCommand[0] = 0;
+    szReason[0] = 0;
+
+    while (*pszJson && *pszJson != '{')
+        pszJson++;
+    if (*pszJson != '{')
+        return FALSE;
+    if (!JsonReader_Init(&r, pszJson, (int)strlen(pszJson)))
+        return FALSE;
+    if (JsonReader_Next(&r) != JSON_OBJECT_START)
+        return FALSE;
+
+    while ((tok = JsonReader_Next(&r)) != JSON_OBJECT_END && tok != JSON_ERROR) {
+        const char* key;
+        if (tok != JSON_KEY)
+            continue;
+        key = JsonReader_GetString(&r);
+        tok = JsonReader_Next(&r);
+        if ((strcmp(key, "command") == 0 || strcmp(key, "cmd") == 0) && tok == JSON_STRING) {
+            lstrcpynA(szCommand, JsonReader_GetString(&r), cchCommand);
+        } else if (strcmp(key, "reason") == 0 && tok == JSON_STRING) {
+            lstrcpynA(szReason, JsonReader_GetString(&r), cchReason);
+        } else if (!JsonReader_SkipValue(&r) && JsonReader_IsError(&r)) {
+            break;
+        }
+    }
+
+    TerminalAI_TrimAnsiInPlace(szCommand);
+    TerminalAI_TrimAnsiInPlace(szReason);
+    return szCommand[0] != 0;
+}
+
+static void TerminalAI_UnwrapCommand(char* szCommand) {
+    int len;
+    if (!szCommand || !szCommand[0]) return;
+    TerminalAI_TrimAnsiInPlace(szCommand);
+    len = (int)strlen(szCommand);
+    if (len >= 2 && ((szCommand[0] == '`' && szCommand[len - 1] == '`') ||
+                     (szCommand[0] == '"' && szCommand[len - 1] == '"') ||
+                     (szCommand[0] == '\'' && szCommand[len - 1] == '\''))) {
+        MoveMemory(szCommand, szCommand + 1, len - 2);
+        szCommand[len - 2] = 0;
+    }
+    if (StrStrIA(szCommand, "command:") == szCommand)
+        MoveMemory(szCommand, szCommand + 8, strlen(szCommand + 8) + 1);
+    if (StrStrIA(szCommand, "cmd:") == szCommand)
+        MoveMemory(szCommand, szCommand + 4, strlen(szCommand + 4) + 1);
+    TerminalAI_TrimAnsiInPlace(szCommand);
+}
+
+static BOOL TerminalAI_ParseSuggestionFallback(const char* pszResponse,
+                                               char* szCommand, int cchCommand,
+                                               char* szReason, int cchReason) {
+    const char* start;
+    const char* end;
+    const char* line;
+    int len;
+
+    if (!pszResponse || !pszResponse[0]) return FALSE;
+    szCommand[0] = 0;
+    szReason[0] = 0;
+
+    start = strstr(pszResponse, "```");
+    if (start) {
+        start += 3;
+        while (*start == '\r' || *start == '\n')
+            start++;
+        end = strstr(start, "```");
+        if (end && end > start) {
+            len = (int)min((size_t)(end - start), (size_t)(cchCommand - 1));
+            memcpy(szCommand, start, len);
+            szCommand[len] = 0;
+        }
+    }
+
+    if (!szCommand[0]) {
+        start = strchr(pszResponse, '`');
+        if (start) {
+            start++;
+            end = strchr(start, '`');
+            if (end && end > start) {
+                len = (int)min((size_t)(end - start), (size_t)(cchCommand - 1));
+                memcpy(szCommand, start, len);
+                szCommand[len] = 0;
+            }
+        }
+    }
+
+    if (!szCommand[0]) {
+        line = pszResponse;
+        while (*line == '\r' || *line == '\n')
+            line++;
+        end = line;
+        while (*end && *end != '\r' && *end != '\n')
+            end++;
+        len = (int)min((size_t)(end - line), (size_t)(cchCommand - 1));
+        memcpy(szCommand, line, len);
+        szCommand[len] = 0;
+    }
+
+    TerminalAI_UnwrapCommand(szCommand);
+    if (!szReason[0] && cchReason > 0)
+        lstrcpynA(szReason, "Bikode AI suggested a better terminal command.", cchReason);
+    return szCommand[0] != 0;
+}
+
+static BOOL TerminalAI_ParseSuggestion(const char* pszResponse,
+                                       char* szCommand, int cchCommand,
+                                       char* szReason, int cchReason) {
+    if (TerminalAI_ParseSuggestionJson(pszResponse, szCommand, cchCommand, szReason, cchReason))
+        return TRUE;
+    return TerminalAI_ParseSuggestionFallback(pszResponse, szCommand, cchCommand, szReason, cchReason);
+}
+
+static BOOL TerminalAI_StartSuggestion(HWND hwnd, TermAIRequestMode mode, const WCHAR* wszInput, const char* pszFailure) {
+    WCHAR wszPrompt[TERM_INPUT_MAX] = L"";
+    WCHAR wszCwd[MAX_PATH] = L"";
+    char szShell[64];
+    char szInput[TERM_CMD_MAX];
+    char szPrompt[TERM_CMD_MAX];
+    char szCwd[TERM_CMD_MAX];
+    char szUserPrompt[TERM_AI_PROMPT_MAX];
+    const AIProviderConfig* pCfg;
+    const char* pszSystemPrompt =
+        "You translate terminal intent into exactly one shell command. "
+        "Return JSON only with keys command and reason. "
+        "Respect the named shell. Prefer safe, non-destructive commands. "
+        "If the user typed plain English, translate it into the best command for that shell. "
+        "If the command failed, suggest the corrected command. "
+        "If you cannot infer a safe command, return an empty command string and explain why. "
+        "Do not use markdown fences or prose outside the JSON object.";
+
+    if (g_termAI.bPending)
+        return FALSE;
+
+    pCfg = AIBridge_GetProviderConfig();
+    if (!pCfg)
+        return FALSE;
+
+    TerminalAI_GetPromptLine(wszPrompt, ARRAYSIZE(wszPrompt));
+    GetCurrentDirectoryW(MAX_PATH, wszCwd);
+    TerminalAI_CopyWideToUtf8(g_shells[g_curShell].label, szShell, ARRAYSIZE(szShell));
+    TerminalAI_CopyWideToUtf8(wszInput ? wszInput : L"", szInput, ARRAYSIZE(szInput));
+    TerminalAI_CopyWideToUtf8(wszPrompt, szPrompt, ARRAYSIZE(szPrompt));
+    TerminalAI_CopyWideToUtf8(wszCwd, szCwd, ARRAYSIZE(szCwd));
+
+    if (mode == TERM_AI_CORRECT) {
+        _snprintf_s(szUserPrompt, sizeof(szUserPrompt), _TRUNCATE,
+            "Mode: repair a failed terminal command.\n"
+            "Shell: %s\n"
+            "Working directory: %s\n"
+            "Visible prompt: %s\n"
+            "Original command: %s\n"
+            "Recent terminal output:\n%s\n",
+            szShell[0] ? szShell : "shell",
+            szCwd[0] ? szCwd : "(unknown)",
+            szPrompt[0] ? szPrompt : "(none)",
+            szInput[0] ? szInput : "(none)",
+            pszFailure && pszFailure[0] ? pszFailure : "(no error text)");
+    } else {
+        _snprintf_s(szUserPrompt, sizeof(szUserPrompt), _TRUNCATE,
+            "Mode: translate plain English terminal intent into a command.\n"
+            "Shell: %s\n"
+            "Working directory: %s\n"
+            "Visible prompt: %s\n"
+            "User text: %s\n",
+            szShell[0] ? szShell : "shell",
+            szCwd[0] ? szCwd : "(unknown)",
+            szPrompt[0] ? szPrompt : "(none)",
+            szInput[0] ? szInput : "(none)");
+    }
+
+    g_termAI.bPending = TRUE;
+    g_termAI.mode = mode;
+    if (mode == TERM_AI_CORRECT)
+        g_termAI.bCommandFailureSuggested = TRUE;
+
+    Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd,
+        mode == TERM_AI_CORRECT
+            ? "\r\n[Bikode AI] Checking that failed command...\r\n"
+            : "\r\n[Bikode AI] Translating your terminal request...\r\n");
+
+    if (!AIDirectCall_ChatAsync(pCfg, pszSystemPrompt, szUserPrompt, g_hwndPanel ? g_hwndPanel : hwnd)) {
+        g_termAI.bPending = FALSE;
+        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd,
+            "\r\n[Bikode AI] Terminal suggestions are unavailable right now.\r\n");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+static void TerminalAI_HandleSuggestionResponse(HWND hwnd, char* pszResponse) {
+    char szCommand[TERM_CMD_MAX];
+    char szReason[512];
+    WCHAR wszMessage[2048];
+    WCHAR wszCommand[TERM_CMD_MAX];
+    WCHAR wszReason[512];
+    int answer;
+
+    g_termAI.bPending = FALSE;
+
+    if (!pszResponse || !pszResponse[0]) {
+        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd,
+            "\r\n[Bikode AI] No terminal suggestion came back.\r\n");
+        return;
+    }
+
+    if (StrStrIA(pszResponse, "Error:") == pszResponse) {
+        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, "\r\n[Bikode AI] ");
+        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, pszResponse);
+        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, "\r\n");
+        return;
+    }
+
+    if (!TerminalAI_ParseSuggestion(pszResponse, szCommand, ARRAYSIZE(szCommand), szReason, ARRAYSIZE(szReason))) {
+        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd,
+            "\r\n[Bikode AI] I could not turn that into a terminal command.\r\n");
+        return;
+    }
+
+    MultiByteToWideChar(CP_UTF8, 0, szCommand, -1, wszCommand, ARRAYSIZE(wszCommand));
+    MultiByteToWideChar(CP_UTF8, 0, szReason, -1, wszReason, ARRAYSIZE(wszReason));
+
+    Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, "\r\n[Bikode AI] Suggested command:\r\n> ");
+    Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, szCommand);
+    Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, "\r\n");
+    if (szReason[0]) {
+        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, "[Bikode AI] Why: ");
+        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, szReason);
+        Terminal_AppendTranscript(g_hwndMain ? g_hwndMain : hwnd, "\r\n");
+    }
+
+    swprintf_s(wszMessage, ARRAYSIZE(wszMessage),
+        L"Execute this command in the current terminal?\n\n%s\n\n%s",
+        wszCommand,
+        wszReason[0] ? wszReason : L"Bikode AI found a better match for what you typed.");
+    answer = MessageBoxW(g_hwndMain ? g_hwndMain : hwnd, wszMessage,
+                         L"Bikode AI Terminal Suggestion",
+                         MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON1);
+    if (answer == IDYES)
+        Terminal_SendCommand(szCommand);
 }
 
 static void FillPanelSurface(HDC hdc, const RECT* rc, COLORREF color, BOOL textured) {
@@ -1289,13 +1891,41 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         /* Ctrl+C — copy selection or send interrupt */
         if (wch == 0x03) {
             if (g_hasSel) CopySel(hwnd);
-            else Terminal_Write("\x03", 1);
+            else {
+                TerminalAI_ResetInputLine();
+                Terminal_Write("\x03", 1);
+            }
             return 0;
         }
 
         /* Skip chars already handled as complex operations in WM_KEYDOWN */
         if (wch == 0x16) return 0;  /* Ctrl+V → paste handled in WM_KEYDOWN */
         if (wch == 0x0C) return 0;  /* Ctrl+L → clear handled in WM_KEYDOWN */
+
+        if (wch == L'\r') {
+            WCHAR wszSubmitted[TERM_INPUT_MAX];
+            char szSubmitted[TERM_CMD_MAX];
+
+            TerminalAI_GetSubmittedLine(wszSubmitted, ARRAYSIZE(wszSubmitted));
+            if (wszSubmitted[0]) {
+                if (TerminalAI_IsLikelyNaturalLanguage(wszSubmitted) &&
+                    TerminalAI_StartSuggestion(g_hwndPanel ? g_hwndPanel : hwnd, TERM_AI_TRANSLATE, wszSubmitted, NULL)) {
+                    TerminalAI_ResetInputLine();
+                    g_hasSel = FALSE;
+                    return 0;
+                }
+                TerminalAI_CopyWideToUtf8(wszSubmitted, szSubmitted, ARRAYSIZE(szSubmitted));
+                TerminalAI_RecordSubmittedUtf8(szSubmitted);
+            } else {
+                g_termAI.szRecentOutput[0] = 0;
+                g_termAI.bCommandFailureSuggested = FALSE;
+            }
+            TerminalAI_ResetInputLine();
+        } else if (wch == L'\b') {
+            TerminalAI_BackspaceInputChar();
+        } else if (wch >= L' ' || wch == L'\t') {
+            TerminalAI_AppendInputChar(wch);
+        }
 
         /* Convert to UTF-8 and write to shell pipe */
         char u8[8];
@@ -1315,6 +1945,7 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 if (hd) {
                     const WCHAR *wz = (const WCHAR*)GlobalLock(hd);
                     if (wz) {
+                        TerminalAI_AppendInputText(wz);
                         int n = WideCharToMultiByte(CP_UTF8, 0, wz, -1, NULL, 0, NULL, NULL);
                         if (n > 1) {
                             char *b = (char*)n2e_Alloc(n);
@@ -1334,6 +1965,7 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 
         /* Ctrl+L: clear screen */
         if (wParam == 'L' && ctrl) {
+            TerminalAI_ResetInputLine();
             if (g_term && g_term->grid) {
                 for (int r = 0; r < g_term->grid->rows; r++)
                     Grid_ClearRow(g_term->grid, r);
@@ -1348,16 +1980,16 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 
         /* Special keys that do NOT generate WM_CHAR → send VT escape */
         switch (wParam) {
-        case VK_UP:     Terminal_Write("\033[A", 3); return 0;
-        case VK_DOWN:   Terminal_Write("\033[B", 3); return 0;
-        case VK_RIGHT:  Terminal_Write("\033[C", 3); return 0;
-        case VK_LEFT:   Terminal_Write("\033[D", 3); return 0;
-        case VK_DELETE: Terminal_Write("\033[3~", 4); return 0;
-        case VK_HOME:   Terminal_Write("\033[H", 3); return 0;
-        case VK_END:    Terminal_Write("\033[F", 3); return 0;
-        case VK_PRIOR:  Terminal_Write("\033[5~", 4); return 0;
-        case VK_NEXT:   Terminal_Write("\033[6~", 4); return 0;
-        case VK_INSERT: Terminal_Write("\033[2~", 4); return 0;
+        case VK_UP:     TerminalAI_ResetInputLine(); Terminal_Write("\033[A", 3); return 0;
+        case VK_DOWN:   TerminalAI_ResetInputLine(); Terminal_Write("\033[B", 3); return 0;
+        case VK_RIGHT:  TerminalAI_ResetInputLine(); Terminal_Write("\033[C", 3); return 0;
+        case VK_LEFT:   TerminalAI_ResetInputLine(); Terminal_Write("\033[D", 3); return 0;
+        case VK_DELETE: TerminalAI_ResetInputLine(); Terminal_Write("\033[3~", 4); return 0;
+        case VK_HOME:   TerminalAI_ResetInputLine(); Terminal_Write("\033[H", 3); return 0;
+        case VK_END:    TerminalAI_ResetInputLine(); Terminal_Write("\033[F", 3); return 0;
+        case VK_PRIOR:  TerminalAI_ResetInputLine(); Terminal_Write("\033[5~", 4); return 0;
+        case VK_NEXT:   TerminalAI_ResetInputLine(); Terminal_Write("\033[6~", 4); return 0;
+        case VK_INSERT: TerminalAI_ResetInputLine(); Terminal_Write("\033[2~", 4); return 0;
         case VK_F1:  Terminal_Write("\033OP", 3); return 0;
         case VK_F2:  Terminal_Write("\033OQ", 3); return 0;
         case VK_F3:  Terminal_Write("\033OR", 3); return 0;
@@ -1487,6 +2119,7 @@ static LRESULT CALLBACK ViewProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                     g_term->grid->curR = 0; g_term->grid->curC = 0;
                     InvalidateRect(hwnd, NULL, FALSE);
                 }
+                TerminalAI_ResetInputLine();
                 Terminal_Write("\x0C", 1);
             }
         }
@@ -1737,10 +2370,25 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
         int n = (int)lParam;
         if (g_term && g_term->grid && d && n > 0) {
             Grid_ProcessVT(g_term->grid, d, n);
+            TerminalAI_AppendOutputChunk(d, n);
+            if (!g_termAI.bPending &&
+                !g_termAI.bCommandFailureSuggested &&
+                g_termAI.szLastSubmitted[0] &&
+                TerminalAI_OutputLooksLikeCommandFailure(g_termAI.szRecentOutput) &&
+                !TerminalAI_StartSuggestion(hwnd, TERM_AI_CORRECT, g_termAI.wszLastSubmitted, g_termAI.szRecentOutput)) {
+                g_termAI.bCommandFailureSuggested = TRUE;
+            }
             if (g_term->hwndView)
                 InvalidateRect(g_term->hwndView, NULL, FALSE);
         }
         if (d) n2e_Free(d);
+        return 0;
+    }
+    case WM_AI_DIRECT_RESPONSE: {
+        char* pszResponse = (char*)lParam;
+        TerminalAI_HandleSuggestionResponse(hwnd, pszResponse);
+        if (pszResponse)
+            free(pszResponse);
         return 0;
     }
 
@@ -1785,3 +2433,4 @@ static LRESULT CALLBACK PanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
 
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
+

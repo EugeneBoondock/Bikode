@@ -80,10 +80,10 @@ static WelcomeButton s_buttons[NUM_BUTTONS] = {
     { IDC_BTN_NEW,      L"New File",           L"Create a new empty document",       L"Ctrl+N"  },
     { IDC_BTN_OPEN,     L"Open File",          L"Open an existing file from disk",   L"Ctrl+O"  },
     { IDC_BTN_TERMINAL, L"Terminal",            L"Open the integrated terminal",      L"Ctrl+`"  },
-    { IDC_BTN_CHAT,     L"Bikode AI",          L"Chat with the AI assistant",        L""        },
+    { IDC_BTN_CHAT,     L"Bikode AI",          L"Open the AI-first coding assistant",L""        },
 };
 
-#define WELCOME_HERO_TEXT       L"Start a mission, open a repo, or drop straight into the console deck."
+#define WELCOME_HERO_TEXT       L"I write what I like. Build, debug, and ship inside an AI-first IDE."
 #define WELCOME_HERO_TOP        186
 #define WELCOME_HERO_MIN_HEIGHT 48
 #define WELCOME_HERO_PAD_X      18

@@ -119,6 +119,9 @@
 #define CHAT_EMPTY_CARD_INSET   16
 #define CHAT_EMPTY_CHIP_H       24
 #define CHAT_EMPTY_CHIP_GAP      8
+#define CHAT_EMPTY_TITLE        L"I write what I like."
+#define CHAT_EMPTY_BODY         L"Bikode AI powers an AI-first workflow: trace a crash, explain a symbol, search the repo, or draft a patch from the current file while protecting your voice and intent."
+#define CHAT_EMPTY_HINT         L"Paste screenshots, drop files, or use search to pull repo context into the thread."
 #define CHAT_COMPOSER_TAG_H     20
 #define CHAT_COMPOSER_HINT_H    16
 
@@ -1610,12 +1613,12 @@ static void PaintMissionEmptyState(HDC hdc, int cx, int cy)
         return;
 
     titleH = max(28, MeasureWrappedTextHeight(hdc, BikodeTheme_GetFont(BKFONT_TITLE),
-        L"Start with a real mission.", contentWidth));
+        CHAT_EMPTY_TITLE, contentWidth));
     bodyH = MeasureWrappedTextHeight(hdc, BikodeTheme_GetFont(BKFONT_UI),
-        L"Ask Bikode AI to trace a crash, explain a symbol, search the repo, or write a patch with the current file context.",
+        CHAT_EMPTY_BODY,
         contentWidth);
     hintH = MeasureWrappedTextHeight(hdc, BikodeTheme_GetFont(BKFONT_UI_SMALL),
-        L"Paste screenshots, drop files, or use search to pull repo context into the thread.",
+        CHAT_EMPTY_HINT,
         contentWidth);
 
     chipX = contentLeft;
@@ -1672,7 +1675,7 @@ static void PaintMissionEmptyState(HDC hdc, int cx, int cy)
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
     SelectObject(hdc, BikodeTheme_GetFont(BKFONT_TITLE));
-    DrawTextW(hdc, L"Start with a real mission.", -1, &rcTitle,
+    DrawTextW(hdc, CHAT_EMPTY_TITLE, -1, &rcTitle,
         DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
 
     rcBody.left = contentLeft;
@@ -1681,9 +1684,8 @@ static void PaintMissionEmptyState(HDC hdc, int cx, int cy)
     rcBody.bottom = rcBody.top + bodyH;
     SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
     SelectObject(hdc, BikodeTheme_GetFont(BKFONT_UI));
-    DrawTextW(hdc,
-        L"Ask Bikode AI to trace a crash, explain a symbol, search the repo, or write a patch with the current file context.",
-        -1, &rcBody, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+    DrawTextW(hdc, CHAT_EMPTY_BODY, -1, &rcBody,
+        DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
 
     chipX = contentLeft;
     chipY = rcBody.bottom + 12;
@@ -1706,8 +1708,8 @@ static void PaintMissionEmptyState(HDC hdc, int cx, int cy)
     rcHint.bottom = rcHint.top + hintH;
     SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
     SelectObject(hdc, BikodeTheme_GetFont(BKFONT_UI_SMALL));
-    DrawTextW(hdc, L"Paste screenshots, drop files, or use search to pull repo context into the thread.", -1,
-        &rcHint, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+    DrawTextW(hdc, CHAT_EMPTY_HINT, -1, &rcHint,
+        DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
 }
 
 static BOOL StartsWithNoCase(const char* s, const char* prefix)
@@ -2520,7 +2522,7 @@ BOOL ChatPanel_Create(HWND hwndParent)
     s_hIconLogo = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDR_MAINWND),
                                     IMAGE_ICON, 18, 18, LR_DEFAULTCOLOR);
 
-    AddMessage(MSG_SYSTEM, "Bikode AI \xe2\x80\xa2 Ready", NULL, 0);
+    AddMessage(MSG_SYSTEM, "Bikode AI | I write what I like.", NULL, 0);
     return TRUE;
 }
 
