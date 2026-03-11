@@ -145,8 +145,10 @@
 #define CHAT_INLINE_GIF_GAP        6
 #define CHAT_INLINE_GIF_FRAME_PAD  6
 #define CHAT_INLINE_GIF_FRAME_RAD  8
-#define CHAT_GIF_TIMER_ID      0x71A1
-#define CHAT_GIF_TIMER_MS         80
+#define CHAT_GIF_TIMER_ID          0x71A1
+#define CHAT_GIF_MIN_DELAY_MS         16
+#define CHAT_GIF_FALLBACK_DELAY_CS     8
+#define CHAT_GIF_MAX_CATCHUP_FRAMES   12
 
 //=============================================================================
 // Message model
@@ -405,6 +407,14 @@ static void StatusCard_UpdateTool(const char* toolText);
 static void StatusCard_Deactivate(void);
 static int  MeasureStatusCardHeight(HDC hdc, int chatW);
 static void PaintStatusCard(HDC hdc, int cx, int y);
+static UINT GetGifFrameDelayMs(const UINT* delaysCs, UINT frameIndex);
+static UINT GetGifRemainingDelayMs(DWORD lastTick, UINT delayMs, DWORD now);
+static BOOL AdvanceAnimatedGifFrames(Gdiplus::Image* img, const GUID* frameGuid,
+                                     UINT frameCount, UINT* frameIndex,
+                                     const UINT* delaysCs, DWORD* lastTick, DWORD now);
+static UINT GetNextGifWakeDelayMs(void);
+static void UpdateGifTimerState(void);
+static void AdvanceGifFrames(void);
 // Activity GIF
 static ActivityCategory ClassifyToolActivity(const char* toolText);
 static void StatusGif_StartDownload(ActivityCategory category);
@@ -610,23 +620,99 @@ static BOOL TryAttachInlineGif(ChatMsg* msg, const char* sourceText)
     return LoadGifFromPath(msg, localPath);
 }
 
+static UINT GetGifFrameDelayMs(const UINT* delaysCs, UINT frameIndex)
+{
+    UINT delayCs = CHAT_GIF_FALLBACK_DELAY_CS;
+    if (delaysCs)
+        delayCs = delaysCs[frameIndex];
+    if (delayCs == 0)
+        delayCs = CHAT_GIF_FALLBACK_DELAY_CS;
+    return max((UINT)CHAT_GIF_MIN_DELAY_MS, delayCs * 10U);
+}
+
+static UINT GetGifRemainingDelayMs(DWORD lastTick, UINT delayMs, DWORD now)
+{
+    DWORD elapsed = now - lastTick;
+    if (elapsed >= delayMs)
+        return 0;
+    return (UINT)(delayMs - elapsed);
+}
+
+static BOOL AdvanceAnimatedGifFrames(Gdiplus::Image* img, const GUID* frameGuid,
+                                     UINT frameCount, UINT* frameIndex,
+                                     const UINT* delaysCs, DWORD* lastTick, DWORD now)
+{
+    BOOL changed = FALSE;
+    UINT guard = 0;
+
+    if (!img || !frameGuid || frameCount <= 1 || !frameIndex || !lastTick)
+        return FALSE;
+
+    while (guard < CHAT_GIF_MAX_CATCHUP_FRAMES)
+    {
+        UINT delayMs = GetGifFrameDelayMs(delaysCs, *frameIndex);
+        DWORD elapsed = now - *lastTick;
+        if (elapsed < delayMs)
+            break;
+
+        *lastTick += delayMs;
+        *frameIndex = (*frameIndex + 1) % frameCount;
+        img->SelectActiveFrame(frameGuid, *frameIndex);
+        changed = TRUE;
+        ++guard;
+    }
+
+    if (guard == CHAT_GIF_MAX_CATCHUP_FRAMES)
+        *lastTick = now;
+
+    return changed;
+}
+
+static UINT GetNextGifWakeDelayMs(void)
+{
+    DWORD now = GetTickCount();
+    UINT nextDelay = 0xFFFFFFFFu;
+    BOOL hasAnimatedGif = FALSE;
+
+    for (int i = 0; i < s_nMsgs; i++)
+    {
+        ChatMsg* m = &s_msgs[i];
+        if (!m->pInlineGif || m->gifFrameCount <= 1)
+            continue;
+
+        hasAnimatedGif = TRUE;
+        {
+            UINT delayMs = GetGifFrameDelayMs(m->gifDelaysCs, m->gifFrameIndex);
+            UINT remaining = GetGifRemainingDelayMs(m->gifLastTick, delayMs, now);
+            if (remaining < nextDelay)
+                nextDelay = remaining;
+        }
+    }
+
+    if (s_pStatusGif && s_statusGifFrameCount > 1)
+    {
+        UINT delayMs = GetGifFrameDelayMs(s_statusGifDelaysCs, s_statusGifFrameIndex);
+        UINT remaining = GetGifRemainingDelayMs(s_statusGifLastTick, delayMs, now);
+        hasAnimatedGif = TRUE;
+        if (remaining < nextDelay)
+            nextDelay = remaining;
+    }
+
+    if (!hasAnimatedGif)
+        return 0;
+
+    if (nextDelay == 0xFFFFFFFFu)
+        nextDelay = CHAT_GIF_MIN_DELAY_MS;
+
+    return max(1U, nextDelay);
+}
+
 static void UpdateGifTimerState(void)
 {
     if (!s_hwndChat) return;
-    BOOL hasAnimatedGif = FALSE;
-    for (int i = 0; i < s_nMsgs; i++)
-    {
-        if (s_msgs[i].pInlineGif && s_msgs[i].gifFrameCount > 1)
-        {
-            hasAnimatedGif = TRUE;
-            break;
-        }
-    }
-    // Also check status card GIF
-    if (s_pStatusGif && s_statusGifFrameCount > 1)
-        hasAnimatedGif = TRUE;
-    if (hasAnimatedGif)
-        SetTimer(s_hwndChat, CHAT_GIF_TIMER_ID, CHAT_GIF_TIMER_MS, NULL);
+    UINT delayMs = GetNextGifWakeDelayMs();
+    if (delayMs > 0)
+        SetTimer(s_hwndChat, CHAT_GIF_TIMER_ID, delayMs, NULL);
     else
         KillTimer(s_hwndChat, CHAT_GIF_TIMER_ID);
 }
@@ -638,36 +724,21 @@ static void AdvanceGifFrames(void)
     for (int i = 0; i < s_nMsgs; i++)
     {
         ChatMsg* m = &s_msgs[i];
-        if (!m->pInlineGif || m->gifFrameCount <= 1 || !m->gifDelaysCs)
+        if (!m->pInlineGif || m->gifFrameCount <= 1)
             continue;
 
-        UINT delayMs = max(40U, m->gifDelaysCs[m->gifFrameIndex] * 10U);
-        if (now - m->gifLastTick >= delayMs)
-        {
-            m->gifFrameIndex = (m->gifFrameIndex + 1) % m->gifFrameCount;
-            m->pInlineGif->SelectActiveFrame(&m->gifFrameGuid, m->gifFrameIndex);
-            m->gifLastTick = now;
-            changed = TRUE;
-        }
+        changed |= AdvanceAnimatedGifFrames(m->pInlineGif, &m->gifFrameGuid,
+            m->gifFrameCount, &m->gifFrameIndex, m->gifDelaysCs, &m->gifLastTick, now);
     }
-    // Advance status card GIF
-    if (s_pStatusGif && s_statusGifFrameCount > 1 && s_statusGifDelaysCs)
-    {
-        UINT delayMs = max(40U, s_statusGifDelaysCs[s_statusGifFrameIndex] * 10U);
-        if (now - s_statusGifLastTick >= delayMs)
-        {
-            s_statusGifFrameIndex = (s_statusGifFrameIndex + 1) % s_statusGifFrameCount;
-            s_pStatusGif->SelectActiveFrame(&s_statusGifFrameGuid, s_statusGifFrameIndex);
-            s_statusGifLastTick = now;
-            changed = TRUE;
-        }
-    }
+    if (s_pStatusGif && s_statusGifFrameCount > 1)
+        changed |= AdvanceAnimatedGifFrames(s_pStatusGif, &s_statusGifFrameGuid,
+            s_statusGifFrameCount, &s_statusGifFrameIndex, s_statusGifDelaysCs, &s_statusGifLastTick, now);
+
     if (changed && s_hwndChat)
         InvalidateRect(s_hwndChat, NULL, FALSE);
+    UpdateGifTimerState();
 }
 static BOOL TryAttachInlineGif(ChatMsg* msg, const char* sourceText);
-static void UpdateGifTimerState(void);
-static void AdvanceGifFrames(void);
 static char* SanitizeAIResponseForDisplay(const char* text, BOOL hideGifUrls);
 
 //=============================================================================

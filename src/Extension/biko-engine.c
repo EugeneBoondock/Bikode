@@ -694,6 +694,14 @@ static const char* SYSTEM_PROMPT_CHAT =
     "You help with programming questions, code review, debugging, and general development tasks. "
     "Be concise and practical. When suggesting code changes, provide them as diffs when appropriate.";
 
+static const char* SYSTEM_PROMPT_STYLE_RULES =
+    " In prose, use typographic opening and closing quote marks instead of straight ASCII quotes when the format allows it. "
+    "Keep ASCII quotes only where syntax requires them, such as code, JSON, diffs, shell commands, or patches. "
+    "Do not use em dashes. "
+    "Avoid negative-parallel constructions such as \"While X is true, Y...\" and \"Not only X, but also Y...\". "
+    "Avoid sycophantic language. Write with concise authority. "
+    "Never use these words or close variants in prose: crucial, delve, amplify, archetypal, at the heart of, augment, blend, catalyze, catalyst, catering, centerpiece, cohesion, cohesive, comprehensive, conceptualize, confluence, digital bazaar, dynamics, elucidate, embark, embodiment, embody, emanate, encompass, envisage, epitomize, evoke, exemplify, extrapolate, facilitating, facet, fusion, harmony, harnessing, holistic, illuminating, immanent, implications, in essence, infuse, inflection, inherent, instigate, integral, integration, intrinsic, intricacies, iteration, leverage, manifestation, mosaic, nuance, paradigm, pinnacle, prerequisite, quintessential, reinforce, resilience, resonate, reverberate, subtlety, substantiate, symbiosis, synergy, synthesize, tapestry, underlying, unify, unity, unravel, unveil.";
+
 static void BuildPrompt(PipeRequest* req, const IntentSpec* intent, const AtlasLite* atlas,
                         const char* pszMissionId, StrBuf* sbSystem, StrBuf* sbUser)
 {
@@ -703,6 +711,8 @@ static void BuildPrompt(PipeRequest* req, const IntentSpec* intent, const AtlasL
         sb_append(sbSystem, SYSTEM_PROMPT_EXPLAIN, -1);
     else
         sb_append(sbSystem, SYSTEM_PROMPT_PATCH, -1);
+
+    sb_append(sbSystem, SYSTEM_PROMPT_STYLE_RULES, -1);
 
     if (pszMissionId && pszMissionId[0])
         sb_appendf(sbSystem, "\nMission id: %s", pszMissionId);
