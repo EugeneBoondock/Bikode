@@ -38,6 +38,64 @@
 #define MAX_TOOL_RESULT_SNIPPET 4096
 #define MAX_TOOL_FEEDBACK_SIZE  (12 * 1024)
 #define CMD_TIMEOUT_MS          30000
+#define MAX_TRACKED_FILES       16
+#define MAX_FAILURE_MEMORY      24
+
+typedef enum {
+    AGENT_MODE_QUICK = 0,
+    AGENT_MODE_BALANCED,
+    AGENT_MODE_MAX_QUALITY,
+    AGENT_MODE_ECONOMY
+} AgentExecutionMode;
+
+typedef struct {
+    AgentExecutionMode mode;
+    int maxIterations;
+    int maxToolCalls;
+    int maxTouchedFiles;
+    int maxApproxPromptChars;
+    int allowShell;
+} BudgetContract;
+
+typedef struct {
+    char tool[48];
+    char target[260];
+    int failures;
+} FailureEntry;
+
+typedef struct {
+    unsigned long turnId;
+    unsigned long toolCalls;
+    unsigned long usefulToolCalls;
+    unsigned long blockedToolCalls;
+    unsigned long approxCharsSent;
+    unsigned long approxCharsSaved;
+} ContextLedger;
+
+typedef enum {
+    AGENT_ROLE_PLANNER = 0,
+    AGENT_ROLE_IMPLEMENTER,
+    AGENT_ROLE_REVIEWER,
+    AGENT_ROLE_DEBUG,
+    AGENT_ROLE_TEST,
+    AGENT_ROLE_REFACTOR,
+    AGENT_ROLE_RESEARCH,
+    AGENT_ROLE_SETUP
+} AgentRole;
+
+typedef struct {
+    AgentRole role;
+    const char* name;
+    const char* allowedTools;
+    int maxIterations;
+    int stopOnFirstMutation;
+} AgentRoleContract;
+
+typedef struct {
+    const char* name;
+    const char* owner;
+    const char* status;
+} TaskNode;
 
 extern WCHAR szCurFile[N2E_MAX_PATH_N_CMD_LINE];
 extern BOOL bModified;
@@ -51,6 +109,47 @@ typedef struct {
     int     len;
     int     cap;
 } StrBuf;
+
+typedef enum {
+    INTENT_ASK = 0,
+    INTENT_SEARCH,
+    INTENT_EXPLAIN,
+    INTENT_PATCH,
+    INTENT_REFACTOR,
+    INTENT_RUN,
+    INTENT_REVIEW,
+    INTENT_BUILD,
+    INTENT_DESIGN_CHANGE,
+    INTENT_SELF_MODIFY_IDE
+} AgentIntent;
+
+typedef struct ToolCall {
+    char    name[64];
+    char*   path;
+    char*   content;
+    char*   oldText;
+    char*   newText;
+    char*   command;
+    char*   cwd;
+    int     startLine;
+    int     lineCount;
+} ToolCall;
+
+static BOOL ContainsSubstringCI(const char* haystack, const char* needle);
+static const char* IntentName(AgentIntent intent);
+static AgentIntent DetectIntent(const char* msg);
+static void BuildBudgetContract(BudgetContract* c, const char* msg, AgentIntent intent);
+static const char* ModeName(AgentExecutionMode mode);
+static void ContextLedger_RecordPrompt(ContextLedger* ledger, AIChatMessage* msgs, int count);
+static BOOL TrackTouchedFile(const ToolCall* tc, char touched[MAX_TRACKED_FILES][260], int* n);
+static BOOL FailureMemory_ShouldBlock(FailureEntry mem[MAX_FAILURE_MEMORY], int count, const ToolCall* tc);
+static void PostTaskGraphStatus(HWND hwnd, AgentIntent intent);
+static void PostStatusToUI(HWND hwnd, const char* fmt, ...);
+static AgentRole SelectRoleFromIntent(AgentIntent intent);
+static const AgentRoleContract* GetRoleContract(AgentRole role);
+static BOOL IsToolAllowedForRole(const AgentRoleContract* contract, const char* toolName);
+static void ContextLedger_Persist(const ContextLedger* ledger, const char* mode, const char* intent,
+                                  int touchedFiles, BOOL shadowMode, const char* topFile);
 
 static void sb_init(StrBuf* sb, int initialCap)
 {
@@ -93,6 +192,36 @@ static void sb_free(StrBuf* sb)
 {
     if (sb->data) { free(sb->data); sb->data = NULL; }
     sb->len = sb->cap = 0;
+}
+
+static unsigned int fnv1a_hash32(const char* data, int len)
+{
+    unsigned int h = 2166136261u;
+    for (int i = 0; i < len; i++)
+    {
+        h ^= (unsigned char)data[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static void sb_append_live_embedding_index(StrBuf* sb, const char* text, int len, int chunkBytes)
+{
+    if (!sb || !text || len <= 0)
+        return;
+
+    if (chunkBytes < 256)
+        chunkBytes = 256;
+
+    sb_append(sb, "\n\n[live-embedding-index]\n", -1);
+    for (int start = 0, chunk = 0; start < len; start += chunkBytes, chunk++)
+    {
+        int n = len - start;
+        if (n > chunkBytes)
+            n = chunkBytes;
+        sb_appendf(sb, "chunk=%d bytes=%d-%d hash=%08x\n",
+            chunk, start, start + n, fnv1a_hash32(text + start, n));
+    }
 }
 
 //=============================================================================
@@ -521,7 +650,34 @@ static void MirrorCommandActivityToTerminal(const char* cwd, const char* command
 // System prompt
 //=============================================================================
 
-static char* BuildSystemPrompt(void)
+
+static char* LoadRepoConstitution(void)
+{
+    static const char* candidates[] = {
+        "repo.constitution.md",
+        "doc/repo.constitution.md",
+        NULL
+    };
+    for (int i = 0; candidates[i]; i++)
+    {
+        FILE* f = fopen(candidates[i], "rb");
+        if (!f) continue;
+        if (fseek(f, 0, SEEK_END) != 0) { fclose(f); continue; }
+        long len = ftell(f);
+        if (len <= 0) { fclose(f); continue; }
+        if (len > 12000) len = 12000;
+        if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); continue; }
+        char* buf = (char*)malloc((size_t)len + 1);
+        if (!buf) { fclose(f); continue; }
+        size_t n = fread(buf, 1, (size_t)len, f);
+        fclose(f);
+        buf[n] = '\0';
+        return buf;
+    }
+    return NULL;
+}
+
+static char* BuildSystemPrompt(const BudgetContract* contract, AgentIntent intent)
 {
     char cwd[MAX_PATH];
     GetCurrentDirectoryA(MAX_PATH, cwd);
@@ -795,12 +951,31 @@ static char* BuildSystemPrompt(void)
         "- Use open_file after analysis if you want the user to see a file you touched.\n"
         "- Use make_dir and init_repo when creating project structure; use run_command when you need the terminal.\n"
         "- Use start_line and line_count when a file is large.\n"
+        "- When a read is truncated and includes [live-embedding-index], use that chunk map to request the most relevant follow-up windows instead of re-reading from line 1.\n"
         "- Use insert_in_editor to put content directly into the userÃ¢â‚¬â„¢s active editor.\n"
         "- Include enough context in old_text to uniquely identify the replacement location.\n"
         "- All JSON strings must use proper escaping (\\n for newlines, \\\" for quotes, \\\\ for backslash).\n"
         "- When your answer is complete (no more tools needed), respond with plain text only and summarize the workspace changes instead of repeating the code.\n", -1);
 
     sb_appendf(&sb, "- Runtime platform: Windows Win32. Command execution uses cmd.exe by default. Current workspace: %s\n", cwd);
+    if (contract)
+    {
+        sb_appendf(&sb, "- Budget contract: mode=%s, max_iterations=%d, max_tool_calls=%d, max_touched_files=%d\n",
+            ModeName(contract->mode), contract->maxIterations, contract->maxToolCalls, contract->maxTouchedFiles);
+        sb_appendf(&sb, "- Budget contract: approximate_prompt_chars_limit=%d, shell_access=%s\n",
+            contract->maxApproxPromptChars, contract->allowShell ? "allowed" : "forbidden");
+        sb_append(&sb,
+            "- Radius mode: start from the active selection/function/file and only widen scope when evidence demands it.\n"
+            "- Guardrail-first editing: before risky edits, state assumptions, affected interfaces, and validation checks.\n"
+            "- Causal diff discipline: every changed hunk must map to intent, diagnostics, or explicit repo rules.\n",
+            -1);
+    }
+    sb_appendf(&sb, "- Routed intent class: %s\n", IntentName(intent));
+    {
+        const AgentRoleContract* role = GetRoleContract(SelectRoleFromIntent(intent));
+        sb_appendf(&sb, "- Active agent role: %s\n", role->name);
+        sb_appendf(&sb, "- Role tool policy: %s\n", role->allowedTools);
+    }
     {
         char* activePath = WideToUtf8Dup(szCurFile);
         if (activePath && activePath[0])
@@ -811,24 +986,22 @@ static char* BuildSystemPrompt(void)
         free(activePath);
     }
 
+    {
+        char* constitution = LoadRepoConstitution();
+        if (constitution && constitution[0])
+        {
+            sb_append(&sb, "\nRepo constitution (must obey):\n", -1);
+            sb_append(&sb, constitution, -1);
+        }
+        free(constitution);
+    }
+
     return sb.data;
 }
 
 //=============================================================================
 // Tool call parsing
 //=============================================================================
-
-typedef struct {
-    char    name[64];
-    char*   path;
-    char*   content;
-    char*   oldText;
-    char*   newText;
-    char*   command;
-    char*   cwd;
-    int     startLine;
-    int     lineCount;
-} ToolCall;
 
 // Tag variants that LLMs commonly use for tool calls
 static const char* s_openTags[] = {
@@ -1174,7 +1347,10 @@ static char* ReadFileLineWindow(const char* path, int startLine, int lineCount)
     }
 
     if (truncated)
+    {
         sb_append(&sb, "\n[... chunk truncated at 65536 bytes]", -1);
+        sb_append_live_embedding_index(&sb, sb.data, sb.len, 1024);
+    }
 
     return sb.data;
 }
@@ -1211,6 +1387,7 @@ static char* ReadEditorTextWindow(int startLine, int lineCount)
             sb_init(&out, readLen + 96);
             sb_append(&out, text, -1);
             sb_appendf(&out, "\n\n[... truncated, showing first %d of %d bytes]", readLen, docLen);
+            sb_append_live_embedding_index(&out, text, readLen, 1024);
             n2e_Free(text);
             return out.data;
         }
@@ -1246,6 +1423,7 @@ static char* ReadEditorTextWindow(int startLine, int lineCount)
         sb_init(&out, MAX_FILE_WINDOW_SIZE + 96);
         sb_append(&out, text, MAX_FILE_WINDOW_SIZE);
         sb_append(&out, "\n[... chunk truncated at 65536 bytes]", -1);
+        sb_append_live_embedding_index(&out, text, MAX_FILE_WINDOW_SIZE, 1024);
         n2e_Free(text);
         return out.data;
     }
@@ -1292,7 +1470,7 @@ static char* Tool_ReadFile(const char* path, int startLine, int lineCount)
         truncated = 1;
     }
 
-    char* content = (char*)malloc(readSize + 128);
+    char* content = (char*)malloc(readSize + 1);
     if (!content) { CloseHandle(hFile); return _strdup("Error: Out of memory"); }
 
     DWORD bytesRead;
@@ -1305,16 +1483,20 @@ static char* Tool_ReadFile(const char* path, int startLine, int lineCount)
     CloseHandle(hFile);
     content[bytesRead] = '\0';
 
-    if (truncated)
-    {
-        char notice[128];
-        snprintf(notice, sizeof(notice),
-                 "\n\n[... truncated, showing first %lu of %lu bytes]",
-                 readSize, fileSize);
-        strcat(content, notice);
-    }
+    if (!truncated)
+        return content;
 
-    return content;
+    {
+        StrBuf out;
+        sb_init(&out, (int)readSize + 512);
+        sb_append(&out, content, (int)readSize);
+        sb_appendf(&out,
+            "\n\n[... truncated, showing first %lu of %lu bytes]",
+            readSize, fileSize);
+        sb_append_live_embedding_index(&out, content, (int)readSize, 1024);
+        free(content);
+        return out.data;
+    }
 }
 
 static char* Tool_GetActiveDocument(int startLine, int lineCount)
@@ -1961,6 +2143,46 @@ static void PostToolInfoToUI(HWND hwnd, const char* toolName, const char* detail
         PostMessage(hwnd, WM_AI_AGENT_TOOL, 0, (LPARAM)msg);
 }
 
+
+static int BuildDefaultTaskGraph(AgentIntent intent, TaskNode nodes[8])
+{
+    int n = 0;
+    nodes[n++] = (TaskNode){ "Plan", "Planner Agent", "ready" };
+    if (intent == INTENT_REVIEW)
+    {
+        nodes[n++] = (TaskNode){ "Inspect code", "Reviewer Agent", "ready" };
+    }
+    else if (intent == INTENT_RUN || intent == INTENT_BUILD)
+    {
+        nodes[n++] = (TaskNode){ "Execute commands", "Setup Agent", "ready" };
+        nodes[n++] = (TaskNode){ "Debug failures", "Debug Agent", "ready" };
+    }
+    else
+    {
+        nodes[n++] = (TaskNode){ "Implement edits", "Implementer Agent", "ready" };
+        nodes[n++] = (TaskNode){ "Review patch", "Reviewer Agent", "ready" };
+        nodes[n++] = (TaskNode){ "Run validation", "Test Agent", "ready" };
+    }
+    return n;
+}
+
+static void PostTaskGraphStatus(HWND hwnd, AgentIntent intent)
+{
+    TaskNode nodes[8];
+    int count = BuildDefaultTaskGraph(intent, nodes);
+    StrBuf sb;
+    sb_init(&sb, 256);
+    sb_append(&sb, "Task graph: ", -1);
+    for (int i = 0; i < count; i++)
+    {
+        sb_appendf(&sb, "%s/%s", nodes[i].name, nodes[i].owner);
+        if (i + 1 < count)
+            sb_append(&sb, " -> ", -1);
+    }
+    PostStatusToUI(hwnd, "%s", sb.data ? sb.data : "Task graph initialized");
+    sb_free(&sb);
+}
+
 // Strip any residual tool call XML tags from text shown to user
 static char* StripToolCallTags(const char* text)
 {
@@ -2038,6 +2260,257 @@ static BOOL ContainsSubstringCI(const char* haystack, const char* needle)
     return FALSE;
 }
 
+
+
+static const char* IntentName(AgentIntent intent)
+{
+    switch (intent)
+    {
+    case INTENT_SEARCH: return "search";
+    case INTENT_EXPLAIN: return "explain";
+    case INTENT_PATCH: return "patch";
+    case INTENT_REFACTOR: return "refactor";
+    case INTENT_RUN: return "run";
+    case INTENT_REVIEW: return "review";
+    case INTENT_BUILD: return "build";
+    case INTENT_DESIGN_CHANGE: return "design_change";
+    case INTENT_SELF_MODIFY_IDE: return "self_modify_ide";
+    default: return "ask";
+    }
+}
+
+static AgentIntent DetectIntent(const char* msg)
+{
+    if (!msg || !msg[0]) return INTENT_ASK;
+    if (ContainsSubstringCI(msg, "theme") || ContainsSubstringCI(msg, "layout") || ContainsSubstringCI(msg, "density")) return INTENT_DESIGN_CHANGE;
+    if (ContainsSubstringCI(msg, "install support") || ContainsSubstringCI(msg, "provider") || ContainsSubstringCI(msg, "model ")) return INTENT_SELF_MODIFY_IDE;
+    if (ContainsSubstringCI(msg, "refactor")) return INTENT_REFACTOR;
+    if (ContainsSubstringCI(msg, "fix") || ContainsSubstringCI(msg, "implement") || ContainsSubstringCI(msg, "patch") || ContainsSubstringCI(msg, "change ")) return INTENT_PATCH;
+    if (ContainsSubstringCI(msg, "run ") || ContainsSubstringCI(msg, "test") || ContainsSubstringCI(msg, "execute")) return INTENT_RUN;
+    if (ContainsSubstringCI(msg, "review")) return INTENT_REVIEW;
+    if (ContainsSubstringCI(msg, "build")) return INTENT_BUILD;
+    if (ContainsSubstringCI(msg, "find") || ContainsSubstringCI(msg, "search")) return INTENT_SEARCH;
+    if (ContainsSubstringCI(msg, "explain") || ContainsSubstringCI(msg, "why")) return INTENT_EXPLAIN;
+    return INTENT_ASK;
+}
+
+static void BuildBudgetContract(BudgetContract* c, const char* msg, AgentIntent intent)
+{
+    if (!c) return;
+    c->mode = AGENT_MODE_BALANCED;
+    c->maxIterations = 10;
+    c->maxToolCalls = 20;
+    c->maxTouchedFiles = 6;
+    c->maxApproxPromptChars = 64000;
+    c->allowShell = 1;
+
+    if (intent == INTENT_ASK || intent == INTENT_EXPLAIN || intent == INTENT_SEARCH)
+    {
+        c->mode = AGENT_MODE_QUICK;
+        c->maxIterations = 6;
+        c->maxToolCalls = 8;
+        c->maxTouchedFiles = 3;
+        c->maxApproxPromptChars = 36000;
+    }
+
+    if (msg && (ContainsSubstringCI(msg, "economy") || ContainsSubstringCI(msg, "cheap") || ContainsSubstringCI(msg, "token-frugal")))
+    {
+        c->mode = AGENT_MODE_ECONOMY;
+        c->maxIterations = 5;
+        c->maxToolCalls = 7;
+        c->maxTouchedFiles = 3;
+        c->maxApproxPromptChars = 28000;
+        c->allowShell = 0;
+    }
+    else if (msg && (ContainsSubstringCI(msg, "max quality") || ContainsSubstringCI(msg, "best quality") || ContainsSubstringCI(msg, "deep")))
+    {
+        c->mode = AGENT_MODE_MAX_QUALITY;
+        c->maxIterations = 14;
+        c->maxToolCalls = 30;
+        c->maxTouchedFiles = 12;
+        c->maxApproxPromptChars = 100000;
+    }
+
+    if (msg && (ContainsSubstringCI(msg, "do not run command") || ContainsSubstringCI(msg, "no shell")))
+        c->allowShell = 0;
+
+    if (msg && ContainsSubstringCI(msg, "do not touch more than"))
+    {
+        int n = ExtractFirstInteger(msg);
+        if (n > 0 && n < MAX_TRACKED_FILES)
+            c->maxTouchedFiles = n;
+    }
+
+    if (msg && ContainsSubstringCI(msg, "do not exceed") && ContainsSubstringCI(msg, "tool"))
+    {
+        int n = ExtractFirstInteger(msg);
+        if (n > 0)
+            c->maxToolCalls = n;
+    }
+}
+
+static const char* ModeName(AgentExecutionMode mode)
+{
+    switch (mode)
+    {
+    case AGENT_MODE_QUICK: return "quick";
+    case AGENT_MODE_MAX_QUALITY: return "max_quality";
+    case AGENT_MODE_ECONOMY: return "economy";
+    default: return "balanced";
+    }
+}
+
+static AgentRole SelectRoleFromIntent(AgentIntent intent)
+{
+    switch (intent)
+    {
+    case INTENT_REVIEW: return AGENT_ROLE_REVIEWER;
+    case INTENT_REFACTOR: return AGENT_ROLE_REFACTOR;
+    case INTENT_RUN:
+    case INTENT_BUILD: return AGENT_ROLE_SETUP;
+    case INTENT_SEARCH:
+    case INTENT_EXPLAIN: return AGENT_ROLE_RESEARCH;
+    case INTENT_PATCH: return AGENT_ROLE_IMPLEMENTER;
+    default: return AGENT_ROLE_PLANNER;
+    }
+}
+
+static const AgentRoleContract* GetRoleContract(AgentRole role)
+{
+    static const AgentRoleContract contracts[] = {
+        { AGENT_ROLE_PLANNER, "Planner Agent", "read_file,get_active_document,list_dir,open_file", 6, 1 },
+        { AGENT_ROLE_IMPLEMENTER, "Implementer Agent", "read_file,get_active_document,write_file,replace_in_file,open_file,insert_in_editor,replace_editor_content,new_file_in_editor,list_dir", 12, 0 },
+        { AGENT_ROLE_REVIEWER, "Reviewer Agent", "read_file,get_active_document,list_dir,open_file,run_command", 8, 1 },
+        { AGENT_ROLE_DEBUG, "Debug Agent", "read_file,get_active_document,run_command,list_dir,replace_in_file", 10, 0 },
+        { AGENT_ROLE_TEST, "Test Agent", "read_file,get_active_document,run_command,list_dir", 8, 1 },
+        { AGENT_ROLE_REFACTOR, "Refactor Agent", "read_file,get_active_document,replace_in_file,write_file,open_file,list_dir", 12, 0 },
+        { AGENT_ROLE_RESEARCH, "Research Agent", "read_file,get_active_document,list_dir,web_search", 6, 1 },
+        { AGENT_ROLE_SETUP, "Setup Agent", "read_file,get_active_document,list_dir,make_dir,init_repo,run_command,write_file", 10, 0 }
+    };
+
+    for (int i = 0; i < (int)(sizeof(contracts) / sizeof(contracts[0])); i++)
+    {
+        if (contracts[i].role == role)
+            return &contracts[i];
+    }
+    return &contracts[0];
+}
+
+static BOOL IsToolAllowedForRole(const AgentRoleContract* contract, const char* toolName)
+{
+    if (!contract || !contract->allowedTools || !toolName || !toolName[0])
+        return FALSE;
+
+    const char* pos = contract->allowedTools;
+    size_t toolLen = strlen(toolName);
+    while ((pos = strstr(pos, toolName)) != NULL)
+    {
+        BOOL leftOk = (pos == contract->allowedTools) || (*(pos - 1) == ',');
+        BOOL rightOk = (pos[toolLen] == '\0') || (pos[toolLen] == ',');
+        if (leftOk && rightOk)
+            return TRUE;
+        pos += toolLen;
+    }
+    return FALSE;
+}
+
+static int ExtractFirstInteger(const char* text)
+{
+    if (!text) return -1;
+    for (const char* p = text; *p; p++)
+    {
+        if (*p >= '0' && *p <= '9')
+            return atoi(p);
+    }
+    return -1;
+}
+
+static void ContextLedger_Persist(const ContextLedger* ledger, const char* mode, const char* intent,
+                                  int touchedFiles, BOOL shadowMode, const char* topFile)
+{
+    if (!ledger) return;
+
+    FILE* f = fopen("ai_context_ledger.log", "ab");
+    if (!f) return;
+
+    fprintf(f,
+        "turn=%lu mode=%s intent=%s shadow=%d prompt_chars=%lu tool_calls=%lu useful=%lu blocked=%lu touched=%d top_file=%s\n",
+        ledger->turnId,
+        mode ? mode : "unknown",
+        intent ? intent : "unknown",
+        shadowMode ? 1 : 0,
+        ledger->approxCharsSent,
+        ledger->toolCalls,
+        ledger->usefulToolCalls,
+        ledger->blockedToolCalls,
+        touchedFiles,
+        topFile ? topFile : "-");
+    fclose(f);
+}
+
+static void ContextLedger_RecordPrompt(ContextLedger* ledger, AIChatMessage* msgs, int count)
+{
+    if (!ledger || !msgs || count <= 0) return;
+    for (int i = 0; i < count; i++)
+    {
+        if (msgs[i].content)
+            ledger->approxCharsSent += (unsigned long)strlen(msgs[i].content);
+    }
+}
+
+static BOOL TrackTouchedFile(const ToolCall* tc, char touched[MAX_TRACKED_FILES][260], int* n)
+{
+    if (!tc || !tc->path || !tc->path[0] || !touched || !n) return FALSE;
+    for (int i = 0; i < *n; i++)
+    {
+        if (_stricmp(touched[i], tc->path) == 0)
+            return TRUE;
+    }
+    if (*n < MAX_TRACKED_FILES)
+    {
+        _snprintf_s(touched[*n], 260, _TRUNCATE, "%s", tc->path);
+        (*n)++;
+    }
+    return TRUE;
+}
+
+static int FindFailure(FailureEntry mem[MAX_FAILURE_MEMORY], int count, const char* tool, const char* target)
+{
+    for (int i = 0; i < count; i++)
+    {
+        if (_stricmp(mem[i].tool, tool ? tool : "") == 0 &&
+            _stricmp(mem[i].target, target ? target : "") == 0)
+            return i;
+    }
+    return -1;
+}
+
+static void FailureMemory_Add(FailureEntry mem[MAX_FAILURE_MEMORY], int* count, const char* tool, const char* target)
+{
+    int idx;
+    if (!mem || !count) return;
+    idx = FindFailure(mem, *count, tool, target);
+    if (idx >= 0)
+    {
+        mem[idx].failures++;
+        return;
+    }
+    if (*count >= MAX_FAILURE_MEMORY) return;
+    _snprintf_s(mem[*count].tool, sizeof(mem[*count].tool), _TRUNCATE, "%s", tool ? tool : "");
+    _snprintf_s(mem[*count].target, sizeof(mem[*count].target), _TRUNCATE, "%s", target ? target : "");
+    mem[*count].failures = 1;
+    (*count)++;
+}
+
+static BOOL FailureMemory_ShouldBlock(FailureEntry mem[MAX_FAILURE_MEMORY], int count, const ToolCall* tc)
+{
+    const char* target;
+    int idx;
+    if (!tc) return FALSE;
+    target = tc->path ? tc->path : (tc->command ? tc->command : "");
+    idx = FindFailure(mem, count, tc->name, target);
+    return (idx >= 0 && mem[idx].failures >= 2);
+}
 static BOOL IsLikelyCodeWriteTask(const char* userMessage)
 {
     static const char* positives[] = {
@@ -2123,7 +2596,8 @@ static void AppendToolOperationSummary(StrBuf* sb, const ToolCall* tc)
     }
 }
 
-static char* BuildWorkspaceCompletionMessage(const StrBuf* ops, const char* cleanResponse)
+static char* BuildWorkspaceCompletionMessage(const StrBuf* ops, const char* cleanResponse,
+                                             const ContextLedger* ledger, int touchedFiles, BOOL shadowMode)
 {
     StrBuf sb;
     sb_init(&sb, 512);
@@ -2137,6 +2611,13 @@ static char* BuildWorkspaceCompletionMessage(const StrBuf* ops, const char* clea
     {
         sb_append(&sb, "Done.\n", -1);
     }
+
+    sb_appendf(&sb,
+        "\nDiff story:\n- mode: %s\n- files touched: %d\n- blocked actions: %lu\n- shadow mode: %s\n",
+        shadowMode ? "preview" : "apply",
+        touchedFiles,
+        ledger ? ledger->blockedToolCalls : 0,
+        shadowMode ? "yes" : "no");
 
     if (cleanResponse && cleanResponse[0] && !ResponseLooksLikeCodeDump(cleanResponse))
     {
@@ -2167,8 +2648,16 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     // Set main window handle for tools that need UI interaction
     s_hwndMainForTools = p->hwndMainWnd;
 
+    AgentIntent intent = DetectIntent(p->szUserMessage);
+    BudgetContract contract;
+    BuildBudgetContract(&contract, p->szUserMessage, intent);
+    AgentRole role = SelectRoleFromIntent(intent);
+    const AgentRoleContract* roleContract = GetRoleContract(role);
+    const BOOL shadowMode = ContainsSubstringCI(p->szUserMessage, "shadow mode") ||
+                            ContainsSubstringCI(p->szUserMessage, "dry run");
+
     // Build system prompt
-    char* systemPrompt = BuildSystemPrompt();
+    char* systemPrompt = BuildSystemPrompt(&contract, intent);
     if (!systemPrompt)
     {
         char* err = _strdup("Error: Could not build system prompt");
@@ -2221,8 +2710,22 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     const BOOL codeWriteTask = IsLikelyCodeWriteTask(p->szUserMessage);
     StrBuf operationSummary;
     sb_init(&operationSummary, 512);
+    ContextLedger ledger = { 0 };
+    ledger.turnId = GetTickCount();
+    FailureEntry failureMemory[MAX_FAILURE_MEMORY] = { 0 };
+    int failureCount = 0;
+    int totalToolCalls = 0;
+    char touchedFiles[MAX_TRACKED_FILES][260] = { 0 };
+    int touchedFileCount = 0;
 
-    while (iteration < MAX_AGENT_ITERATIONS)
+    PostStatusToUI(p->hwndTarget, "Intent=%s, role=%s, mode=%s, budget: iterations<=%d, tool_calls<=%d",
+        IntentName(intent), roleContract->name, ModeName(contract.mode), contract.maxIterations, contract.maxToolCalls);
+    PostTaskGraphStatus(p->hwndTarget, intent);
+
+    if (shadowMode)
+        PostStatusToUI(p->hwndTarget, "Shadow mode enabled: mutation tools will be previewed, not executed.");
+
+    while (iteration < contract.maxIterations && iteration < MAX_AGENT_ITERATIONS)
     {
         iteration++;
 
@@ -2230,6 +2733,7 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
             PostStatusToUI(p->hwndTarget, "Thinking... (step %d)", iteration);
 
         // Call LLM
+        ContextLedger_RecordPrompt(&ledger, msgs, msgCount);
         char* response = AIDirectCall_ChatMulti(&p->cfg, msgs, msgCount);
         if (!response)
         {
@@ -2265,6 +2769,15 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
         // Parse tool calls
         ToolCall* toolCalls = NULL;
         int toolCount = ParseToolCalls(response, &toolCalls);
+
+        if ((totalToolCalls + toolCount) > contract.maxToolCalls)
+        {
+            ledger.blockedToolCalls += (unsigned long)toolCount;
+            free(response);
+            FreeToolCalls(toolCalls, toolCount);
+            finalResponse = _strdup("Stopped before exceeding your tool-call budget. Ask for max quality mode if you want wider execution.");
+            break;
+        }
 
         if (toolCount == 0)
         {
@@ -2334,6 +2847,7 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
         {
             char* result;
             char* safeResult = NULL;
+            BOOL isMutationTool;
 
             // Post tool info to UI
             const char* detail = toolCalls[i].path ? toolCalls[i].path :
@@ -2341,10 +2855,62 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
             PostToolInfoToUI(p->hwndTarget, toolCalls[i].name, detail);
 
             // Execute
-            result = ExecuteTool(&toolCalls[i]);
+            if (!IsToolAllowedForRole(roleContract, toolCalls[i].name))
+            {
+                result = _strdup("Skipped: tool not allowed for active agent role contract");
+                ledger.blockedToolCalls++;
+            }
+            else if (shadowMode && IsWorkspaceMutationTool(toolCalls[i].name))
+            {
+                result = _strdup("Shadow mode preview: mutation tool would execute here after approval");
+                ledger.blockedToolCalls++;
+            }
+            else if (!contract.allowShell && strcmp(toolCalls[i].name, "run_command") == 0)
+            {
+                result = _strdup("Skipped: run_command disabled by budget contract");
+                ledger.blockedToolCalls++;
+            }
+            else if (FailureMemory_ShouldBlock(failureMemory, failureCount, &toolCalls[i]))
+            {
+                result = _strdup("Skipped: similar tool attempt failed repeatedly in this session");
+                ledger.blockedToolCalls++;
+            }
+            else
+            {
+                result = ExecuteTool(&toolCalls[i]);
+                if (result && strncmp(result, "Error:", 6) == 0)
+                {
+                    FailureMemory_Add(failureMemory, &failureCount, toolCalls[i].name,
+                        toolCalls[i].path ? toolCalls[i].path : toolCalls[i].command);
+                }
+                else
+                {
+                    ledger.usefulToolCalls++;
+                }
+            }
+            totalToolCalls++;
+            ledger.toolCalls++;
+            TrackTouchedFile(&toolCalls[i], touchedFiles, &touchedFileCount);
+
+            if (touchedFileCount > contract.maxTouchedFiles)
+            {
+                if (result) free(result);
+                result = _strdup("Stopped: touched-file radius exceeded budget contract");
+                ledger.blockedToolCalls++;
+            }
+
             AppendToolOperationSummary(&operationSummary, &toolCalls[i]);
-            if (IsWorkspaceMutationTool(toolCalls[i].name))
+            isMutationTool = IsWorkspaceMutationTool(toolCalls[i].name);
+            if (isMutationTool && !shadowMode)
                 workspaceMutated = TRUE;
+
+            if (isMutationTool && workspaceMutated && roleContract->stopOnFirstMutation)
+            {
+                if (result) free(result);
+                result = _strdup("Role stop condition reached after first mutation");
+                ledger.blockedToolCalls++;
+                appendMoreToolResults = FALSE;
+            }
 
             if (appendMoreToolResults)
             {
@@ -2394,7 +2960,7 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
 
     if (!finalResponse)
     {
-        finalResponse = _strdup("Error: Agent loop exceeded maximum iterations");
+        finalResponse = _strdup("Stopped at budget iteration limit. You can ask for balanced or max quality mode to continue.");
     }
 
     // Save to history: user message + final response (not intermediate tool calls)
@@ -2411,12 +2977,28 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
 
     if (codeWriteTask && (workspaceMutated || operationSummary.len > 0))
     {
-        char* summaryResponse = BuildWorkspaceCompletionMessage(&operationSummary, cleanResponse);
+        char* summaryResponse = BuildWorkspaceCompletionMessage(&operationSummary, cleanResponse,
+            &ledger, touchedFileCount, shadowMode);
         if (summaryResponse)
         {
             free(cleanResponse);
             cleanResponse = summaryResponse;
         }
+    }
+
+    {
+        char ledgerMsg[512];
+        _snprintf_s(ledgerMsg, sizeof(ledgerMsg), _TRUNCATE,
+            "Context ledger: prompt_chars~%lu, tool_calls=%lu, useful=%lu, blocked=%lu, touched_files=%d",
+            ledger.approxCharsSent, ledger.toolCalls, ledger.usefulToolCalls, ledger.blockedToolCalls, touchedFileCount);
+        PostStatusToUI(p->hwndTarget, "%s", ledgerMsg);
+
+        ContextLedger_Persist(&ledger,
+            ModeName(contract.mode),
+            IntentName(intent),
+            touchedFileCount,
+            shadowMode,
+            touchedFileCount > 0 ? touchedFiles[0] : NULL);
     }
 
     // Post final response to UI
