@@ -38,6 +38,8 @@ extern "C" {
 
 // Create a new untitled editor buffer and fill it with UTF-8 text (lParam = heap-allocated char* text, receiver must free)
 #define WM_AI_NEW_FILE_TEXT  (WM_USER + 0x706)
+// Refresh the explorer around a file or folder path (lParam = heap-allocated WCHAR* path, receiver must free)
+#define WM_AI_REFRESH_PATH   (WM_USER + 0x707)
 
 //=============================================================================
 // Public API

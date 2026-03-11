@@ -11,6 +11,13 @@ extern int iEncoding;
 extern int iEOLMode;
 extern DWORD dwLastIOError;
 extern int iLongLinesLimit;
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern WCHAR szIniFile[MAX_PATH];
+#ifdef __cplusplus
+}
+#endif
 
 BOOL FileIO(BOOL, LPCWSTR, BOOL, int*, int*, BOOL*, BOOL*, BOOL*, enum ESaveCopyMode);
 BOOL n2e_IsSingleLineCommentStyleAtPos(const HWND hwnd, const int iLexer, const int iPos, EncodingData* pED);
@@ -65,7 +72,5 @@ extern NP2ENCODING mEncoding[];
 void n2e_ShowProgressBarInStatusBar(LPCWSTR pProgressText, const long nCurPos, const long nMaxPos);
 void n2e_HideProgressBarInStatusBar();
 void n2e_IncProgressBarPosInStatusBar(const long nOffset);
-
-extern WCHAR szIniFile[MAX_PATH];
 
 #endif

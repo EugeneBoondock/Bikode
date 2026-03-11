@@ -8,6 +8,7 @@
 ******************************************************************************/
 
 #include "BikodeTheme.h"
+#include "../../DarkMode.h"
 #include <string.h>
 
 typedef struct ThemeFontEntry {
@@ -25,6 +26,61 @@ static HFONT   s_hIconFontSm = NULL;
 static HFONT   s_hIconFontMd = NULL;
 static HFONT   s_hIconFontLg = NULL;
 static BOOL    s_bInit = FALSE;
+
+static const COLORREF s_darkPalette[] = {
+    RGB(24, 24, 24),      /* BKCLR_APP_BG */
+    RGB(36, 36, 36),      /* BKCLR_SURFACE_MAIN */
+    RGB(48, 50, 58),      /* BKCLR_SURFACE_RAISED */
+    RGB(55, 55, 55),      /* BKCLR_SURFACE_ELEVATED */
+    RGB(24, 24, 24),      /* BKCLR_EDITOR_BG */
+    RGB(36, 36, 36),      /* BKCLR_EDITOR_GUTTER */
+    RGB(30, 30, 30),      /* BKCLR_EDITOR_ACTIVE_LINE */
+    RGB(30, 55, 97),      /* BKCLR_EDITOR_SELECTION */
+    RGB(62, 40, 12),      /* BKCLR_EDITOR_FIND */
+    RGB(255, 212, 0),     /* BKCLR_EDITOR_BRACE */
+    RGB(17, 17, 17),      /* BKCLR_STROKE_DARK */
+    RGB(50, 50, 50),      /* BKCLR_STROKE_SOFT */
+    RGB(230, 230, 230),   /* BKCLR_TEXT_PRIMARY */
+    RGB(150, 150, 150),   /* BKCLR_TEXT_SECONDARY */
+    RGB(80, 80, 80),      /* BKCLR_TEXT_MUTED */
+    RGB(255, 212, 0),     /* BKCLR_SIGNAL_YELLOW */
+    RGB(75, 139, 245),    /* BKCLR_ELECTRIC_CYAN */
+    RGB(255, 77, 166),    /* BKCLR_HOT_MAGENTA */
+    RGB(31, 227, 138),    /* BKCLR_SUCCESS_GREEN */
+    RGB(255, 155, 48),    /* BKCLR_WARNING_ORANGE */
+    RGB(255, 91, 91),     /* BKCLR_DANGER_RED */
+    RGB(32, 32, 32)       /* BKCLR_TEXTURE_DOT */
+};
+
+static const COLORREF s_lightPalette[] = {
+    RGB(248, 244, 236),   /* BKCLR_APP_BG */
+    RGB(240, 234, 223),   /* BKCLR_SURFACE_MAIN */
+    RGB(233, 227, 215),   /* BKCLR_SURFACE_RAISED */
+    RGB(223, 214, 200),   /* BKCLR_SURFACE_ELEVATED */
+    RGB(251, 247, 240),   /* BKCLR_EDITOR_BG */
+    RGB(238, 232, 222),   /* BKCLR_EDITOR_GUTTER */
+    RGB(244, 239, 229),   /* BKCLR_EDITOR_ACTIVE_LINE */
+    RGB(206, 223, 246),   /* BKCLR_EDITOR_SELECTION */
+    RGB(244, 225, 188),   /* BKCLR_EDITOR_FIND */
+    RGB(214, 177, 44),    /* BKCLR_EDITOR_BRACE */
+    RGB(118, 102, 84),    /* BKCLR_STROKE_DARK */
+    RGB(201, 191, 176),   /* BKCLR_STROKE_SOFT */
+    RGB(54, 46, 36),      /* BKCLR_TEXT_PRIMARY */
+    RGB(118, 104, 89),    /* BKCLR_TEXT_SECONDARY */
+    RGB(159, 148, 135),   /* BKCLR_TEXT_MUTED */
+    RGB(214, 177, 44),    /* BKCLR_SIGNAL_YELLOW */
+    RGB(79, 122, 214),    /* BKCLR_ELECTRIC_CYAN */
+    RGB(219, 101, 153),   /* BKCLR_HOT_MAGENTA */
+    RGB(53, 150, 111),    /* BKCLR_SUCCESS_GREEN */
+    RGB(214, 133, 70),    /* BKCLR_WARNING_ORANGE */
+    RGB(198, 95, 92),     /* BKCLR_DANGER_RED */
+    RGB(229, 223, 211)    /* BKCLR_TEXTURE_DOT */
+};
+
+static const COLORREF* GetCurrentPalette(void)
+{
+    return DarkMode_IsEnabled() ? s_darkPalette : s_lightPalette;
+}
 
 static HFONT TryCreateFontWithFallback(const WCHAR* const* families, int height,
                                        int weight, BOOL italic, BOOL mono)
@@ -151,32 +207,10 @@ void BikodeTheme_Shutdown(void)
 
 COLORREF BikodeTheme_GetColor(BikodeColorToken token)
 {
-    switch (token)
-    {
-    case BKCLR_APP_BG:            return RGB(24, 24, 24);      // biko-bg #181818
-    case BKCLR_SURFACE_MAIN:      return RGB(36, 36, 36);      // biko-surface #242424
-    case BKCLR_SURFACE_RAISED:    return RGB(48, 50, 58);      // biko-hover #30323a
-    case BKCLR_SURFACE_ELEVATED:  return RGB(55, 55, 55);      // biko-border #373737
-    case BKCLR_EDITOR_BG:         return RGB(24, 24, 24);      // biko-bg
-    case BKCLR_EDITOR_GUTTER:     return RGB(36, 36, 36);      // biko-surface
-    case BKCLR_EDITOR_ACTIVE_LINE:return RGB(30, 30, 30);      // subtle lift
-    case BKCLR_EDITOR_SELECTION:  return RGB(30, 55, 97);      // accent at ~20%
-    case BKCLR_EDITOR_FIND:       return RGB(62, 40, 12);
-    case BKCLR_EDITOR_BRACE:      return RGB(255, 212, 0);
-    case BKCLR_STROKE_DARK:       return RGB(17, 17, 17);      // #111111
-    case BKCLR_STROKE_SOFT:       return RGB(50, 50, 50);      // biko-divider #323232
-    case BKCLR_TEXT_PRIMARY:      return RGB(230, 230, 230);    // biko-text1 #E6E6E6
-    case BKCLR_TEXT_SECONDARY:    return RGB(150, 150, 150);    // biko-text2 #969696
-    case BKCLR_TEXT_MUTED:        return RGB(80, 80, 80);       // biko-muted #505050
-    case BKCLR_SIGNAL_YELLOW:     return RGB(255, 212, 0);
-    case BKCLR_ELECTRIC_CYAN:     return RGB(75, 139, 245);     // biko-accent #4B8BF5
-    case BKCLR_HOT_MAGENTA:       return RGB(255, 77, 166);
-    case BKCLR_SUCCESS_GREEN:     return RGB(31, 227, 138);
-    case BKCLR_WARNING_ORANGE:    return RGB(255, 155, 48);
-    case BKCLR_DANGER_RED:        return RGB(255, 91, 91);
-    case BKCLR_TEXTURE_DOT:       return RGB(32, 32, 32);       // subtle grain dot
-    default:                      return RGB(255, 255, 255);
-    }
+    const COLORREF* palette = GetCurrentPalette();
+    if (token >= 0 && token < (int)(sizeof(s_darkPalette) / sizeof(s_darkPalette[0])))
+        return palette[token];
+    return RGB(255, 255, 255);
 }
 
 int BikodeTheme_GetMetric(BikodeMetricToken token)

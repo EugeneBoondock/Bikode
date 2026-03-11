@@ -15,6 +15,7 @@
 #include "BikoToolbar.h"
 #include "CommonUtils.h"
 #include "ComicTheme.h"
+#include "Externals.h"
 #include "ui/theme/BikodeTheme.h"
 #include "Scintilla.h"
 #include <dwmapi.h>
@@ -51,24 +52,24 @@ static const DarkModeColors s_darkColors = {
 };
 
 static const DarkModeColors s_lightColors = {
-    .clrBackground  = RGB(255, 255, 255),
-    .clrSurface     = RGB(243, 243, 243),
-    .clrText        = RGB(0, 0, 0),
-    .clrTextDim     = RGB(128, 128, 128),
-    .clrBorder      = RGB(200, 200, 200),
-    .clrAccent      = RGB(0, 122, 204),
-    .clrSelection   = RGB(173, 214, 255),
-    .clrCaretLine   = RGB(248, 248, 248),
-    .clrLineNumber  = RGB(150, 150, 150),
-    .clrIndentGuide = RGB(220, 220, 220),
-    .clrComment     = RGB(0, 128, 0),
-    .clrKeyword     = RGB(0, 0, 255),
-    .clrString      = RGB(163, 21, 21),
-    .clrNumber      = RGB(9, 134, 88),
-    .clrOperator    = RGB(0, 0, 0),
-    .clrType        = RGB(38, 127, 153),
-    .clrFunction    = RGB(116, 83, 31),
-    .clrPreprocessor = RGB(111, 0, 138),
+    .clrBackground  = RGB(248, 244, 236),     // warm Claude-like cream
+    .clrSurface     = RGB(240, 234, 223),     // lifted parchment
+    .clrText        = RGB(54, 46, 36),        // warm ink
+    .clrTextDim     = RGB(159, 148, 135),     // muted taupe
+    .clrBorder      = RGB(201, 191, 176),     // soft paper edge
+    .clrAccent      = RGB(79, 122, 214),      // cobalt accent
+    .clrSelection   = RGB(206, 223, 246),     // cool selection wash
+    .clrCaretLine   = RGB(244, 239, 229),     // subtle highlight
+    .clrLineNumber  = RGB(140, 128, 113),
+    .clrIndentGuide = RGB(214, 205, 191),
+    .clrComment     = RGB(106, 130, 97),
+    .clrKeyword     = RGB(79, 122, 214),
+    .clrString      = RGB(176, 103, 67),
+    .clrNumber      = RGB(53, 150, 111),
+    .clrOperator    = RGB(54, 46, 36),
+    .clrType        = RGB(97, 120, 171),
+    .clrFunction    = RGB(181, 140, 41),
+    .clrPreprocessor = RGB(179, 92, 132),
 };
 
 //=============================================================================
@@ -107,7 +108,7 @@ typedef BOOL (WINAPI *pfnShouldAppsUseDarkMode)(void);
 //=============================================================================
 
 static BOOL s_bInitialized = FALSE;
-static BOOL s_bEnabled = FALSE;
+static BOOL s_bEnabled = TRUE;
 static BOOL s_bSupported = FALSE;
 static HWND s_hwndMain = NULL;
 static HBRUSH s_hBackgroundBrush = NULL;
@@ -123,6 +124,10 @@ static HMODULE                      s_hUxTheme = NULL;
 
 // Forward declarations
 static void DarkMode_UpdateIcon(void);
+static void DarkMode_SavePreference(void);
+
+#define DARKMODE_INI_SECTION L"Settings2"
+#define DARKMODE_INI_KEY     L"DarkMode"
 
 //=============================================================================
 // Internal helpers
@@ -172,6 +177,23 @@ static void ResolveUxThemeAPIs(void)
         GetProcAddress(s_hUxTheme, MAKEINTRESOURCEA(132));
 }
 
+static BOOL LoadDarkModePreference(void)
+{
+    if (szIniFile[0])
+    {
+        return GetPrivateProfileIntW(DARKMODE_INI_SECTION, DARKMODE_INI_KEY, 1, szIniFile) != 0;
+    }
+    return TRUE;
+}
+
+static void ApplyPreferredAppMode(void)
+{
+    if (s_bSupported && s_pfnSetAppMode)
+    {
+        s_pfnSetAppMode(s_bEnabled ? PAM_FORCE_DARK : PAM_FORCE_LIGHT);
+    }
+}
+
 static void ApplyDarkTitleBar(HWND hwnd, BOOL bDark)
 {
     BOOL useDark = bDark;
@@ -218,14 +240,10 @@ void DarkMode_Init(HWND hwndMain)
     if (s_bSupported)
     {
         ResolveUxThemeAPIs();
-
-        // [biko]: Force dark mode always — no light mode
-        if (s_pfnSetAppMode)
-            s_pfnSetAppMode(PAM_FORCE_DARK);
     }
 
-    // Dark mode is always on — light mode removed
-    s_bEnabled = TRUE;
+    s_bEnabled = LoadDarkModePreference();
+    ApplyPreferredAppMode();
 
     UpdateBackgroundBrush();
     s_bInitialized = TRUE;
@@ -233,6 +251,7 @@ void DarkMode_Init(HWND hwndMain)
     // [biko]: Initialize the Comic Theme
     BikodeTheme_Init();
     ComicTheme_Init();
+    DarkMode_UpdateIcon();
 }
 
 static void DarkMode_UpdateIcon(void)
@@ -263,13 +282,12 @@ void DarkMode_Shutdown(void)
 
 void DarkMode_Toggle(void)
 {
-    // [biko]: No-op — dark mode is always on
+    DarkMode_SetEnabled(!s_bEnabled);
 }
 
 BOOL DarkMode_IsEnabled(void)
 {
-    // [biko]: Always dark — light mode removed
-    return TRUE;
+    return s_bEnabled;
 }
 
 BOOL DarkMode_IsSupported(void)
@@ -279,11 +297,11 @@ BOOL DarkMode_IsSupported(void)
 
 void DarkMode_SetEnabled(BOOL bEnable)
 {
-    // [biko]: Always dark — ignore the parameter
-    UNREFERENCED_PARAMETER(bEnable);
-    s_bEnabled = TRUE;
+    s_bEnabled = bEnable ? TRUE : FALSE;
+    ApplyPreferredAppMode();
     UpdateBackgroundBrush();
     DarkMode_UpdateIcon();
+    DarkMode_SavePreference();
 
     if (s_hwndMain)
     {
@@ -469,8 +487,17 @@ const DarkModeColors* DarkMode_GetColors(void)
 
 HBRUSH DarkMode_HandleCtlColor(HDC hdc)
 {
-    if (!s_bEnabled) return NULL;
-    SetTextColor(hdc, s_darkColors.clrText);
-    SetBkColor(hdc, s_darkColors.clrSurface);
+    const DarkModeColors* pColors = DarkMode_GetColors();
+    SetTextColor(hdc, pColors->clrText);
+    SetBkColor(hdc, pColors->clrSurface);
     return s_hBackgroundBrush;
+}
+
+static void DarkMode_SavePreference(void)
+{
+    if (szIniFile[0])
+    {
+        WritePrivateProfileStringW(DARKMODE_INI_SECTION, DARKMODE_INI_KEY,
+            s_bEnabled ? L"1" : L"0", szIniFile);
+    }
 }

@@ -16,7 +16,8 @@
       "Bash(\"/c/Program Files \\(x86\\)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe\" \"c:/Users/USER/Projects/Bikode/Notepad2e.vcxproj\" //p:Configuration=Debug //p:Platform=x64 //p:PlatformToolset=v143 //t:Rebuild //m //v:minimal)",
       "Bash(grep:*)",
       "Bash(\"C:/Program Files \\(x86\\)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe\" \"c:/Users/USER/Projects/Bikode/Notepad2e.vcxproj\" /p:Configuration=Debug /p:Platform=x64 /m /nologo)",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(git fetch:*)"
     ]
   }
 }

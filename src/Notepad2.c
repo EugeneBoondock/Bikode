@@ -639,7 +639,7 @@ BOOL InitApplication(HINSTANCE hInstance)
   wc.hInstance     = hInstance;
   wc.hIcon         = LoadIcon(hInstance,MAKEINTRESOURCE(IDR_MAINWND));
   wc.hCursor       = LoadCursor(NULL,IDC_ARROW);
-  // [biko]: Dark background — light mode removed
+  // [biko]: Dark background ? light mode removed
   wc.hbrBackground = CreateSolidBrush(RGB(24, 24, 24));
   wc.lpszMenuName  = MAKEINTRESOURCE(IDR_MAINWND);
   wc.lpszClassName = wchWndClass;
@@ -1026,27 +1026,23 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
 
     // [biko]: Dark mode aware background painting
     case WM_ERASEBKGND:
-      if (DarkMode_IsEnabled())
+      if (DarkMode_GetBackgroundBrush())
       {
           HDC hdc = (HDC)wParam;
           RECT rc;
           GetClientRect(hwnd, &rc);
-          HBRUSH hBrush = CreateSolidBrush(RGB(24, 24, 24));
-          FillRect(hdc, &rc, hBrush);
-          DeleteObject(hBrush);
+          FillRect(hdc, &rc, DarkMode_GetBackgroundBrush());
           return 1;
       }
       return DefWindowProc(hwnd, umsg, wParam, lParam);
 
     case WM_PAINT:
     {
-      if (DarkMode_IsEnabled())
+      if (DarkMode_GetBackgroundBrush())
       {
           PAINTSTRUCT ps;
           HDC hdc = BeginPaint(hwnd, &ps);
-          HBRUSH hBrush = CreateSolidBrush(RGB(24, 24, 24));
-          FillRect(hdc, &ps.rcPaint, hBrush);
-          DeleteObject(hBrush);
+          FillRect(hdc, &ps.rcPaint, DarkMode_GetBackgroundBrush());
           EndPaint(hwnd, &ps);
           return 0;
       }
@@ -1690,10 +1686,83 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
     // [biko]: AI agent file/editor tool messages
     case WM_AI_OPEN_FILE:
       {
-        LPCWSTR wszFile = (LPCWSTR)lParam;
+        LPWSTR wszFile = (LPWSTR)lParam;
         if (wszFile) {
-          FileLoad(FALSE, FALSE, FALSE, FALSE, wszFile);
+          WCHAR wszFullPath[MAX_PATH + 40];
+          WCHAR wszFolder[MAX_PATH + 40];
+          LPCWSTR wszLoadPath = wszFile;
+          const WCHAR* wszRoot;
+          int cchRoot;
+          BOOL bInsideRoot = FALSE;
+          DWORD cchFull = GetFullPathNameW(wszFile, COUNTOF(wszFullPath), wszFullPath, NULL);
+
+          if (cchFull > 0 && cchFull < COUNTOF(wszFullPath))
+            wszLoadPath = wszFullPath;
+
+          lstrcpynW(wszFolder, wszLoadPath, COUNTOF(wszFolder));
+          if (!PathIsDirectoryW(wszFolder))
+            PathRemoveFileSpecW(wszFolder);
+
+          wszRoot = FileManager_GetRootPath();
+          cchRoot = lstrlenW(wszRoot);
+          if (wszFolder[0] && cchRoot > 0 && _wcsnicmp(wszRoot, wszFolder, cchRoot) == 0) {
+            WCHAR ch = wszFolder[cchRoot];
+            bInsideRoot = (ch == L'\0' || ch == L'\\' || ch == L'/');
+          }
+
+          if (wszFolder[0]) {
+            if (bInsideRoot)
+              FileManager_Refresh();
+            else
+              FileManager_OpenFolder(wszFolder);
+          }
+          else {
+            FileManager_Refresh();
+          }
+
+          FileLoad(FALSE, FALSE, FALSE, FALSE, wszLoadPath);
           free((void*)wszFile);
+        }
+      }
+      return 0;
+
+    case WM_AI_REFRESH_PATH:
+      {
+        LPWSTR wszPath = (LPWSTR)lParam;
+        if (wszPath) {
+          WCHAR wszFullPath[MAX_PATH + 40];
+          WCHAR wszFolder[MAX_PATH + 40];
+          LPCWSTR wszTargetPath = wszPath;
+          const WCHAR* wszRoot;
+          int cchRoot;
+          BOOL bInsideRoot = FALSE;
+          DWORD cchFull = GetFullPathNameW(wszPath, COUNTOF(wszFullPath), wszFullPath, NULL);
+
+          if (cchFull > 0 && cchFull < COUNTOF(wszFullPath))
+            wszTargetPath = wszFullPath;
+
+          lstrcpynW(wszFolder, wszTargetPath, COUNTOF(wszFolder));
+          if (!PathIsDirectoryW(wszFolder))
+            PathRemoveFileSpecW(wszFolder);
+
+          wszRoot = FileManager_GetRootPath();
+          cchRoot = lstrlenW(wszRoot);
+          if (wszFolder[0] && cchRoot > 0 && _wcsnicmp(wszRoot, wszFolder, cchRoot) == 0) {
+            WCHAR ch = wszFolder[cchRoot];
+            bInsideRoot = (ch == L'\0' || ch == L'\\' || ch == L'/');
+          }
+
+          if (wszFolder[0]) {
+            if (bInsideRoot)
+              FileManager_Refresh();
+            else
+              FileManager_OpenFolder(wszFolder);
+          }
+          else {
+            FileManager_Refresh();
+          }
+
+          free((void*)wszPath);
         }
       }
       return 0;
@@ -1748,7 +1817,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
       return 0;
 
     case WM_USER + 0x600:
-      // Deferred init — all windows are now ready
+      // Deferred init ? all windows are now ready
       // [biko]: Create custom menu bar (must be deferred; SetMenu(NULL) during
       //         WM_CREATE triggers premature size recalculation)
       {
@@ -1763,11 +1832,11 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
         }
       }
       // [/biko]
-      if (DarkMode_IsEnabled())
       {
+          const DarkModeColors* pThemeColors = DarkMode_GetColors();
           DarkMode_ApplyAll(hwnd, _hwndEdit, hwndToolbar, hwndStatus, hwndReBar);
 
-          // [biko]: Dark mode for edit frame (WC_LISTVIEW border container)
+          // [biko]: Theme-aware edit frame (WC_LISTVIEW border container)
           if (hwndEditFrame)
           {
               // Remove ALL borders: WS_EX_CLIENTEDGE, WS_BORDER, themed edges
@@ -1779,9 +1848,8 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
                   SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
               // Disable visual styles completely to prevent themed 1px border
               SetWindowTheme(hwndEditFrame, L"", L"");
-              // Set dark background
-              SendMessage(hwndEditFrame, LVM_SETBKCOLOR, 0, (LPARAM)RGB(24, 24, 24));
-              SendMessage(hwndEditFrame, LVM_SETTEXTBKCOLOR, 0, (LPARAM)RGB(24, 24, 24));
+              SendMessage(hwndEditFrame, LVM_SETBKCOLOR, 0, (LPARAM)pThemeColors->clrBackground);
+              SendMessage(hwndEditFrame, LVM_SETTEXTBKCOLOR, 0, (LPARAM)pThemeColors->clrBackground);
               InvalidateRect(hwndEditFrame, NULL, TRUE);
           }
 
@@ -1805,8 +1873,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
                   SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED);
           }
 
-          // Dark mode for status bar background
-          SendMessage(hwndStatus, SB_SETBKCOLOR, 0, (LPARAM)RGB(24, 24, 24));
+          SendMessage(hwndStatus, SB_SETBKCOLOR, 0, (LPARAM)pThemeColors->clrBackground);
 
           // Remove rebar band child edge that shows as light line
           {
@@ -1991,7 +2058,7 @@ LRESULT MsgCreate(HWND hwnd, WPARAM wParam, LPARAM lParam)
   BikoToolbar_Create(hwnd, hInstance);
   BikoToolbar_Show(bShowToolbar);
   BikoSideRail_Init(hwnd);
-  // Hide the old rebar — we keep it for compatibility but don't show it
+  // Hide the old rebar ? we keep it for compatibility but don't show it
   ShowWindow(hwndReBar, SW_HIDE);
 
   // Window Initialization
@@ -2211,7 +2278,7 @@ void CreateBars(HWND hwnd, HINSTANCE hInstance)
   // [biko]: Create custom owner-drawn status bar (replaces native for dark mode)
   BikoStatusBar_Create(hwnd, hInstance);
   BikoStatusBar_Show(bShowStatusbar);
-  // Hide the native status bar — we keep it for compatibility but don't show it
+  // Hide the native status bar ? we keep it for compatibility but don't show it
   ShowWindow(hwndStatus, SW_HIDE);
   // [/biko]
 
@@ -6272,7 +6339,7 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
               HBRUSH hBr = CreateSolidBrush(clrBg);
               FillRect(lpcd->hdc, &lpcd->rc, hBr);
               DeleteObject(hBr);
-              // Yellow top border — comic panel separator
+              // Yellow top border ? comic panel separator
               HPEN hPen = CreatePen(PS_SOLID, 2, clrTxt);
               HPEN hOldPen = SelectObject(lpcd->hdc, hPen);
               MoveToEx(lpcd->hdc, lpcd->rc.left,  lpcd->rc.top, NULL);
@@ -6348,15 +6415,15 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
 
 
     default:
-      // [biko]: Dark mode custom draw for rebar and other controls
-      if (pnmh->code == NM_CUSTOMDRAW && DarkMode_IsEnabled())
+      // [biko]: Theme-aware custom draw for rebar and other controls
+      if (pnmh->code == NM_CUSTOMDRAW && DarkMode_GetBackgroundBrush())
       {
         LPNMCUSTOMDRAW lpcd = (LPNMCUSTOMDRAW)lParam;
         switch (lpcd->dwDrawStage)
         {
           case CDDS_PREPAINT:
           {
-            COLORREF clrBg = RGB(24, 24, 24);
+            COLORREF clrBg = DarkMode_GetBackgroundColor();
             HBRUSH hBr = CreateSolidBrush(clrBg);
             FillRect(lpcd->hdc, &lpcd->rc, hBr);
             DeleteObject(hBr);
@@ -6364,7 +6431,7 @@ LRESULT MsgNotify(HWND hwnd, WPARAM wParam, LPARAM lParam)
           }
           case CDDS_ITEMPREPAINT:
           {
-            COLORREF clrBg = RGB(24, 24, 24);
+            COLORREF clrBg = DarkMode_GetBackgroundColor();
             SetBkColor(lpcd->hdc, clrBg);
             HBRUSH hBr = CreateSolidBrush(clrBg);
             FillRect(lpcd->hdc, &lpcd->rc, hBr);

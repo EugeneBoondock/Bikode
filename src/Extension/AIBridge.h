@@ -42,6 +42,18 @@ typedef enum
 } EAIStatus;
 
 //=============================================================================
+// Chat access mode
+//=============================================================================
+
+typedef enum
+{
+    AI_CHAT_ACCESS_API_PROVIDER = 0,
+    AI_CHAT_ACCESS_CODEX,
+    AI_CHAT_ACCESS_CLAUDE,
+    AI_CHAT_ACCESS_CODEX_CLAUDE
+} EAIChatAccessMode;
+
+//=============================================================================
 // Request types
 //=============================================================================
 
@@ -235,6 +247,8 @@ typedef struct TAIConfig
     BOOL    bShowTokenCost;
     int     iMaxContextFiles;
     BOOL    bAutoStartEngine;
+    EAIChatAccessMode eChatAccessMode;
+    WCHAR   wszChatDriverModel[128];
 
     // Provider configuration (multi-provider support)
     AIProviderConfig providerCfg;    // active provider + model + key + params
@@ -282,6 +296,8 @@ void    AIBridge_FreeRequest(AIRequest* pReq);
 void    AIBridge_LoadConfig(AIConfig* pConfig, LPCWSTR wszIniFile);
 void    AIBridge_SaveConfig(const AIConfig* pConfig, LPCWSTR wszIniFile);
 void    AIBridge_ApplyConfig(const AIConfig* pConfig);
+const AIConfig* AIBridge_GetConfig(void);
+BOOL    AIBridge_HasChatAccess(void);
 
 // Provider management
 BOOL    AIBridge_SetProvider(EAIProvider eProvider, const char* szModel, const char* szApiKey);

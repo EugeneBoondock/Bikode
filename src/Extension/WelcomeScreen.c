@@ -43,19 +43,19 @@ extern HWND hwndMain;
 #define DK_DIVIDER      RGB(50, 50, 50)
 
 // Light mode
-#define LT_BG           RGB(248, 249, 251)
-#define LT_SURFACE      RGB(255, 255, 255)
-#define LT_SURFACE_HOV  RGB(237, 242, 252)
-#define LT_BORDER       RGB(215, 215, 215)
+#define LT_BG           RGB(248, 244, 236)
+#define LT_SURFACE      RGB(240, 234, 223)
+#define LT_SURFACE_HOV  RGB(233, 227, 215)
+#define LT_BORDER       RGB(201, 191, 176)
 #define LT_BORDER_HOV   RGB(70, 120, 210)
-#define LT_TEXT1         RGB(28, 28, 28)
-#define LT_TEXT2         RGB(100, 100, 100)
-#define LT_MUTED        RGB(165, 165, 165)
+#define LT_TEXT1        RGB(54, 46, 36)
+#define LT_TEXT2        RGB(118, 104, 89)
+#define LT_MUTED        RGB(159, 148, 135)
 #define LT_ACCENT       RGB(50, 110, 215)
 #define LT_ACCENT_HOV   RGB(30, 90, 195)
-#define LT_BADGE_BG     RGB(238, 238, 238)
-#define LT_BADGE_BD     RGB(210, 210, 210)
-#define LT_DIVIDER      RGB(228, 228, 228)
+#define LT_BADGE_BG     RGB(233, 227, 215)
+#define LT_BADGE_BD     RGB(201, 191, 176)
+#define LT_DIVIDER      RGB(214, 205, 191)
 
 //=============================================================================
 // Button definitions

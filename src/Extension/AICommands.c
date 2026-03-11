@@ -10,6 +10,7 @@
 #include "AICommands.h"
 #include "AIBridge.h"
 #include "AIProvider.h"
+#include "AISubscriptionAgent.h"
 #include "AIContext.h"
 #include "DiffParse.h"
 #include "DiffPreview.h"
@@ -341,7 +342,7 @@ BOOL AICommands_HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return TRUE;
 
     case WM_AI_STATUS:
-        // Status changed â€” update status bar (trigger repaint)
+        // Status changed - update status bar (trigger repaint)
         lstrcpynW(s_wszMissionStatus, AIBridge_GetStatusText(), COUNTOF(s_wszMissionStatus));
         ProofTray_SetMissionStatus(s_wszMissionStatus);
         InvalidateRect(hwnd, NULL, FALSE);
@@ -362,7 +363,7 @@ BOOL AICommands_HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         return TRUE;
 
     case WM_AI_CHUNK:
-        // Streaming chunk â€” could update status bar
+        // Streaming chunk - could update status bar
         return TRUE;
 
     default:
@@ -378,7 +379,7 @@ void AICommands_CreateMenu(HMENU hMainMenu)
 {
     if (!hMainMenu) return;
 
-    // ── Get existing top-level submenus by position ──
+    // Get existing top-level submenus by position
     // File=0, Edit=1, View=2, Settings=3, ?=4
     int menuCount = GetMenuItemCount(hMainMenu);
     HMENU hFile     = (menuCount > 0) ? GetSubMenu(hMainMenu, 0) : NULL;
@@ -386,7 +387,7 @@ void AICommands_CreateMenu(HMENU hMainMenu)
     HMENU hView     = (menuCount > 2) ? GetSubMenu(hMainMenu, 2) : NULL;
     HMENU hSettings = (menuCount > 3) ? GetSubMenu(hMainMenu, 3) : NULL;
 
-    // ── File menu: Open Folder ──
+    // File menu: Open Folder
     if (hFile)
     {
         AppendMenuW(hFile, MF_SEPARATOR, 0, NULL);
@@ -394,7 +395,7 @@ void AICommands_CreateMenu(HMENU hMainMenu)
                     L"Open Folder...");
     }
 
-    // ── Edit menu: AI actions on selection ──
+    // Edit menu: AI actions on selection
     if (hEdit)
     {
         AppendMenuW(hEdit, MF_SEPARATOR, 0, NULL);
@@ -408,7 +409,7 @@ void AICommands_CreateMenu(HMENU hMainMenu)
                     L"AI Fix\tCtrl+Shift+F");
     }
 
-    // ── View menu: panels & visual toggles ──
+    // View menu: panels & visual toggles
     if (hView)
     {
         AppendMenuW(hView, MF_SEPARATOR, 0, NULL);
@@ -430,7 +431,7 @@ void AICommands_CreateMenu(HMENU hMainMenu)
                     L"Dark Mode\tCtrl+Shift+D");
     }
 
-    // ── Agents menu: first-class AI actions ──
+    // Agents menu: first-class AI actions
     {
         HMENU hAgentsMenu = CreatePopupMenu();
         AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_TOGGLE_CHAT, L"Chat Panel\tCtrl+Shift+C");
@@ -447,7 +448,7 @@ void AICommands_CreateMenu(HMENU hMainMenu)
         InsertMenuW(hMainMenu, 3, MF_BYPOSITION | MF_POPUP, (UINT_PTR)hAgentsMenu, L"Agents");
     }
 
-    // ── Git menu: first-class repo controls ──
+    // Git menu: first-class repo controls
     {
         HMENU hGitMenu = CreatePopupMenu();
         AppendMenuW(hGitMenu, MF_STRING, IDM_GIT_STATUS,  L"Status");
@@ -465,7 +466,7 @@ void AICommands_CreateMenu(HMENU hMainMenu)
         InsertMenuW(hMainMenu, 4, MF_BYPOSITION | MF_POPUP, (UINT_PTR)hGitMenu, L"Git");
     }
 
-    // ── Terminal menu: first-class console controls ──
+    // Terminal menu: first-class console controls
     {
         HMENU hTerminalMenu = CreatePopupMenu();
         AppendMenuW(hTerminalMenu, MF_STRING, IDM_TERMINAL_TOGGLE, L"Toggle Terminal\tCtrl+`");
@@ -473,7 +474,7 @@ void AICommands_CreateMenu(HMENU hMainMenu)
         InsertMenuW(hMainMenu, 5, MF_BYPOSITION | MF_POPUP, (UINT_PTR)hTerminalMenu, L"Terminal");
     }
 
-    // ── Settings menu: AI configuration ──
+    // Settings menu: AI configuration
     if (hSettings)
     {
         AppendMenuW(hSettings, MF_SEPARATOR, 0, NULL);
@@ -496,7 +497,7 @@ void AICommands_UpdateMenu(HMENU hMainMenu)
 
     UINT aiState = bConnected ? MF_ENABLED : MF_GRAYED;
 
-    // AI actions live in Edit menu now — use EnableMenuItem on the main menu
+    // AI actions live in Edit menu now; use EnableMenuItem on the main menu
     EnableMenuItem(hMainMenu, IDM_AI_TRANSFORM, MF_BYCOMMAND | aiState);
     EnableMenuItem(hMainMenu, IDM_AI_REFACTOR, MF_BYCOMMAND | aiState);
     EnableMenuItem(hMainMenu, IDM_AI_EXPLAIN, MF_BYCOMMAND | aiState);
@@ -888,6 +889,9 @@ BOOL AICommands_ShowTransformDialog(HWND hwndParent,
 #define IDC_SETTINGS_PORT       204
 #define IDC_SETTINGS_TEMP       205
 #define IDC_SETTINGS_MAXTOK     206
+#define IDC_SETTINGS_CHATMODE   207
+#define IDC_SETTINGS_CHATMODEL  208
+#define IDC_SETTINGS_AUTHBTN    209
 
 static AIConfig s_settingsDlgConfig;
 
@@ -922,6 +926,67 @@ static void PopulateModelCombo(HWND hDlg, const AIProviderDef* pDef, const char*
     SendMessageW(hModelCombo, CB_SETCURSEL, selIdx, 0);
 }
 
+static void PopulateChatModeCombo(HWND hDlg, EAIChatAccessMode eCurrentMode)
+{
+    HWND hCombo = GetDlgItem(hDlg, IDC_SETTINGS_CHATMODE);
+    int idx = 0;
+    int selIdx = 0;
+
+    SendMessageW(hCombo, CB_RESETCONTENT, 0, 0);
+
+    idx = (int)SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)L"Built-in API provider");
+    SendMessageW(hCombo, CB_SETITEMDATA, idx, (LPARAM)AI_CHAT_ACCESS_API_PROVIDER);
+    if (eCurrentMode == AI_CHAT_ACCESS_API_PROVIDER)
+        selIdx = idx;
+
+    idx = (int)SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)L"Codex embedded chat");
+    SendMessageW(hCombo, CB_SETITEMDATA, idx, (LPARAM)AI_CHAT_ACCESS_CODEX);
+    if (eCurrentMode == AI_CHAT_ACCESS_CODEX)
+        selIdx = idx;
+
+    idx = (int)SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)L"Claude embedded chat");
+    SendMessageW(hCombo, CB_SETITEMDATA, idx, (LPARAM)AI_CHAT_ACCESS_CLAUDE);
+    if (eCurrentMode == AI_CHAT_ACCESS_CLAUDE)
+        selIdx = idx;
+
+    idx = (int)SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)L"Codex + Claude embedded relay");
+    SendMessageW(hCombo, CB_SETITEMDATA, idx, (LPARAM)AI_CHAT_ACCESS_CODEX_CLAUDE);
+    if (eCurrentMode == AI_CHAT_ACCESS_CODEX_CLAUDE)
+        selIdx = idx;
+
+    SendMessageW(hCombo, CB_SETCURSEL, selIdx, 0);
+}
+
+static EAIChatAccessMode GetSelectedChatMode(HWND hDlg)
+{
+    HWND hCombo = GetDlgItem(hDlg, IDC_SETTINGS_CHATMODE);
+    int idx = (int)SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
+    if (idx < 0)
+        return AI_CHAT_ACCESS_API_PROVIDER;
+    return (EAIChatAccessMode)SendMessageW(hCombo, CB_GETITEMDATA, idx, 0);
+}
+
+static void SettingsDlg_UpdateChatModeControls(HWND hDlg)
+{
+    EAIChatAccessMode eMode = GetSelectedChatMode(hDlg);
+    HWND hModel = GetDlgItem(hDlg, IDC_SETTINGS_CHATMODEL);
+    HWND hAuth = GetDlgItem(hDlg, IDC_SETTINGS_AUTHBTN);
+    BOOL bUsesSubscription = (eMode != AI_CHAT_ACCESS_API_PROVIDER);
+    BOOL bIsAuthenticated = AISubscriptionAgent_IsAuthenticated(eMode);
+
+    EnableWindow(hModel, bUsesSubscription);
+    EnableWindow(hAuth, bUsesSubscription);
+
+    if (eMode == AI_CHAT_ACCESS_CODEX)
+        SetWindowTextW(hAuth, bIsAuthenticated ? L"Logout Codex" : L"Open Codex Login");
+    else if (eMode == AI_CHAT_ACCESS_CLAUDE)
+        SetWindowTextW(hAuth, bIsAuthenticated ? L"Logout Claude" : L"Open Claude Login");
+    else if (eMode == AI_CHAT_ACCESS_CODEX_CLAUDE)
+        SetWindowTextW(hAuth, bIsAuthenticated ? L"Logout Both" : L"Open Missing Login");
+    else
+        SetWindowTextW(hAuth, L"Open Login");
+}
+
 static INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     UNREFERENCED_PARAMETER(lParam);
@@ -930,6 +995,11 @@ static INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
     {
     case WM_INITDIALOG:
     {
+        const AIConfig* pCurrentCfg = AIBridge_GetConfig();
+
+        if (pCurrentCfg)
+            memcpy(&s_aiConfig, pCurrentCfg, sizeof(AIConfig));
+
         // Copy current config for editing
         memcpy(&s_settingsDlgConfig, &s_aiConfig, sizeof(AIConfig));
 
@@ -970,6 +1040,10 @@ static INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
         // Max tokens
         SetDlgItemInt(hDlg, IDC_SETTINGS_MAXTOK,
                       s_settingsDlgConfig.providerCfg.iMaxTokens, FALSE);
+
+        PopulateChatModeCombo(hDlg, s_settingsDlgConfig.eChatAccessMode);
+        SetDlgItemTextW(hDlg, IDC_SETTINGS_CHATMODEL, s_settingsDlgConfig.wszChatDriverModel);
+        SettingsDlg_UpdateChatModeControls(hDlg);
 
         // Center dialog
         RECT rcParent, rcDlg;
@@ -1026,6 +1100,79 @@ static INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
             }
             break;
 
+        case IDC_SETTINGS_CHATMODE:
+            if (HIWORD(wParam) == CBN_SELCHANGE)
+            {
+                SettingsDlg_UpdateChatModeControls(hDlg);
+                return TRUE;
+            }
+            break;
+
+        case IDC_SETTINGS_AUTHBTN:
+        {
+            EAIChatAccessMode eMode = GetSelectedChatMode(hDlg);
+            LPCWSTR wszInfo = L"The vendor login flow was opened. After login, Codex or Claude runs headlessly inside Bikode's chat panel.";
+            HWND hwndPanel = ChatPanel_GetPanelHwnd();
+            if (eMode == AI_CHAT_ACCESS_API_PROVIDER)
+            {
+                MessageBoxW(hDlg,
+                            L"This mode uses the built-in provider and API-key settings above.",
+                            L"Bikode AI Settings",
+                            MB_OK | MB_ICONINFORMATION);
+                return TRUE;
+            }
+
+            if (AISubscriptionAgent_IsBusy())
+            {
+                MessageBoxW(hDlg,
+                            L"Finish the current embedded agent run before changing vendor login state.",
+                            L"Bikode AI Settings",
+                            MB_OK | MB_ICONINFORMATION);
+                return TRUE;
+            }
+
+            if (AISubscriptionAgent_IsAuthenticated(eMode))
+            {
+                LPCWSTR wszLogoutInfo = L"Stored vendor credentials removed.";
+                if (!AISubscriptionAgent_Logout(eMode))
+                {
+                    MessageBoxW(hDlg,
+                                L"Could not remove the selected vendor credentials.",
+                                L"Bikode AI Settings",
+                                MB_OK | MB_ICONERROR);
+                    return TRUE;
+                }
+
+                if (eMode == AI_CHAT_ACCESS_CODEX)
+                    wszLogoutInfo = L"Stored Codex credentials removed.";
+                else if (eMode == AI_CHAT_ACCESS_CLAUDE)
+                    wszLogoutInfo = L"Stored Claude credentials removed.";
+                else if (eMode == AI_CHAT_ACCESS_CODEX_CLAUDE)
+                    wszLogoutInfo = L"Stored Codex and Claude credentials removed.";
+
+                SettingsDlg_UpdateChatModeControls(hDlg);
+                if (hwndPanel)
+                    InvalidateRect(hwndPanel, NULL, FALSE);
+                MessageBoxW(hDlg, wszLogoutInfo, L"Bikode AI Settings", MB_OK | MB_ICONINFORMATION);
+                return TRUE;
+            }
+
+            if (!AISubscriptionAgent_OpenLoginFlow(eMode, hDlg))
+            {
+                MessageBoxW(hDlg,
+                            L"Could not launch the selected login flow. Make sure the CLI is installed and on PATH.",
+                            L"Bikode AI Settings",
+                            MB_OK | MB_ICONERROR);
+                return TRUE;
+            }
+
+            if (eMode == AI_CHAT_ACCESS_CODEX_CLAUDE)
+                wszInfo = L"The required vendor login flow was opened. After login, Codex and Claude run through Bikode's chat panel relay rather than a terminal UI.";
+
+            MessageBoxW(hDlg, wszInfo, L"Bikode AI Settings", MB_OK | MB_ICONINFORMATION);
+            return TRUE;
+        }
+
         case IDOK:
         {
             // Read all fields into config
@@ -1057,6 +1204,11 @@ static INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
             // Max tokens
             s_settingsDlgConfig.providerCfg.iMaxTokens =
                 GetDlgItemInt(hDlg, IDC_SETTINGS_MAXTOK, NULL, FALSE);
+
+            s_settingsDlgConfig.eChatAccessMode = GetSelectedChatMode(hDlg);
+            GetDlgItemTextW(hDlg, IDC_SETTINGS_CHATMODEL,
+                            s_settingsDlgConfig.wszChatDriverModel,
+                            COUNTOF(s_settingsDlgConfig.wszChatDriverModel));
 
             // Provider (from combo)
             {
@@ -1093,16 +1245,18 @@ static void AICmd_ShowSettingsDialog(HWND hwndParent)
     //   Model:       [Edit_______________]
     //   API Key:     [Edit_______________]
     //   Max Tokens:  [Edit_______________]
+    //   Chat Mode:   [ComboBox___________]
+    //   Chat Model:  [Edit_______________]
     //   [OK] [Cancel]
 
-    BYTE buffer[2048];
+    BYTE buffer[3072];
     ZeroMemory(buffer, sizeof(buffer));
 
     DLGTEMPLATE* pDlg = (DLGTEMPLATE*)buffer;
     pDlg->style = DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE;
-    pDlg->cdit = 10;  // 4 labels + 2 edits + 2 combos + 2 buttons
-    pDlg->cx = 280;
-    pDlg->cy = 120;
+    pDlg->cdit = 15;
+    pDlg->cx = 292;
+    pDlg->cy = 156;
 
     WORD* p = (WORD*)(pDlg + 1);
     *p++ = 0; // no menu
@@ -1162,8 +1316,8 @@ static void AICmd_ShowSettingsDialog(HWND hwndParent)
     }
 
     int yRow = 10;
-    int labelW = 60;
-    int ctrlX = 70;
+    int labelW = 74;
+    int ctrlX = 84;
     int ctrlW = 200;
     int rowH = 16;
 
@@ -1185,11 +1339,22 @@ static void AICmd_ShowSettingsDialog(HWND hwndParent)
     // Row 4: Max Tokens
     ADD_STATIC(7, yRow + 2, labelW, 10, 96, L"Max Tokens:");
     ADD_EDIT(ctrlX, yRow, ctrlW, 13, IDC_SETTINGS_MAXTOK, 0);
+    yRow += rowH;
+
+    // Row 5: Chat backend
+    ADD_STATIC(7, yRow + 2, labelW, 10, 95, L"Chat Backend:");
+    ADD_COMBO(ctrlX, yRow, ctrlW, 120, IDC_SETTINGS_CHATMODE);
+    yRow += rowH;
+
+    // Row 6: Chat model
+    ADD_STATIC(7, yRow + 2, labelW, 10, 94, L"Chat Model:");
+    ADD_EDIT(ctrlX, yRow, ctrlW, 13, IDC_SETTINGS_CHATMODEL, 0);
     yRow += rowH + 8;
 
     // Buttons
-    ADD_BUTTON(165, yRow, 50, 14, IDOK, L"OK", BS_DEFPUSHBUTTON);
-    ADD_BUTTON(220, yRow, 50, 14, IDCANCEL, L"Cancel", 0);
+    ADD_BUTTON(84, yRow, 92, 14, IDC_SETTINGS_AUTHBTN, L"Open Login", 0);
+    ADD_BUTTON(188, yRow, 45, 14, IDOK, L"OK", BS_DEFPUSHBUTTON);
+    ADD_BUTTON(238, yRow, 45, 14, IDCANCEL, L"Cancel", 0);
 
     yRow += 22;
 

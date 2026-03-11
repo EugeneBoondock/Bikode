@@ -465,6 +465,15 @@ void AIBridge_LoadConfig(AIConfig* pConfig, LPCWSTR wszIniFile)
     pConfig->bShowTokenCost = GetPrivateProfileIntW(L"AI", L"ShowTokenCost", 0, wszIniFile);
     pConfig->iMaxContextFiles = GetPrivateProfileIntW(L"AI", L"MaxContextFiles", 10, wszIniFile);
     pConfig->bAutoStartEngine = GetPrivateProfileIntW(L"AI", L"AutoStartEngine", 1, wszIniFile);
+    pConfig->eChatAccessMode = (EAIChatAccessMode)GetPrivateProfileIntW(
+        L"AI", L"ChatAccessMode", AI_CHAT_ACCESS_API_PROVIDER, wszIniFile);
+    if (pConfig->eChatAccessMode < AI_CHAT_ACCESS_API_PROVIDER ||
+        pConfig->eChatAccessMode > AI_CHAT_ACCESS_CODEX_CLAUDE)
+    {
+        pConfig->eChatAccessMode = AI_CHAT_ACCESS_API_PROVIDER;
+    }
+    GetPrivateProfileStringW(L"AI", L"ChatDriverModel", L"",
+                             pConfig->wszChatDriverModel, 128, wszIniFile);
 
     // Legacy fields
     GetPrivateProfileStringW(L"AI", L"ApiEndpoint", L"https://api.openai.com/v1",
@@ -546,6 +555,9 @@ void AIBridge_SaveConfig(const AIConfig* pConfig, LPCWSTR wszIniFile)
     WritePrivateProfileStringW(L"AI", L"MaxContextFiles", buf, wszIniFile);
     swprintf(buf, 32, L"%d", pConfig->bAutoStartEngine);
     WritePrivateProfileStringW(L"AI", L"AutoStartEngine", buf, wszIniFile);
+    swprintf(buf, 32, L"%d", (int)pConfig->eChatAccessMode);
+    WritePrivateProfileStringW(L"AI", L"ChatAccessMode", buf, wszIniFile);
+    WritePrivateProfileStringW(L"AI", L"ChatDriverModel", pConfig->wszChatDriverModel, wszIniFile);
     WritePrivateProfileStringW(L"AI", L"ApiEndpoint", pConfig->wszApiEndpoint, wszIniFile);
     WritePrivateProfileStringW(L"AI", L"Model", pConfig->wszModelName, wszIniFile);
 
@@ -605,6 +617,32 @@ void AIBridge_ApplyConfig(const AIConfig* pConfig)
     if (AIBridge_IsConnected())
     {
         AIBridge_SendConfigToEngine(&pConfig->providerCfg);
+    }
+}
+
+const AIConfig* AIBridge_GetConfig(void)
+{
+    return &s_config;
+}
+
+BOOL AIBridge_HasChatAccess(void)
+{
+    if (s_config.eChatAccessMode == AI_CHAT_ACCESS_CODEX ||
+        s_config.eChatAccessMode == AI_CHAT_ACCESS_CLAUDE ||
+        s_config.eChatAccessMode == AI_CHAT_ACCESS_CODEX_CLAUDE)
+    {
+        return TRUE;
+    }
+
+    {
+        const AIProviderDef* pDef = AIProvider_Get(s_config.providerCfg.eProvider);
+        if (!pDef)
+            return FALSE;
+
+        if (pDef->bIsLocal || !pDef->bRequiresKey)
+            return TRUE;
+
+        return s_config.providerCfg.szApiKey[0] != '\0';
     }
 }
 

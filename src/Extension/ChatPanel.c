@@ -1,4 +1,4 @@
-/******************************************************************************
+﻿/******************************************************************************
 *
 * Biko
 *
@@ -16,8 +16,9 @@
 #include "AIDirectCall.h"
 #include "AIContext.h"
 #include "AICommands.h"
-#include "AIBridge.h"
+#include "AISubscriptionAgent.h"
 #include "AIProvider.h"
+#include "Externals.h"
 #include "CommonUtils.h"
 #include "FileManager.h"
 #include "Utils.h"
@@ -39,6 +40,7 @@
 #include <process.h>
 #include "resource.h"
 
+
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "urlmon.lib")
 
@@ -47,74 +49,83 @@
 //=============================================================================
 
 // Background
-#define CP_BG              RGB(24, 24, 24)       // biko-bg #181818
-#define CP_HEADER          RGB(36, 36, 36)       // biko-surface #242424
+#define CP_BG              (BikodeTheme_GetColor(BKCLR_APP_BG))
+#define CP_HEADER          (BikodeTheme_GetColor(BKCLR_SURFACE_MAIN))
 
 // User bubble (right side)
-#define CP_USER_BG         RGB(48, 50, 58)       // biko-hover #30323a
-#define CP_USER_TEXT       RGB(230, 230, 230)    // biko-text1 #E6E6E6
+#define CP_USER_BG         (BikodeTheme_GetColor(BKCLR_SURFACE_RAISED))
+#define CP_USER_TEXT       (BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY))
 
 // AI bubble (left side)
-#define CP_AI_BG           RGB(36, 36, 36)       // biko-surface #242424
-#define CP_AI_TEXT         RGB(230, 230, 230)    // biko-text1 #E6E6E6
-#define CP_AI_STRIP        RGB(48, 50, 58)       // biko-hover #30323a
+#define CP_AI_BG           (BikodeTheme_GetColor(BKCLR_SURFACE_MAIN))
+#define CP_AI_TEXT         (BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY))
+#define CP_AI_STRIP        (BikodeTheme_GetColor(BKCLR_SURFACE_RAISED))
 
 // Attachment chips
-#define CP_ATTACHMENT_BG      RGB(48, 50, 58)    // biko-hover
-#define CP_ATTACHMENT_BORDER  RGB(55, 55, 55)    // biko-border #373737
-#define CP_ATTACHMENT_TEXT    RGB(150, 150, 150)  // biko-text2 #969696
+#define CP_ATTACHMENT_BG      (BikodeTheme_GetColor(BKCLR_SURFACE_RAISED))
+#define CP_ATTACHMENT_BORDER  (BikodeTheme_GetColor(BKCLR_STROKE_SOFT))
+#define CP_ATTACHMENT_TEXT    (BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY))
 
 // System messages
-#define CP_SYS_TEXT        RGB(150, 150, 150)    // biko-text2 #969696
+#define CP_SYS_TEXT        (BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY))
 
 // Input area
-#define CP_INPUT_BG        RGB(36, 36, 36)       // biko-surface
-#define CP_INPUT_BD        RGB(55, 55, 55)       // biko-border
-#define CP_INPUT_FOCUS_BD  RGB(75, 139, 245)     // biko-accent #4B8BF5
-#define CP_INPUT_WELL_BG   RGB(24, 24, 24)       // biko-bg
-#define CP_INPUT_DOCK_BG   RGB(24, 24, 24)       // biko-bg
-#define CP_INPUT_TEXT      RGB(230, 230, 230)    // biko-text1
+#define CP_INPUT_BG        (BikodeTheme_GetColor(BKCLR_SURFACE_MAIN))
+#define CP_INPUT_BD        (BikodeTheme_GetColor(BKCLR_STROKE_SOFT))
+#define CP_INPUT_FOCUS_BD  (BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN))
+#define CP_INPUT_WELL_BG   (BikodeTheme_GetColor(BKCLR_APP_BG))
+#define CP_INPUT_DOCK_BG   (BikodeTheme_GetColor(BKCLR_APP_BG))
+#define CP_INPUT_TEXT      (BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY))
 
 // Accents — blue accent from website
-#define CP_ACCENT          RGB(75, 139, 245)     // biko-accent #4B8BF5
-#define CP_TEXT_PRIMARY    RGB(230, 230, 230)    // biko-text1
-#define CP_TEXT_SECONDARY  RGB(150, 150, 150)    // biko-text2
-#define CP_CLOSE_HOV       RGB(48, 50, 58)       // biko-hover
-#define CP_SEND_HOV        RGB(100, 160, 255)    // biko-accent2 #64A0FF
-#define CP_SEND_BG         RGB(75, 139, 245)     // biko-accent
-#define CP_SCROLLBAR_BG    RGB(24, 24, 24)       // biko-bg
-#define CP_SCROLLBAR_TH    RGB(80, 80, 80)       // biko-muted #505050
-#define CP_SCROLLBAR_HOV   RGB(75, 139, 245)     // biko-accent
-#define CP_BTN_BG             RGB(36, 36, 36)    // biko-surface
-#define CP_BTN_HOV            RGB(48, 50, 58)    // biko-hover
-#define CP_BTN_DOWN           RGB(24, 24, 24)    // biko-bg
-#define CP_BTN_BORDER         RGB(55, 55, 55)    // biko-border
-#define CP_BTN_BORDER_HOV     RGB(75, 139, 245)  // biko-accent
-#define CP_BTN_ICON           RGB(230, 230, 230) // biko-text1
+#define CP_ACCENT          (BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN))
+#define CP_TEXT_PRIMARY    (BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY))
+#define CP_TEXT_SECONDARY  (BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY))
+#define CP_CLOSE_HOV       (BikodeTheme_GetColor(BKCLR_SURFACE_RAISED))
+#define CP_SEND_HOV        (BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 112))
+#define CP_SEND_BG         (BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN))
+#define CP_SCROLLBAR_BG    (BikodeTheme_GetColor(BKCLR_APP_BG))
+#define CP_SCROLLBAR_TH    (BikodeTheme_GetColor(BKCLR_TEXT_MUTED))
+#define CP_SCROLLBAR_HOV   (BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN))
+#define CP_BTN_BG             (BikodeTheme_GetColor(BKCLR_SURFACE_MAIN))
+#define CP_BTN_HOV            (BikodeTheme_GetColor(BKCLR_SURFACE_RAISED))
+#define CP_BTN_DOWN           (BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), BikodeTheme_GetColor(BKCLR_STROKE_DARK), 96))
+#define CP_BTN_BORDER         (BikodeTheme_GetColor(BKCLR_STROKE_SOFT))
+#define CP_BTN_BORDER_HOV     (BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN))
+#define CP_BTN_ICON           (BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY))
 
-#define CP_BTN_PRIMARY_BG     RGB(75, 139, 245)  // biko-accent
-#define CP_BTN_PRIMARY_HOV    RGB(100, 160, 255) // biko-accent2
-#define CP_BTN_PRIMARY_DOWN   RGB(55, 110, 200)  // accent-dark
-#define CP_BTN_PRIMARY_BORDER RGB(75, 139, 245)  // biko-accent
+#define CP_BTN_PRIMARY_BG     (BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN))
+#define CP_BTN_PRIMARY_HOV    (BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY), 42))
+#define CP_BTN_PRIMARY_DOWN   (BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), BikodeTheme_GetColor(BKCLR_STROKE_DARK), 176))
+#define CP_BTN_PRIMARY_BORDER (BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN))
 
 // Additional tokens for status card
-#define CP_BORDER          RGB(55, 55, 55)       // biko-border #373737
-#define CP_MUTED           RGB(80, 80, 80)       // biko-muted #505050
-#define CP_DIVIDER         RGB(50, 50, 50)       // biko-divider #323232
+#define CP_BORDER          (BikodeTheme_GetColor(BKCLR_STROKE_SOFT))
+#define CP_MUTED           (BikodeTheme_GetColor(BKCLR_TEXT_MUTED))
+#define CP_DIVIDER         (BikodeTheme_GetColor(BKCLR_STROKE_SOFT))
 
 //=============================================================================
 // Layout constants
 //=============================================================================
 
 #define CHAT_PANEL_WIDTH        360
-#define CHAT_HEADER_HEIGHT      58
-#define CHAT_INPUT_AREA_HEIGHT  108
+#define CHAT_HEADER_HEIGHT      80
+#define CHAT_INPUT_AREA_HEIGHT  132
 #define CHAT_INPUT_PAD          10
 #define CHAT_INPUT_INNER_PAD    10
 #define CHAT_INPUT_RADIUS       8
+#define CHAT_COMPOSER_FOOTER_H  38
+#define CHAT_COMPOSER_FOOTER_GAP 8
+#define CHAT_ACTION_BTN_SIZE    32
+#define CHAT_ACTION_SEND_W      94
 #define CHAT_SEND_SIZE          32
-#define CHAT_BTN_GAP             8
+#define CHAT_BTN_GAP             6
 #define CHAT_HDR_BTN_SIZE       24
+#define CHAT_HEADER_MODE_COUNT   4
+#define CHAT_HEADER_MODE_H      24
+#define CHAT_HEADER_MODE_GAP     2
+#define CHAT_HEADER_ACTION_W    92
+#define CHAT_HEADER_ACTION_H    24
 #define CHAT_STATUS_DOT_R       4
 #define CHAT_EMPTY_CARD_INSET   16
 #define CHAT_EMPTY_CHIP_H       24
@@ -122,7 +133,7 @@
 #define CHAT_EMPTY_TITLE        L"I write what I like."
 #define CHAT_EMPTY_BODY         L"Bikode AI keeps the website's voice inside the editor: trace a crash, explain a symbol, search the repo, or draft a patch from the current file while protecting your voice and intent."
 #define CHAT_EMPTY_HINT         L"Paste screenshots, drop files, or use search to pull repo context into the thread."
-#define CHAT_COMPOSER_TAG_H     20
+#define CHAT_COMPOSER_TAG_H     22
 #define CHAT_COMPOSER_HINT_H    16
 
 #define CHAT_BUBBLE_PAD_H     12
@@ -213,9 +224,14 @@ static BOOL     s_bAttachDown = FALSE;
 static BOOL     s_bSearchDown = FALSE;
 static BOOL     s_bInputFocused = FALSE;
 
-// Header close button
+// Header chrome
 static RECT     s_rcCloseBtn   = { 0 };
+static RECT     s_rcHeaderModes[CHAT_HEADER_MODE_COUNT] = { { 0 } };
+static RECT     s_rcHeaderModeDock = { 0 };
+static RECT     s_rcHeaderAction = { 0 };
 static BOOL     s_bCloseHover  = FALSE;
+static int      s_iHeaderHotMode = -1;
+static BOOL     s_bHeaderActionHover = FALSE;
 
 // Fonts
 static HFONT    s_hFontHeader  = NULL;
@@ -244,6 +260,7 @@ static RECT     s_rcInputWell = { 0 };
 static RECT     s_rcComposerTag = { 0 };
 static RECT     s_rcComposerHint = { 0 };
 static RECT     s_rcComposerDock = { 0 };
+static RECT     s_rcComposerActionDock = { 0 };
 static RECT     s_rcPendingStrip = { 0 };
 static int      s_lastLayoutParentRight = 0;
 static int      s_lastLayoutEditorTop = 0;
@@ -285,6 +302,9 @@ static DWORD  s_statusDotTick      = 0;
 #define STATUS_DOT_R           4
 #define STATUS_TEXT_GAP        8
 #define STATUS_TOOL_GAP        4
+#define STATUS_TOOL_PAD_H      10
+#define STATUS_TOOL_PAD_V       7
+#define STATUS_TOOL_RADIUS      8
 
 //=============================================================================
 // Activity GIF Pool
@@ -903,14 +923,174 @@ static void StatusGif_StartDownload(ActivityCategory category)
 // Status Card: activate / update / deactivate
 //=============================================================================
 
+static BOOL IsStatusWideSpace(WCHAR ch)
+{
+    return ch == L' ' || ch == L'\t' || ch == L'\r' || ch == L'\n';
+}
+
+static void TrimWideInPlace(WCHAR* text)
+{
+    WCHAR* start;
+    size_t len;
+
+    if (!text) return;
+
+    start = text;
+    while (*start && IsStatusWideSpace(*start))
+        start++;
+    if (start != text)
+        MoveMemory(text, start, (wcslen(start) + 1) * sizeof(WCHAR));
+
+    len = wcslen(text);
+    while (len > 0 && IsStatusWideSpace(text[len - 1]))
+        text[--len] = L'\0';
+}
+
+static void StripLeadingStatusLeadIn(WCHAR* text)
+{
+    WCHAR* p;
+
+    if (!text || !text[0]) return;
+
+    p = text;
+    for (;;)
+    {
+        while (*p && IsStatusWideSpace(*p))
+            p++;
+
+        if (*p == (WCHAR)0x2022 || *p == L'-' || *p == L'+' || *p == L'>')
+        {
+            p++;
+            continue;
+        }
+
+        if (*p >= L'0' && *p <= L'9')
+        {
+            WCHAR* q = p;
+            while (*q >= L'0' && *q <= L'9')
+                q++;
+            if ((*q == L'.' || *q == L')' || *q == L':') && IsStatusWideSpace(q[1]))
+            {
+                p = q + 1;
+                continue;
+            }
+        }
+        break;
+    }
+
+    while (*p && IsStatusWideSpace(*p))
+        p++;
+    if (p != text)
+        MoveMemory(text, p, (wcslen(p) + 1) * sizeof(WCHAR));
+}
+
+static BOOL StripWrappedTokenInPlace(WCHAR* text, WCHAR openCh, WCHAR closeCh)
+{
+    size_t len;
+
+    if (!text) return FALSE;
+
+    len = wcslen(text);
+    if (len >= 2 && text[0] == openCh && text[len - 1] == closeCh)
+    {
+        MoveMemory(text, text + 1, (len - 1) * sizeof(WCHAR));
+        text[len - 2] = L'\0';
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static void RemoveStatusMarkdownGlyphsInPlace(WCHAR* text)
+{
+    WCHAR* src;
+    WCHAR* dst;
+
+    if (!text) return;
+
+    src = text;
+    dst = text;
+    while (*src)
+    {
+        if (*src != L'*' && *src != (WCHAR)0x0060)
+            *dst++ = *src;
+        src++;
+    }
+    *dst = L'\0';
+}
+
+static void CollapseStatusWhitespaceInPlace(WCHAR* text)
+{
+    WCHAR* src;
+    WCHAR* dst;
+    BOOL needSpace = FALSE;
+
+    if (!text) return;
+
+    src = text;
+    dst = text;
+    while (*src)
+    {
+        if (IsStatusWideSpace(*src))
+        {
+            if (dst != text)
+                needSpace = TRUE;
+        }
+        else
+        {
+            if (needSpace && dst != text)
+                *dst++ = L' ';
+            *dst++ = *src;
+            needSpace = FALSE;
+        }
+        src++;
+    }
+    *dst = L'\0';
+}
+
+static void NormalizeStatusCardText(const char* text, WCHAR* out, int cchOut, BOOL toolLine)
+{
+    if (!out || cchOut <= 0)
+        return;
+
+    out[0] = L'\0';
+    if (!text || !text[0])
+        return;
+
+    if (!MultiByteToWideChar(CP_UTF8, 0, text, -1, out, cchOut))
+        MultiByteToWideChar(CP_ACP, 0, text, -1, out, cchOut);
+
+    TrimWideInPlace(out);
+    StripLeadingStatusLeadIn(out);
+    TrimWideInPlace(out);
+
+    for (;;)
+    {
+        BOOL changed = FALSE;
+        changed |= StripWrappedTokenInPlace(out, L'*', L'*');
+        changed |= StripWrappedTokenInPlace(out, (WCHAR)0x0060, (WCHAR)0x0060);
+        changed |= StripWrappedTokenInPlace(out, L'"', L'"');
+        changed |= StripWrappedTokenInPlace(out, L'\'', L'\'');
+        if (!changed)
+            break;
+        TrimWideInPlace(out);
+    }
+
+    RemoveStatusMarkdownGlyphsInPlace(out);
+    CollapseStatusWhitespaceInPlace(out);
+    TrimWideInPlace(out);
+
+    if (!toolLine && !out[0])
+        StringCchCopyW(out, cchOut, L"Working");
+}
+
 static void StatusCard_Activate(const char* initialStatus)
 {
     s_bAIWorking = TRUE;
     StringCchCopyA(s_szStatusText, ARRAYSIZE(s_szStatusText),
                    initialStatus ? initialStatus : "Thinking...");
     s_szToolText[0] = '\0';
-    MultiByteToWideChar(CP_UTF8, 0, s_szStatusText, -1,
-                        s_wszStatusText, ARRAYSIZE(s_wszStatusText));
+    NormalizeStatusCardText(s_szStatusText, s_wszStatusText,
+                            ARRAYSIZE(s_wszStatusText), FALSE);
     s_wszToolText[0] = L'\0';
     s_statusDotPhase = 0;
     s_statusDotTick = GetTickCount();
@@ -932,13 +1112,13 @@ static void StatusCard_Activate(const char* initialStatus)
         InvalidateRect(s_hwndChat, NULL, FALSE);
     }
 }
-
 static void StatusCard_UpdateStatus(const char* statusText)
 {
     if (!s_bAIWorking) return;
-    StringCchCopyA(s_szStatusText, ARRAYSIZE(s_szStatusText), statusText);
-    MultiByteToWideChar(CP_UTF8, 0, s_szStatusText, -1,
-                        s_wszStatusText, ARRAYSIZE(s_wszStatusText));
+    StringCchCopyA(s_szStatusText, ARRAYSIZE(s_szStatusText),
+                   statusText ? statusText : "");
+    NormalizeStatusCardText(s_szStatusText, s_wszStatusText,
+                            ARRAYSIZE(s_wszStatusText), FALSE);
     if (s_hwndChat) {
         HDC hdc = GetDC(s_hwndChat);
         RECT rc;
@@ -949,24 +1129,22 @@ static void StatusCard_UpdateStatus(const char* statusText)
         InvalidateRect(s_hwndChat, NULL, FALSE);
     }
 }
-
 static void StatusCard_UpdateTool(const char* toolText)
 {
     if (!s_bAIWorking) return;
 
     // Parse "[toolName: detail]" -> "toolName: detail"
     const char* src = toolText;
-    if (src[0] == '[') src++;
+    if (src && src[0] == '[') src++;
     char clean[512];
-    StringCchCopyA(clean, ARRAYSIZE(clean), src);
+    StringCchCopyA(clean, ARRAYSIZE(clean), src ? src : "");
     int len = (int)strlen(clean);
     if (len > 0 && clean[len - 1] == ']') clean[len - 1] = '\0';
 
     StringCchCopyA(s_szToolText, ARRAYSIZE(s_szToolText), clean);
-    MultiByteToWideChar(CP_UTF8, 0, s_szToolText, -1,
-                        s_wszToolText, ARRAYSIZE(s_wszToolText));
+    NormalizeStatusCardText(s_szToolText, s_wszToolText,
+                            ARRAYSIZE(s_wszToolText), TRUE);
 
-    // Check if activity category changed
     ActivityCategory newCat = ClassifyToolActivity(toolText);
     if (newCat != s_currentActivity) {
         s_currentActivity = newCat;
@@ -984,7 +1162,6 @@ static void StatusCard_UpdateTool(const char* toolText)
         InvalidateRect(s_hwndChat, NULL, FALSE);
     }
 }
-
 static void StatusCard_Deactivate(void)
 {
     s_bAIWorking = FALSE;
@@ -1008,41 +1185,41 @@ static int MeasureStatusCardHeight(HDC hdc, int chatW)
     if (!s_bAIWorking) return 0;
 
     int cardInnerW = chatW - 2 * STATUS_CARD_MARGIN - 2 * STATUS_CARD_PAD_H;
+    int textXOffset = STATUS_DOT_R * 2 + STATUS_TEXT_GAP + 8;
+    int textW = cardInnerW - textXOffset;
     int totalH = STATUS_CARD_PAD_V;
+    HFONT hOld;
 
-    // GIF area
+    if (textW < 72) textW = 72;
+
     if (s_pStatusGif) {
         totalH += s_statusGifDrawH + CHAT_INLINE_GIF_FRAME_PAD * 2 + STATUS_GIF_GAP;
     }
 
-    // Status text line (with dot offset)
-    int textW = cardInnerW - STATUS_DOT_R * 2 - STATUS_TEXT_GAP - 8;
-    if (textW < 40) textW = 40;
-    HFONT hOld = (HFONT)SelectObject(hdc, s_hFontBubble);
-    RECT rc = { 0, 0, textW, 0 };
+    hOld = (HFONT)SelectObject(hdc, s_hFontLabel ? s_hFontLabel : s_hFontBubble);
     if (s_wszStatusText[0]) {
+        RECT rc = { 0, 0, textW, 0 };
         DrawTextW(hdc, s_wszStatusText, -1, &rc,
                   DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-        totalH += rc.bottom + STATUS_TOOL_GAP;
+        totalH += max(18, rc.bottom);
     } else {
         totalH += 18;
     }
     SelectObject(hdc, hOld);
 
-    // Tool text line
     if (s_wszToolText[0]) {
         hOld = (HFONT)SelectObject(hdc, s_hFontStatus);
-        RECT rcTool = { 0, 0, cardInnerW, 0 };
+        RECT rcTool = { 0, 0, max(48, textW - 2 * STATUS_TOOL_PAD_H), 0 };
         DrawTextW(hdc, s_wszToolText, -1, &rcTool,
-                  DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
-        totalH += rcTool.bottom;
+                  DT_CALCRECT | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
+        totalH += STATUS_TOOL_GAP;
+        totalH += rcTool.bottom + STATUS_TOOL_PAD_V * 2;
         SelectObject(hdc, hOld);
     }
 
     totalH += STATUS_CARD_PAD_V;
     return totalH;
 }
-
 static void PaintStatusCard(HDC hdc, int cx, int y)
 {
     if (!s_bAIWorking) return;
@@ -1050,15 +1227,22 @@ static void PaintStatusCard(HDC hdc, int cx, int y)
     int cardX = STATUS_CARD_MARGIN;
     int cardW = cx - 2 * STATUS_CARD_MARGIN;
     int cardH = MeasureStatusCardHeight(hdc, cx);
+    int contentX;
+    int contentY;
+    int contentW;
+    int dotCenterX;
+    int dotCenterY;
+    int textX;
+    int textW;
+    HFONT hOld;
 
     RECT rcCard = { cardX, y, cardX + cardW, y + cardH };
     FillRoundRect(hdc, &rcCard, STATUS_CARD_RADIUS, CP_AI_BG, CP_BORDER);
 
-    int contentX = cardX + STATUS_CARD_PAD_H;
-    int contentY = y + STATUS_CARD_PAD_V;
-    int contentW = cardW - 2 * STATUS_CARD_PAD_H;
+    contentX = cardX + STATUS_CARD_PAD_H;
+    contentY = y + STATUS_CARD_PAD_V;
+    contentW = cardW - 2 * STATUS_CARD_PAD_H;
 
-    // Draw GIF if available
     if (s_pStatusGif) {
         int frameW = s_statusGifDrawW + CHAT_INLINE_GIF_FRAME_PAD * 2;
         int frameH = s_statusGifDrawH + CHAT_INLINE_GIF_FRAME_PAD * 2;
@@ -1074,41 +1258,60 @@ static void PaintStatusCard(HDC hdc, int cx, int y)
         contentY += frameH + STATUS_GIF_GAP;
     }
 
-    // Pulsing dot - 3 brightness phases
     COLORREF dotColor;
     switch (s_statusDotPhase) {
         case 0:  dotColor = CP_ACCENT; break;
         case 1:  dotColor = BikodeTheme_Mix(CP_ACCENT, CP_AI_BG, 160); break;
         default: dotColor = BikodeTheme_Mix(CP_ACCENT, CP_AI_BG, 80); break;
     }
-    int dotCenterX = contentX + STATUS_DOT_R;
-    int dotCenterY = contentY + 9;
+    dotCenterX = contentX + STATUS_DOT_R;
+    dotCenterY = contentY + 10;
     DrawStatusDot(hdc, dotCenterX, dotCenterY, STATUS_DOT_R, dotColor);
 
-    // Status text
-    int textX = dotCenterX + STATUS_DOT_R + STATUS_TEXT_GAP;
-    HFONT hOld = (HFONT)SelectObject(hdc, s_hFontBubble);
+    textX = dotCenterX + STATUS_DOT_R + STATUS_TEXT_GAP;
+    textW = contentX + contentW - textX;
+    if (textW < 72) textW = 72;
+
+    hOld = (HFONT)SelectObject(hdc, s_hFontLabel ? s_hFontLabel : s_hFontBubble);
     SetTextColor(hdc, CP_TEXT_PRIMARY);
-    RECT rcStatus = { textX, contentY, contentX + contentW, contentY + 200 };
+    RECT rcStatus = { textX, contentY, textX + textW, contentY + 240 };
+    RECT rcStatusCalc = { 0, 0, textW, 0 };
     DrawTextW(hdc, s_wszStatusText, -1, &rcStatus,
               DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
-    RECT rcCalc = { 0, 0, contentX + contentW - textX, 0 };
-    DrawTextW(hdc, s_wszStatusText, -1, &rcCalc,
+    DrawTextW(hdc, s_wszStatusText, -1, &rcStatusCalc,
               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-    contentY += rcCalc.bottom + STATUS_TOOL_GAP;
+    contentY += max(18, rcStatusCalc.bottom);
     SelectObject(hdc, hOld);
 
-    // Tool text (muted, smaller)
     if (s_wszToolText[0]) {
+        RECT rcToolMeasure = { 0, 0, max(48, textW - 2 * STATUS_TOOL_PAD_H), 0 };
+        RECT rcToolBox;
+        RECT rcToolText;
+
+        hOld = (HFONT)SelectObject(hdc, s_hFontStatus);
+        DrawTextW(hdc, s_wszToolText, -1, &rcToolMeasure,
+                  DT_CALCRECT | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
+        SelectObject(hdc, hOld);
+
+        contentY += STATUS_TOOL_GAP;
+        rcToolBox.left = textX;
+        rcToolBox.top = contentY;
+        rcToolBox.right = textX + textW;
+        rcToolBox.bottom = contentY + rcToolMeasure.bottom + STATUS_TOOL_PAD_V * 2;
+        FillRoundRect(hdc, &rcToolBox, STATUS_TOOL_RADIUS, CP_INPUT_WELL_BG, CP_BORDER);
+
+        rcToolText.left = rcToolBox.left + STATUS_TOOL_PAD_H;
+        rcToolText.top = rcToolBox.top + STATUS_TOOL_PAD_V;
+        rcToolText.right = rcToolBox.right - STATUS_TOOL_PAD_H;
+        rcToolText.bottom = rcToolBox.bottom - STATUS_TOOL_PAD_V;
+
         hOld = (HFONT)SelectObject(hdc, s_hFontStatus);
         SetTextColor(hdc, CP_TEXT_SECONDARY);
-        RECT rcTool = { textX, contentY, contentX + contentW, contentY + 100 };
-        DrawTextW(hdc, s_wszToolText, -1, &rcTool,
-                  DT_LEFT | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        DrawTextW(hdc, s_wszToolText, -1, &rcToolText,
+                  DT_LEFT | DT_WORDBREAK | DT_EDITCONTROL | DT_NOPREFIX);
         SelectObject(hdc, hOld);
     }
 }
-
 //=============================================================================
 // Class registration
 //=============================================================================
@@ -1469,53 +1672,122 @@ static int DrawBrandWordmark(HDC hdc, int left, int top)
     return x;
 }
 
-static void DrawButtonFace(HDC hdc, const RECT* rc, BOOL hover, BOOL down, BOOL primary)
+static void DrawButtonFace(HDC hdc, const RECT* rc, BOOL hover, BOOL down, BOOL primary, COLORREF accent)
 {
+    RECT rcShadow;
+    RECT rcButton;
+    RECT rcUnderline;
+    RECT rcHighlight;
+    COLORREF fill;
+    COLORREF border;
+    COLORREF underline;
+
     if (!rc) return;
 
-    COLORREF fill = primary
-        ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), 56)
-        : CP_INPUT_DOCK_BG;
-    COLORREF border = primary ? CP_BTN_PRIMARY_BORDER : CP_BTN_BORDER;
-    if (down) {
-        fill = primary ? CP_BTN_PRIMARY_DOWN : BikodeTheme_GetColor(BKCLR_SURFACE_MAIN);
-        border = primary ? CP_BTN_PRIMARY_BORDER : BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
-    } else if (hover) {
-        fill = primary
-            ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 84)
-            : BikodeTheme_GetColor(BKCLR_SURFACE_RAISED);
-        if (!primary) border = CP_BTN_BORDER_HOV;
+    fill = primary
+        ? BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 132)
+        : BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), BikodeTheme_GetColor(BKCLR_APP_BG), 220);
+    border = primary
+        ? BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_STROKE_DARK), 96)
+        : BikodeTheme_GetColor(BKCLR_STROKE_SOFT);
+    underline = primary
+        ? BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY), 188)
+        : BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), hover ? 170 : 112);
+
+    if (hover && !primary)
+    {
+        fill = BikodeTheme_Mix(accent, fill, 18);
+        border = BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY), 138);
+    }
+    if (down)
+    {
+        fill = BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_STROKE_DARK), fill, 76);
+        border = accent;
+        underline = accent;
     }
 
-    RECT rcButton = *rc;
+    rcShadow = *rc;
+    if (!down)
+    {
+        OffsetRect(&rcShadow, 0, 1);
+        FillRoundRectSolid(hdc, &rcShadow, 9,
+            BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_APP_BG), BikodeTheme_GetColor(BKCLR_STROKE_DARK), 188));
+    }
+
+    rcButton = *rc;
     InflateRect(&rcButton, -1, -1);
-    FillRoundRect(hdc, &rcButton, 8, fill, border);
+    if (down)
+        OffsetRect(&rcButton, 0, 1);
 
-    RECT rcInner = rcButton;
-    InflateRect(&rcInner, -1, -1);
-    COLORREF innerFill = fill;
-    if (!down) {
-        innerFill = primary
-            ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), CP_INPUT_DOCK_BG, hover ? 140 : 112)
-            : CP_INPUT_BG;
-        if (hover && !primary)
-            innerFill = BikodeTheme_GetColor(BKCLR_SURFACE_MAIN);
+    BikodeTheme_DrawRoundedPanel(hdc, &rcButton, fill,
+        BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+        border,
+        9, FALSE);
+
+    rcHighlight = rcButton;
+    rcHighlight.left += 10;
+    rcHighlight.top += 4;
+    rcHighlight.right -= 10;
+    rcHighlight.bottom = rcHighlight.top + 1;
+    {
+        HPEN hPen = CreatePen(PS_SOLID, 1,
+            BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY), fill, primary ? 164 : 124));
+        HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+        MoveToEx(hdc, rcHighlight.left, rcHighlight.top, NULL);
+        LineTo(hdc, rcHighlight.right, rcHighlight.top);
+        SelectObject(hdc, hOldPen);
+        DeleteObject(hPen);
     }
-    FillRoundRectSolid(hdc, &rcInner, 7, innerFill);
 
-    RECT rcHighlight = rcInner;
-    InflateRect(&rcHighlight, -2, -2);
-    COLORREF hl = primary
-        ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY), BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), 104)
-        : (hover ? BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN) : BikodeTheme_GetColor(BKCLR_STROKE_SOFT));
-    HPEN hPen = CreatePen(PS_SOLID, 1, hl);
-    HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
-    MoveToEx(hdc, rcHighlight.left + 3, rcHighlight.top + 1, NULL);
-    LineTo(hdc, rcHighlight.right - 3, rcHighlight.top + 1);
-    SelectObject(hdc, hOldPen);
-    DeleteObject(hPen);
+    rcUnderline = rcButton;
+    rcUnderline.left += 8;
+    rcUnderline.right -= 8;
+    rcUnderline.bottom -= 4;
+    rcUnderline.top = rcUnderline.bottom - (primary ? 3 : 2);
+    FillRoundRectSolid(hdc, &rcUnderline, 2, underline);
 }
 
+static void DrawPromptDeckChip(HDC hdc, const RECT* rc)
+{
+    if (!rc || IsRectEmpty(rc))
+        return;
+
+    BikodeTheme_DrawChip(hdc, rc, L"Prompt deck",
+        BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), BikodeTheme_GetColor(BKCLR_APP_BG), 228),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
+        BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE,
+        BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+}
+
+static void PaintHeaderModeDock(HDC hdc, const RECT* rc)
+{
+    if (!rc || IsRectEmpty(rc))
+        return;
+
+    BikodeTheme_DrawRoundedPanel(hdc, rc,
+        BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), BikodeTheme_GetColor(BKCLR_APP_BG), 228),
+        BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        11, FALSE);
+
+    for (int i = 1; i < CHAT_HEADER_MODE_COUNT; i++)
+    {
+        if (IsRectEmpty(&s_rcHeaderModes[i - 1]) || IsRectEmpty(&s_rcHeaderModes[i]))
+            continue;
+
+        {
+            int dividerX = (s_rcHeaderModes[i - 1].right + s_rcHeaderModes[i].left) / 2;
+            HPEN hPen = CreatePen(PS_SOLID, 1,
+                BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_STROKE_SOFT), BikodeTheme_GetColor(BKCLR_APP_BG), 176));
+            HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+            MoveToEx(hdc, dividerX, rc->top + 6, NULL);
+            LineTo(hdc, dividerX, rc->bottom - 6);
+            SelectObject(hdc, hOldPen);
+            DeleteObject(hPen);
+        }
+    }
+}
 static BOOL IsMissionIdleState(void)
 {
     if (s_nMsgs == 0)
@@ -2653,7 +2925,7 @@ BOOL ChatPanel_Create(HWND hwndParent)
     s_hIconLogo = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDR_MAINWND),
                                     IMAGE_ICON, 18, 18, LR_DEFAULTCOLOR);
 
-    AddMessage(MSG_SYSTEM, "Bikode AI | I write what I like.", NULL, 0);
+    AddMessage(MSG_SYSTEM, "Ready.", NULL, 0);
     return TRUE;
 }
 
@@ -2765,12 +3037,50 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
     int innerW = totalW;
     int y = CHAT_HEADER_HEIGHT;
 
-    // Close button
+    // Header chrome
     int cbSz = CHAT_HDR_BTN_SIZE;
-    s_rcCloseBtn.right  = totalW - 8;
+    int headerCardLeft = 8;
+    int headerCardRight = totalW - 8;
+    int modeTop = CHAT_HEADER_HEIGHT - CHAT_HEADER_MODE_H - 11;
+    int actionTop = modeTop;
+    int modesLeft = headerCardLeft + 12;
+    int actionRight;
+    int actionLeft;
+
+    s_rcCloseBtn.right  = headerCardRight - 6;
     s_rcCloseBtn.left   = s_rcCloseBtn.right - cbSz;
-    s_rcCloseBtn.top    = (CHAT_HEADER_HEIGHT - cbSz) / 2;
+    s_rcCloseBtn.top    = 10;
     s_rcCloseBtn.bottom = s_rcCloseBtn.top + cbSz;
+
+    actionRight = headerCardRight - 12;
+    actionLeft = actionRight - CHAT_HEADER_ACTION_W;
+    SetRect(&s_rcHeaderAction, actionLeft, actionTop, actionRight, actionTop + CHAT_HEADER_ACTION_H);
+    SetRect(&s_rcHeaderModeDock, modesLeft - 4, modeTop - 3, actionLeft - 10, modeTop + CHAT_HEADER_MODE_H + 3);
+
+    {
+        const int baseWidths[CHAT_HEADER_MODE_COUNT] = { 42, 58, 62, 52 };
+        const int baseWidthSum = 214;
+        int dockLeft = s_rcHeaderModeDock.left + 5;
+        int dockRight = s_rcHeaderModeDock.right - 5;
+        int widthBudget = max(0, dockRight - dockLeft - (CHAT_HEADER_MODE_GAP * (CHAT_HEADER_MODE_COUNT - 1)));
+        int usedWidth = 0;
+
+        for (int i = 0; i < CHAT_HEADER_MODE_COUNT; i++)
+        {
+            int width = (i == CHAT_HEADER_MODE_COUNT - 1)
+                ? max(32, widthBudget - usedWidth)
+                : max(32, min(baseWidths[i], (baseWidths[i] * widthBudget) / baseWidthSum));
+            int modeRight = min(dockRight, dockLeft + width);
+
+            if (modeRight <= dockLeft)
+                SetRectEmpty(&s_rcHeaderModes[i]);
+            else
+                SetRect(&s_rcHeaderModes[i], dockLeft, modeTop, modeRight, modeTop + CHAT_HEADER_MODE_H);
+
+            dockLeft = modeRight + CHAT_HEADER_MODE_GAP;
+            usedWidth += width;
+        }
+    }
 
     // Chat view
     int outputH = editorHeight - CHAT_HEADER_HEIGHT - CHAT_INPUT_AREA_HEIGHT;
@@ -2792,61 +3102,71 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
 
     int ip = CHAT_INPUT_INNER_PAD;
     int composerTop = cardTop + ip + pendingHeight;
-    s_rcComposerTag.left = cardLeft + ip + 4;
-    s_rcComposerTag.top = composerTop;
-    s_rcComposerTag.right = min(cardRight - ip - 4, s_rcComposerTag.left + 116);
-    s_rcComposerTag.bottom = s_rcComposerTag.top + CHAT_COMPOSER_TAG_H;
+    int footerButtonTop;
+    int sendLeft;
+    int attachLeft;
+    int searchLeft;
 
     s_rcInputWell.left = cardLeft + ip;
-    s_rcInputWell.top = s_rcComposerTag.bottom + 6;
+    s_rcInputWell.top = composerTop;
     s_rcInputWell.right = cardRight - ip;
-    s_rcInputWell.bottom = cardBottom - ip;
-    s_rcComposerHint.left = s_rcComposerTag.right + 8;
-    s_rcComposerHint.top = s_rcComposerTag.top;
-    s_rcComposerHint.right = s_rcInputWell.right;
-    s_rcComposerHint.bottom = s_rcComposerTag.bottom;
+    s_rcInputWell.bottom = cardBottom - ip - CHAT_COMPOSER_FOOTER_H - CHAT_COMPOSER_FOOTER_GAP;
+    if (s_rcInputWell.bottom < s_rcInputWell.top + 42)
+        s_rcInputWell.bottom = s_rcInputWell.top + 42;
 
-    int editLeft   = s_rcInputWell.left + 8;
-    int editTop    = s_rcInputWell.top + 6;
-    int editBottom = s_rcInputWell.bottom - 6;
+    s_rcComposerDock.left = s_rcInputWell.left;
+    s_rcComposerDock.top = s_rcInputWell.bottom + CHAT_COMPOSER_FOOTER_GAP;
+    s_rcComposerDock.right = s_rcInputWell.right;
+    s_rcComposerDock.bottom = cardBottom - ip;
 
-    int sendLeft = s_rcInputWell.right - 8 - CHAT_SEND_SIZE;
-    int sendTop  = s_rcInputWell.bottom - 4 - CHAT_SEND_SIZE;
+    footerButtonTop = s_rcComposerDock.top + ((s_rcComposerDock.bottom - s_rcComposerDock.top) - CHAT_ACTION_BTN_SIZE) / 2;
+    sendLeft = s_rcComposerDock.right - 8 - CHAT_ACTION_SEND_W;
     if (s_hwndSend)
-        MoveWindow(s_hwndSend, sendLeft, sendTop,
-                   CHAT_SEND_SIZE, CHAT_SEND_SIZE, TRUE);
+        MoveWindow(s_hwndSend, sendLeft, footerButtonTop,
+                   CHAT_ACTION_SEND_W, CHAT_ACTION_BTN_SIZE, TRUE);
 
-    int attachLeft = sendLeft - CHAT_SEND_SIZE - CHAT_BTN_GAP;
+    attachLeft = sendLeft - CHAT_ACTION_BTN_SIZE - CHAT_BTN_GAP;
     if (s_hwndAttach)
-        MoveWindow(s_hwndAttach, attachLeft, sendTop,
-                   CHAT_SEND_SIZE, CHAT_SEND_SIZE, TRUE);
+        MoveWindow(s_hwndAttach, attachLeft, footerButtonTop,
+                   CHAT_ACTION_BTN_SIZE, CHAT_ACTION_BTN_SIZE, TRUE);
 
-    int searchLeft = attachLeft - CHAT_SEND_SIZE - CHAT_BTN_GAP;
+    searchLeft = attachLeft - CHAT_ACTION_BTN_SIZE - CHAT_BTN_GAP;
     if (s_hwndSearch)
-        MoveWindow(s_hwndSearch, searchLeft, sendTop,
-                   CHAT_SEND_SIZE, CHAT_SEND_SIZE, TRUE);
+        MoveWindow(s_hwndSearch, searchLeft, footerButtonTop,
+                   CHAT_ACTION_BTN_SIZE, CHAT_ACTION_BTN_SIZE, TRUE);
 
-    // Adjust input right edge to avoid overlapping buttons
-    int editRight = searchLeft - CHAT_BTN_GAP - 4;
-    s_rcComposerDock.left = searchLeft - 6;
-    s_rcComposerDock.top = sendTop - 4;
-    s_rcComposerDock.right = s_rcInputWell.right + 2;
-    s_rcComposerDock.bottom = sendTop + CHAT_SEND_SIZE + 4;
+    s_rcComposerActionDock.left = searchLeft - 4;
+    s_rcComposerActionDock.top = footerButtonTop - 4;
+    s_rcComposerActionDock.right = sendLeft + CHAT_ACTION_SEND_W + 4;
+    s_rcComposerActionDock.bottom = footerButtonTop + CHAT_ACTION_BTN_SIZE + 4;
+
+    s_rcComposerTag.left = s_rcComposerDock.left + 8;
+    s_rcComposerTag.top = s_rcComposerDock.top + ((s_rcComposerDock.bottom - s_rcComposerDock.top) - CHAT_COMPOSER_TAG_H) / 2;
+    s_rcComposerTag.right = min(s_rcComposerActionDock.left - 12, s_rcComposerTag.left + 122);
+    s_rcComposerTag.bottom = s_rcComposerTag.top + CHAT_COMPOSER_TAG_H;
+
+    s_rcComposerHint.left = s_rcComposerTag.right + 8;
+    s_rcComposerHint.top = s_rcComposerDock.top;
+    s_rcComposerHint.right = max(s_rcComposerHint.left, s_rcComposerActionDock.left - 10);
+    s_rcComposerHint.bottom = s_rcComposerDock.bottom;
+
+    int editLeft = s_rcInputWell.left + 10;
+    int editTop = s_rcInputWell.top + 8;
+    int editBottom = s_rcInputWell.bottom - 8;
+    int editRight = s_rcInputWell.right - 10;
     if (s_hwndInput)
     {
-        int inputsRight = editRight;
         MoveWindow(s_hwndInput, editLeft, editTop,
-                   inputsRight - editLeft, editBottom - editTop, TRUE);
+                   max(24, editRight - editLeft), max(24, editBottom - editTop), TRUE);
     }
 
     if (s_pendingAttachmentCount > 0)
     {
-        s_rcPendingStrip.left   = editLeft;
-        s_rcPendingStrip.right  = editRight;
+        s_rcPendingStrip.left   = s_rcInputWell.left;
+        s_rcPendingStrip.right  = s_rcInputWell.right;
         s_rcPendingStrip.top    = cardTop + ip;
         s_rcPendingStrip.bottom = s_rcPendingStrip.top + pendingHeight - CHAT_PENDING_PAD_TOP;
-    }
-    else
+    }    else
     {
         SetRectEmpty(&s_rcPendingStrip);
     }
@@ -2938,6 +3258,284 @@ void ChatPanel_Clear(void)
 // Public: Input
 //=============================================================================
 
+static const EAIChatAccessMode kHeaderModes[CHAT_HEADER_MODE_COUNT] = {
+    AI_CHAT_ACCESS_API_PROVIDER,
+    AI_CHAT_ACCESS_CODEX,
+    AI_CHAT_ACCESS_CLAUDE,
+    AI_CHAT_ACCESS_CODEX_CLAUDE
+};
+
+static EAIChatAccessMode GetCurrentChatAccessMode(void)
+{
+    const AIConfig* pCfg = AIBridge_GetConfig();
+    return pCfg ? pCfg->eChatAccessMode : AI_CHAT_ACCESS_API_PROVIDER;
+}
+
+static LPCWSTR GetHeaderModeLabel(int idx)
+{
+    switch (idx)
+    {
+    case 0: return L"API";
+    case 1: return L"Codex";
+    case 2: return L"Claude";
+    case 3: return L"Relay";
+    default: return L"AI";
+    }
+}
+
+static COLORREF GetHeaderModeAccent(EAIChatAccessMode mode)
+{
+    switch (mode)
+    {
+    case AI_CHAT_ACCESS_CODEX:
+        return BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
+    case AI_CHAT_ACCESS_CLAUDE:
+        return BikodeTheme_GetColor(BKCLR_HOT_MAGENTA);
+    case AI_CHAT_ACCESS_CODEX_CLAUDE:
+        return BikodeTheme_GetColor(BKCLR_SUCCESS_GREEN);
+    case AI_CHAT_ACCESS_API_PROVIDER:
+    default:
+        return BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW);
+    }
+}
+
+static int HitTestHeaderMode(POINT pt)
+{
+    for (int i = 0; i < CHAT_HEADER_MODE_COUNT; i++)
+    {
+        if (!IsRectEmpty(&s_rcHeaderModes[i]) && PtInRect(&s_rcHeaderModes[i], pt))
+            return i;
+    }
+    return -1;
+}
+
+static void GetHeaderActionLabel(WCHAR* out, int cchOut)
+{
+    EAIChatAccessMode mode;
+
+    if (!out || cchOut <= 0)
+        return;
+
+    out[0] = L'\0';
+    mode = GetCurrentChatAccessMode();
+    if (mode == AI_CHAT_ACCESS_API_PROVIDER)
+    {
+        lstrcpynW(out, L"Settings", cchOut);
+        return;
+    }
+
+    lstrcpynW(out,
+        AISubscriptionAgent_IsAuthenticated(mode) ? L"Logout" : L"Login",
+        cchOut);
+}
+
+static void PaintHeaderPill(HDC hdc, const RECT* rc, LPCWSTR text, COLORREF accent,
+                            BOOL active, BOOL hover, BOOL primary)
+{
+    RECT rcText;
+    COLORREF fg;
+    HFONT hFont;
+
+    if (!rc || IsRectEmpty(rc))
+        return;
+
+    if (primary)
+    {
+        RECT rcAccent = *rc;
+        BikodeTheme_DrawRoundedPanel(hdc, rc,
+            BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), BikodeTheme_GetColor(BKCLR_APP_BG), hover ? 212 : 230),
+            BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+            hover ? accent : BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+            11, FALSE);
+        rcAccent.left += 8;
+        rcAccent.right = rcAccent.left + 4;
+        rcAccent.top += 6;
+        rcAccent.bottom -= 6;
+        FillRoundRectSolid(hdc, &rcAccent, 2, accent);
+    }
+    else if (active || hover)
+    {
+        RECT rcFill = *rc;
+        InflateRect(&rcFill, -2, -2);
+        BikodeTheme_DrawRoundedPanel(hdc, &rcFill,
+            active
+                ? BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), 54)
+                : BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), 18),
+            active ? BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_STROKE_DARK), 110)
+                   : BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+            active ? BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY), 152)
+                   : BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_STROKE_SOFT), 164),
+            9, FALSE);
+        if (active)
+        {
+            RECT rcAccent = rcFill;
+            rcAccent.left += 10;
+            rcAccent.right -= 10;
+            rcAccent.top += 4;
+            rcAccent.bottom = rcAccent.top + 3;
+            FillRoundRectSolid(hdc, &rcAccent, 2, accent);
+        }
+    }
+
+    rcText = *rc;
+    rcText.left += primary ? 12 : 8;
+    rcText.right -= 8;
+    SetBkMode(hdc, TRANSPARENT);
+    fg = (active || hover || primary)
+        ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY)
+        : BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY);
+    SetTextColor(hdc, fg);
+    hFont = (active || primary) ? BikodeTheme_GetFont(BKFONT_UI_BOLD) : BikodeTheme_GetFont(BKFONT_MONO_SMALL);
+    SelectObject(hdc, hFont);
+    DrawTextW(hdc, text ? text : L"", -1, &rcText,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+}
+
+static void UpdateHeaderHoverState(HWND hwnd, const POINT* pPt)
+{
+    BOOL oldClose = s_bCloseHover;
+    int oldMode = s_iHeaderHotMode;
+    BOOL oldAction = s_bHeaderActionHover;
+
+    if (!pPt)
+    {
+        s_bCloseHover = FALSE;
+        s_iHeaderHotMode = -1;
+        s_bHeaderActionHover = FALSE;
+    }
+    else
+    {
+        s_bCloseHover = PtInRect(&s_rcCloseBtn, *pPt);
+        s_iHeaderHotMode = HitTestHeaderMode(*pPt);
+        s_bHeaderActionHover = !IsRectEmpty(&s_rcHeaderAction) && PtInRect(&s_rcHeaderAction, *pPt);
+    }
+
+    if (oldClose != s_bCloseHover || oldMode != s_iHeaderHotMode || oldAction != s_bHeaderActionHover)
+        InvalidateRect(hwnd, NULL, FALSE);
+
+    if (pPt && (s_bCloseHover || s_iHeaderHotMode >= 0 || s_bHeaderActionHover))
+    {
+        TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
+        TrackMouseEvent(&tme);
+    }
+}
+
+static BOOL ApplyHeaderChatMode(EAIChatAccessMode mode)
+{
+    const AIConfig* pCurrent = AIBridge_GetConfig();
+    AIConfig nextCfg;
+
+    if (!pCurrent)
+        return FALSE;
+    if (pCurrent->eChatAccessMode == mode)
+        return TRUE;
+    if (s_bAIWorking || AISubscriptionAgent_IsBusy())
+    {
+        ChatPanel_AppendSystem("Finish the current run before switching chat mode.");
+        return FALSE;
+    }
+
+    memcpy(&nextCfg, pCurrent, sizeof(nextCfg));
+    nextCfg.eChatAccessMode = mode;
+    AIBridge_ApplyConfig(&nextCfg);
+    if (szIniFile[0])
+        AIBridge_SaveConfig(&nextCfg, szIniFile);
+
+    if (s_hwndPanel)
+        InvalidateRect(s_hwndPanel, NULL, FALSE);
+    return TRUE;
+}
+
+static void TriggerHeaderAction(void)
+{
+    EAIChatAccessMode mode = GetCurrentChatAccessMode();
+
+    if (s_bAIWorking || AISubscriptionAgent_IsBusy())
+    {
+        ChatPanel_AppendSystem("Finish the current run before changing chat access.");
+        return;
+    }
+
+    if (mode == AI_CHAT_ACCESS_API_PROVIDER)
+    {
+        HWND hwndMain = GetParent(s_hwndPanel);
+        if (hwndMain)
+            SendMessage(hwndMain, WM_COMMAND, MAKEWPARAM(IDM_AI_SETTINGS, 0), 0);
+        return;
+    }
+
+    if (AISubscriptionAgent_IsAuthenticated(mode))
+    {
+        if (!AISubscriptionAgent_Logout(mode))
+        {
+            ChatPanel_AppendSystem("Could not remove the current embedded vendor login.");
+            return;
+        }
+        ChatPanel_AppendSystem("Embedded vendor credentials removed.");
+    }
+    else
+    {
+        if (!AISubscriptionAgent_OpenLoginFlow(mode, s_hwndPanel))
+        {
+            ChatPanel_AppendSystem("Could not launch the selected login flow.");
+            return;
+        }
+        ChatPanel_AppendSystem("Login flow opened. Finish sign-in and return to Bikode.");
+    }
+
+    if (s_hwndPanel)
+        InvalidateRect(s_hwndPanel, NULL, FALSE);
+}
+
+static BOOL DispatchChatRequest(const char* prompt,
+                                const AIChatAttachment* pAttachments,
+                                int cAttachments,
+                                const char* statusText,
+                                const char* missingAccessMessage)
+{
+    const AIConfig* pCfg = AIBridge_GetConfig();
+    EAIChatAccessMode mode;
+
+    if (!prompt || !prompt[0])
+        return FALSE;
+    if (!pCfg)
+    {
+        ChatPanel_AppendSystem("AI settings are not available.");
+        return FALSE;
+    }
+
+    mode = pCfg->eChatAccessMode;
+    if (mode == AI_CHAT_ACCESS_API_PROVIDER)
+    {
+        const AIProviderConfig* pProviderCfg = AIBridge_GetProviderConfig();
+        HWND hwndMainWnd = GetParent(s_hwndPanel);
+        if (!AIBridge_HasChatAccess() || !pProviderCfg)
+        {
+            ChatPanel_AppendSystem(missingAccessMessage);
+            return FALSE;
+        }
+        if (!AIAgent_ChatAsync(pProviderCfg, prompt, pAttachments, cAttachments, s_hwndPanel, hwndMainWnd))
+        {
+            ChatPanel_AppendSystem("AI is busy. Please wait.");
+            return FALSE;
+        }
+        StatusCard_Activate(statusText);
+        return TRUE;
+    }
+
+    if (!AISubscriptionAgent_IsAuthenticated(mode))
+    {
+        ChatPanel_AppendSystem("Login required. Use LOGIN in the chat header.");
+        return FALSE;
+    }
+    if (!AISubscriptionAgent_ChatAsync(pCfg, prompt, pAttachments, cAttachments, s_hwndPanel))
+    {
+        ChatPanel_AppendSystem("AI is busy. Please wait.");
+        return FALSE;
+    }
+    StatusCard_Activate(statusText);
+    return TRUE;
+}
 void ChatPanel_SendInput(void)
 {
     if (!s_hwndInput) return;
@@ -2970,16 +3568,12 @@ void ChatPanel_SendInput(void)
         }
         ChatPanel_AppendUserMessage(displayText, cAtt > 0 ? aiAttachments : NULL, cAtt);
 
-        const AIProviderConfig* pCfg = AIBridge_GetProviderConfig();
-        if (pCfg && pCfg->szApiKey[0]) {
-            StatusCard_Activate("Thinking\xe2\x80\xa6");
-            HWND hwndMainWnd = GetParent(s_hwndPanel);
+        DispatchChatRequest(displayText,
+            cAtt > 0 ? aiAttachments : NULL,
+            cAtt,
+            "Thinking...",
+            "No API access configured. Use SETTINGS in the chat header.");
 
-            if (!AIAgent_ChatAsync(pCfg, displayText, cAtt > 0 ? aiAttachments : NULL, cAtt, s_hwndPanel, hwndMainWnd))
-                ChatPanel_AppendSystem("AI is busy. Please wait.");
-        } else {
-            ChatPanel_AppendSystem("No API key. Use Bikode \xe2\x86\x92 AI Settings.");
-        }
         n2e_Free(utf8);
     }
     n2e_Free(wszText);
@@ -3003,24 +3597,16 @@ void ChatPanel_SendSearchInput(void)
     if (utf8) {
         WideCharToMultiByte(CP_UTF8, 0, wszText, -1, utf8, utf8Len, NULL, NULL);
 
-        // Display as user message
         ChatPanel_AppendUserMessage(utf8, NULL, 0);
 
-        // Prefix for AI to trigger tool
-        // Simple buffer allocation since we don't have StrBuf exposed here easily, using explicit alloc
         char* searchPrompt = (char*)n2e_Alloc(utf8Len + 32);
         if (searchPrompt) {
             sprintf(searchPrompt, "Web Search: %s", utf8);
-            
-            const AIProviderConfig* pCfg = AIBridge_GetProviderConfig();
-            if (pCfg && pCfg->szApiKey[0]) {
-                StatusCard_Activate("Searching web\xe2\x80\xa6");
-                HWND hwndMainWnd = GetParent(s_hwndPanel);
-                if (!AIAgent_ChatAsync(pCfg, searchPrompt, NULL, 0, s_hwndPanel, hwndMainWnd))
-                    ChatPanel_AppendSystem("AI is busy. Please wait.");
-            } else {
-                ChatPanel_AppendSystem("No API key. Use Bikode \xe2\x86\x92 AI Settings.");
-            }
+            DispatchChatRequest(searchPrompt,
+                NULL,
+                0,
+                "Searching web...",
+                "No API access configured. Use SETTINGS in the chat header.");
             n2e_Free(searchPrompt);
         }
         n2e_Free(utf8);
@@ -3028,7 +3614,6 @@ void ChatPanel_SendSearchInput(void)
     n2e_Free(wszText);
     SetWindowTextW(s_hwndInput, L"");
 }
-
 void ChatPanel_FocusInput(void)
 {
     if (s_hwndInput) SetFocus(s_hwndInput);
@@ -3113,127 +3698,62 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             BikodeTheme_FillHalftone(hm, &rc, CP_BG);
         }
 
-        // Header - mission-control chrome
+        // Header - selector and auth chrome
         {
-            WCHAR wszStatus[128];
-            WCHAR wszModel[128] = L"AI";
-            WCHAR wszContext[128] = L"CTX Current";
             RECT rcHeaderCard;
-            RECT rcModel;
-            RECT rcStatus;
-            RECT rcContext;
-            RECT rcProgress;
-            RECT rcAccent;
-            COLORREF statusAccent = BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
-            int progressPct = 18;
-            int modelW;
-            int contextW;
-            int statusW;
-            int availableChipsW;
-            int totalChipW;
-            int chipsLeft;
+            RECT rcAction;
+            WCHAR wszAction[32];
+            int brandLeft;
 
             rcHeaderCard.left = 8;
             rcHeaderCard.top = 4;
             rcHeaderCard.right = cxW - 8;
             rcHeaderCard.bottom = CHAT_HEADER_HEIGHT - 4;
             BikodeTheme_DrawCutCornerPanel(hm, &rcHeaderCard,
-                BikodeTheme_GetColor(BKCLR_SURFACE_RAISED),
+                BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), BikodeTheme_GetColor(BKCLR_APP_BG), 232),
                 BikodeTheme_GetColor(BKCLR_STROKE_DARK),
                 BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
-                8, TRUE);
+                8, FALSE);
 
-            rcAccent = rcHeaderCard;
-            rcAccent.left += 8;
-            rcAccent.top += 9;
-            rcAccent.right = rcAccent.left + 3;
-            rcAccent.bottom -= 9;
             {
-                HBRUSH hAcc = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
-                FillRect(hm, &rcAccent, hAcc);
-                DeleteObject(hAcc);
-            }
-            chipsLeft = rcHeaderCard.left + 14;
-            DrawBrandWordmark(hm, chipsLeft, rcHeaderCard.top + 3);
-
-            BuildMissionModelLabel(wszModel, ARRAYSIZE(wszModel));
-            BuildMissionStatusLabel(wszStatus, ARRAYSIZE(wszStatus), &statusAccent, &progressPct);
-            {
-                const WCHAR* root = FileManager_GetRootPath();
-                const WCHAR* leaf = NULL;
-                if (root && root[0]) {
-                    leaf = wcsrchr(root, L'\\');
-                    leaf = (leaf && leaf[1]) ? leaf + 1 : root;
-                    _snwprintf_s(wszContext, ARRAYSIZE(wszContext), _TRUNCATE, L"CTX %s", leaf);
-                }
+                HPEN hPen = CreatePen(PS_SOLID, 1,
+                    BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_STROKE_SOFT), BikodeTheme_GetColor(BKCLR_APP_BG), 188));
+                HPEN hOldPen = (HPEN)SelectObject(hm, hPen);
+                MoveToEx(hm, rcHeaderCard.left + 12, rcHeaderCard.top + 34, NULL);
+                LineTo(hm, rcHeaderCard.right - 12, rcHeaderCard.top + 34);
+                SelectObject(hm, hOldPen);
+                DeleteObject(hPen);
             }
 
-            modelW = min(126, max(84, MeasureThemeTextWidth(hm, BikodeTheme_GetFont(BKFONT_MONO_SMALL), wszModel) + 26));
-            contextW = min(116, max(84, MeasureThemeTextWidth(hm, BikodeTheme_GetFont(BKFONT_MONO_SMALL), wszContext) + 26));
-            statusW = min(112, max(84, MeasureThemeTextWidth(hm, BikodeTheme_GetFont(BKFONT_UI_SMALL), wszStatus) + 26));
-            availableChipsW = (s_rcCloseBtn.left - 8) - chipsLeft;
-            totalChipW = modelW + contextW + statusW + 12;
-            if (totalChipW > availableChipsW)
-            {
-                int excess = totalChipW - availableChipsW;
-                int shrink = min(excess, modelW - 72);
-                modelW -= shrink;
-                excess -= shrink;
-                shrink = min(excess, contextW - 76);
-                contextW -= shrink;
-                excess -= shrink;
-                shrink = min(excess, statusW - 76);
-                statusW -= shrink;
-            }
-
-            rcModel.left = chipsLeft;
-            rcModel.top = rcHeaderCard.top + 24;
-            rcModel.right = rcModel.left + modelW;
-            rcModel.bottom = rcModel.top + 20;
-            rcContext = rcModel;
-            rcContext.left = rcModel.right + 6;
-            rcContext.right = rcContext.left + contextW;
-            rcStatus = rcContext;
-            rcStatus.left = rcContext.right + 6;
-            rcStatus.right = min(s_rcCloseBtn.left - 8, rcStatus.left + statusW);
-
-            BikodeTheme_DrawChip(hm, &rcModel, wszModel,
-                BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
-                BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
-                BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
-                BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE,
+            DrawStatusDot(hm, rcHeaderCard.left + 12, rcHeaderCard.top + 14, 3,
                 BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
-            BikodeTheme_DrawChip(hm, &rcContext, wszContext,
-                BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
-                BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
-                BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
-                BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE,
-                BikodeTheme_GetColor(BKCLR_HOT_MAGENTA));
-            BikodeTheme_DrawChip(hm, &rcStatus, wszStatus,
-                BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
-                BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
-                BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY),
-                BikodeTheme_GetFont(BKFONT_UI_SMALL), TRUE,
-                statusAccent);
+            brandLeft = rcHeaderCard.left + 22;
+            DrawBrandWordmark(hm, brandLeft, rcHeaderCard.top + 4);
 
-            rcProgress.left = chipsLeft;
-            rcProgress.right = s_rcCloseBtn.left - 8;
-            rcProgress.top = rcStatus.bottom + 5;
-            rcProgress.bottom = rcProgress.top + 4;
+            PaintHeaderModeDock(hm, &s_rcHeaderModeDock);
+
+            GetHeaderActionLabel(wszAction, ARRAYSIZE(wszAction));
+            rcAction = s_rcHeaderAction;
+            PaintHeaderPill(hm, &rcAction, wszAction,
+                GetHeaderModeAccent(GetCurrentChatAccessMode()),
+                FALSE, s_bHeaderActionHover, TRUE);
+
+            for (int i = 0; i < CHAT_HEADER_MODE_COUNT; i++)
             {
-                RECT rcFill = rcProgress;
-                rcFill.right = rcProgress.left + ((rcProgress.right - rcProgress.left) * progressPct) / 100;
-                HBRUSH hBase = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_STROKE_SOFT));
-                HBRUSH hFill = CreateSolidBrush(statusAccent);
-                FillRect(hm, &rcProgress, hBase);
-                if (rcFill.right > rcFill.left)
-                    FillRect(hm, &rcFill, hFill);
-                DeleteObject(hBase);
-                DeleteObject(hFill);
+                PaintHeaderPill(hm, &s_rcHeaderModes[i], GetHeaderModeLabel(i),
+                    GetHeaderModeAccent(kHeaderModes[i]),
+                    GetCurrentChatAccessMode() == kHeaderModes[i],
+                    s_iHeaderHotMode == i,
+                    FALSE);
             }
-
             if (s_bCloseHover)
-                FillRoundRectSolid(hm, &s_rcCloseBtn, 5, CP_CLOSE_HOV);
+            {
+                BikodeTheme_DrawRoundedPanel(hm, &s_rcCloseBtn,
+                    BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), BikodeTheme_GetColor(BKCLR_APP_BG), 230),
+                    BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+                    BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+                    8, FALSE);
+            }
             DrawCloseX(hm, &s_rcCloseBtn, CP_TEXT_SECONDARY);
         }
 
@@ -3251,29 +3771,12 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             rcRail.left += 10;
             rcRail.top += 10;
             rcRail.right = rcRail.left + 3;
-            rcRail.bottom = min(s_rcInputWell.bottom, s_rcInputCard.bottom - 10);
+            rcRail.bottom = min(s_rcComposerDock.bottom, s_rcInputCard.bottom - 10);
             {
                 HBRUSH hRail = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
                 FillRect(hm, &rcRail, hRail);
                 DeleteObject(hRail);
             }
-
-            if (!IsRectEmpty(&s_rcComposerTag))
-            {
-                BikodeTheme_DrawChip(hm, &s_rcComposerTag, L"PROMPT DECK",
-                    BikodeTheme_GetColor(BKCLR_SURFACE_MAIN),
-                    BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
-                    BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
-                    BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE,
-                    BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
-            }
-
-            rcMeta = s_rcComposerHint;
-            SetBkMode(hm, TRANSPARENT);
-            SetTextColor(hm, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
-            SelectObject(hm, BikodeTheme_GetFont(BKFONT_UI_SMALL));
-            DrawTextW(hm, L"Shift+Enter newline", -1, &rcMeta,
-                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
 
             if (!IsRectEmpty(&s_rcInputWell))
             {
@@ -3281,17 +3784,36 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
                     CP_INPUT_WELL_BG,
                     BikodeTheme_GetColor(BKCLR_STROKE_DARK),
                     s_bInputFocused ? CP_INPUT_FOCUS_BD : BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
-                    8, FALSE);
+                    10, FALSE);
             }
 
             if (!IsRectEmpty(&s_rcComposerDock))
             {
                 BikodeTheme_DrawRoundedPanel(hm, &s_rcComposerDock,
-                    CP_INPUT_DOCK_BG,
+                    BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), BikodeTheme_GetColor(BKCLR_APP_BG), 226),
+                    BikodeTheme_GetColor(BKCLR_STROKE_DARK),
+                    s_bInputFocused ? CP_INPUT_FOCUS_BD : BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+                    10, FALSE);
+            }
+
+            if (!IsRectEmpty(&s_rcComposerActionDock))
+            {
+                BikodeTheme_DrawRoundedPanel(hm, &s_rcComposerActionDock,
+                    BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), BikodeTheme_GetColor(BKCLR_APP_BG), 220),
                     BikodeTheme_GetColor(BKCLR_STROKE_DARK),
                     BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
-                    8, FALSE);
+                    10, FALSE);
             }
+
+            if (!IsRectEmpty(&s_rcComposerTag))
+                DrawPromptDeckChip(hm, &s_rcComposerTag);
+
+            rcMeta = s_rcComposerHint;
+            SetBkMode(hm, TRANSPARENT);
+            SetTextColor(hm, BikodeTheme_GetColor(BKCLR_TEXT_MUTED));
+            SelectObject(hm, BikodeTheme_GetFont(BKFONT_UI_SMALL));
+            DrawTextW(hm, L"Shift+Enter", -1, &rcMeta,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
         }
 
         // Pending attachments strip
@@ -3337,31 +3859,70 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             if (pDIS->CtlID == IDC_CHAT_SEND)
             {
                 BOOL down = ((pDIS->itemState & ODS_SELECTED) != 0) || s_bSendDown;
-                DrawButtonFace(pDIS->hDC, &pDIS->rcItem, s_bSendHover, down, TRUE);
-                int bcx = (pDIS->rcItem.left + pDIS->rcItem.right) / 2;
-                int bcy = (pDIS->rcItem.top + pDIS->rcItem.bottom) / 2;
-                COLORREF icon = down ? RGB(236, 238, 245) : CP_BTN_ICON;
-                DrawSendArrow(pDIS->hDC, bcx, bcy, icon);
+                RECT rcBadge = pDIS->rcItem;
+                RECT rcText = pDIS->rcItem;
+                HFONT hOld;
+
+                DrawButtonFace(pDIS->hDC, &pDIS->rcItem, s_bSendHover, down, TRUE,
+                    BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+
+                rcBadge.left += 8;
+                rcBadge.right = rcBadge.left + 22;
+                rcBadge.top += 5;
+                rcBadge.bottom -= 5;
+                FillRoundRectSolid(pDIS->hDC, &rcBadge, 7,
+                    BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_STROKE_DARK), BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY), 180));
+                DrawSendArrow(pDIS->hDC,
+                    (rcBadge.left + rcBadge.right) / 2,
+                    (rcBadge.top + rcBadge.bottom) / 2,
+                    BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
+
+                rcText.left = rcBadge.right + 9;
+                rcText.right -= 10;
+                SetBkMode(pDIS->hDC, TRANSPARENT);
+                SetTextColor(pDIS->hDC, BikodeTheme_GetColor(BKCLR_STROKE_DARK));
+                hOld = (HFONT)SelectObject(pDIS->hDC, BikodeTheme_GetFont(BKFONT_UI_BOLD));
+                DrawTextW(pDIS->hDC, L"Send", -1, &rcText,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                SelectObject(pDIS->hDC, hOld);
                 return TRUE;
             }
             if (pDIS->CtlID == IDC_CHAT_ATTACH)
             {
                 BOOL down = ((pDIS->itemState & ODS_SELECTED) != 0) || s_bAttachDown;
-                RECT rcIcon = pDIS->rcItem;
-                DrawButtonFace(pDIS->hDC, &pDIS->rcItem, s_bAttachHover, down, FALSE);
-                COLORREF icon = down ? RGB(228, 232, 240) : CP_BTN_ICON;
-                InflateRect(&rcIcon, -8, -8);
-                BikodeTheme_DrawGlyph(pDIS->hDC, BKGLYPH_NEW, &rcIcon, icon, 2);
+                RECT rcBadge = pDIS->rcItem;
+                RECT rcGlyph = pDIS->rcItem;
+                COLORREF accent = BikodeTheme_GetColor(BKCLR_HOT_MAGENTA);
+                COLORREF icon = (down || s_bAttachHover)
+                    ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY)
+                    : accent;
+                DrawButtonFace(pDIS->hDC, &pDIS->rcItem, s_bAttachHover, down, FALSE,
+                    accent);
+                InflateRect(&rcBadge, -6, -6);
+                FillRoundRectSolid(pDIS->hDC, &rcBadge, 6,
+                    BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), s_bAttachHover ? 64 : 32));
+                rcGlyph = rcBadge;
+                InflateRect(&rcGlyph, -4, -4);
+                BikodeTheme_DrawGlyph(pDIS->hDC, BKGLYPH_OPEN, &rcGlyph, icon, 2);
                 return TRUE;
             }
             if (pDIS->CtlID == IDC_CHAT_SEARCH)
             {
                 BOOL down = ((pDIS->itemState & ODS_SELECTED) != 0) || s_bSearchDown;
-                RECT rcIcon = pDIS->rcItem;
-                DrawButtonFace(pDIS->hDC, &pDIS->rcItem, s_bSearchHover, down, FALSE);
-                COLORREF icon = down ? RGB(228, 232, 240) : CP_BTN_ICON;
-                InflateRect(&rcIcon, -8, -8);
-                BikodeTheme_DrawGlyph(pDIS->hDC, BKGLYPH_SEARCH, &rcIcon, icon, 2);
+                RECT rcBadge = pDIS->rcItem;
+                RECT rcGlyph = pDIS->rcItem;
+                COLORREF accent = BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
+                COLORREF icon = (down || s_bSearchHover)
+                    ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY)
+                    : accent;
+                DrawButtonFace(pDIS->hDC, &pDIS->rcItem, s_bSearchHover, down, FALSE,
+                    accent);
+                InflateRect(&rcBadge, -6, -6);
+                FillRoundRectSolid(pDIS->hDC, &rcBadge, 6,
+                    BikodeTheme_Mix(accent, BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), s_bSearchHover ? 64 : 32));
+                rcGlyph = rcBadge;
+                InflateRect(&rcGlyph, -4, -4);
+                BikodeTheme_DrawGlyph(pDIS->hDC, BKGLYPH_SEARCH, &rcGlyph, icon, 2);
                 return TRUE;
             }
         }
@@ -3386,21 +3947,12 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
                         MAKELPARAM(rcParent.right, rcParent.bottom));
             break;
         }
-        BOOL wasHover = s_bCloseHover;
-        s_bCloseHover = PtInRect(&s_rcCloseBtn, pt);
-        if (s_bCloseHover != wasHover) {
-            InvalidateRect(hwnd, &s_rcCloseBtn, FALSE);
-            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
-            TrackMouseEvent(&tme);
-        }
+        UpdateHeaderHoverState(hwnd, &pt);
         break;
     }
 
     case WM_MOUSELEAVE:
-        if (s_bCloseHover) {
-            s_bCloseHover = FALSE;
-            InvalidateRect(hwnd, &s_rcCloseBtn, FALSE);
-        }
+        UpdateHeaderHoverState(hwnd, NULL);
         break;
 
     case WM_SETCURSOR:
@@ -3409,7 +3961,8 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             POINT pt;
             GetCursorPos(&pt);
             ScreenToClient(hwnd, &pt);
-            if (PtInRect(&s_rcCloseBtn, pt)) {
+            if (PtInRect(&s_rcCloseBtn, pt) || HitTestHeaderMode(pt) >= 0 ||
+                (!IsRectEmpty(&s_rcHeaderAction) && PtInRect(&s_rcHeaderAction, pt))) {
                 SetCursor(LoadCursor(NULL, IDC_HAND));
                 return TRUE;
             }
@@ -3420,13 +3973,22 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
     case WM_LBUTTONDOWN:
     {
         POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        int modeIdx;
         if (PtInRect(&s_rcCloseBtn, pt)) {
             ChatPanel_Hide();
             return 0;
         }
+        modeIdx = HitTestHeaderMode(pt);
+        if (modeIdx >= 0) {
+            ApplyHeaderChatMode(kHeaderModes[modeIdx]);
+            return 0;
+        }
+        if (!IsRectEmpty(&s_rcHeaderAction) && PtInRect(&s_rcHeaderAction, pt)) {
+            TriggerHeaderAction();
+            return 0;
+        }
         break;
     }
-
     case WM_LBUTTONUP:
         if (GetCapture() == hwnd) ReleaseCapture();
         break;
@@ -3864,3 +4426,12 @@ static void DrawPendingAttachments(HDC hdc)
         DrawAttachmentTile(hdc, &s_pendingAttachments[i], &rcTile);
     }
 }
+
+
+
+
+
+
+
+
+

@@ -16,8 +16,10 @@
  ******************************************************************************/
 
 #include "ComicTheme.h"
+#include "DarkMode.h"
 #include "Scintilla.h"
 #include "SciLexer.h"
+#include "ui/theme/BikodeTheme.h"
 #include <windows.h>
 #include <windowsx.h>
 #include <uxtheme.h>
@@ -37,6 +39,19 @@ static HBITMAP s_hDotPattern  = NULL;   // halftone dot pattern bitmap
 static HBRUSH  s_hDotBrush    = NULL;   // halftone pattern brush
 static HFONT  s_hBoldFont     = NULL;   // bold UI font
 static HFONT  s_hStatusFont   = NULL;   // bold monospace status font
+
+static void RefreshThemeObjects(void)
+{
+    if (s_hPanelBrush)  { DeleteObject(s_hPanelBrush);  s_hPanelBrush = NULL; }
+    if (s_hPaperBrush)  { DeleteObject(s_hPaperBrush);  s_hPaperBrush = NULL; }
+    if (s_hStatusBrush) { DeleteObject(s_hStatusBrush); s_hStatusBrush = NULL; }
+    if (s_hSelBrush)    { DeleteObject(s_hSelBrush);    s_hSelBrush = NULL; }
+
+    s_hPanelBrush  = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN));
+    s_hPaperBrush  = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_EDITOR_BG));
+    s_hStatusBrush = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN));
+    s_hSelBrush    = CreateSolidBrush(BikodeTheme_GetColor(BKCLR_EDITOR_SELECTION));
+}
 
 // =============================================================================
 // Font creation helpers
@@ -88,14 +103,11 @@ void ComicTheme_Init(void)
 {
     if (s_bInit) return;
 
-    s_hPanelBrush  = CreateSolidBrush(COMIC_PANEL_BG);
-    s_hPaperBrush  = CreateSolidBrush(COMIC_CODE_BG);
-    s_hStatusBrush = CreateSolidBrush(COMIC_STATUS_BG);
-    s_hSelBrush    = CreateSolidBrush(COMIC_YELLOW);
     s_hBoldFont    = CreateComicFont(-14, TRUE, FALSE);
     s_hStatusFont  = CreateComicFont(-12, TRUE, TRUE);
 
     CreateHalftonePattern();
+    RefreshThemeObjects();
 
     s_bInit = TRUE;
 }
@@ -219,89 +231,138 @@ void ComicTheme_DrawStatusSegment(HDC hdc, RECT* prc, LPCWSTR text)
 
 void ComicTheme_ApplyToEditor(HWND hwndEdit)
 {
+    COLORREF editorBg;
+    COLORREF editorText;
+    COLORREF comment;
+    COLORREF keyword;
+    COLORREF typeColor;
+    COLORREF stringColor;
+    COLORREF numberColor;
+    COLORREF preproc;
+    COLORREF selection;
+    COLORREF selectionText;
+    COLORREF caretColor;
+    COLORREF caretLine;
+    COLORREF gutter;
+    COLORREF lineNumber;
+    COLORREF indent;
+    COLORREF braceText;
+    COLORREF braceBg;
+    COLORREF lineIndicatorText;
+    COLORREF lineIndicatorBg;
+    COLORREF lineIndicatorEdgeText;
+    COLORREF lineIndicatorEdgeBg;
+    COLORREF diffAccent;
+    COLORREF annotationBg;
+
     if (!hwndEdit) return;
+    RefreshThemeObjects();
+
+    editorBg = BikodeTheme_GetColor(BKCLR_EDITOR_BG);
+    editorText = BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY);
+    comment = DarkMode_GetColors()->clrComment;
+    keyword = DarkMode_GetColors()->clrKeyword;
+    typeColor = DarkMode_GetColors()->clrType;
+    stringColor = DarkMode_GetColors()->clrString;
+    numberColor = DarkMode_GetColors()->clrNumber;
+    preproc = DarkMode_GetColors()->clrPreprocessor;
+    selection = BikodeTheme_GetColor(BKCLR_EDITOR_SELECTION);
+    selectionText = editorText;
+    caretColor = BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW);
+    caretLine = BikodeTheme_GetColor(BKCLR_EDITOR_ACTIVE_LINE);
+    gutter = BikodeTheme_GetColor(BKCLR_EDITOR_GUTTER);
+    lineNumber = DarkMode_GetColors()->clrLineNumber;
+    indent = DarkMode_GetColors()->clrIndentGuide;
+    braceText = BikodeTheme_GetColor(BKCLR_STROKE_DARK);
+    braceBg = BikodeTheme_GetColor(BKCLR_EDITOR_BRACE);
+    lineIndicatorText = BikodeTheme_GetColor(BKCLR_STROKE_DARK);
+    lineIndicatorBg = BikodeTheme_GetColor(BKCLR_EDITOR_FIND);
+    lineIndicatorEdgeText = editorText;
+    lineIndicatorEdgeBg = BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_EDITOR_FIND), editorBg, 188);
+    diffAccent = BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
+    annotationBg = BikodeTheme_GetColor(BKCLR_SURFACE_MAIN);
 
     // Base styles — calmer editor plane than the surrounding chrome
-    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_DEFAULT, COMIC_CODE_BG);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_DEFAULT, COMIC_CODE_TEXT);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_DEFAULT, editorBg);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_DEFAULT, editorText);
     SendMessage(hwndEdit, SCI_STYLECLEARALL, 0, 0);
 
     // Syntax highlighting
-    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_COMMENT,        COMIC_CODE_COMMENT);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_COMMENTLINE,    COMIC_CODE_COMMENT);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_COMMENTDOC,     COMIC_CODE_COMMENT);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_WORD,           COMIC_CODE_KEYWORD);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_COMMENT,        comment);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_COMMENTLINE,    comment);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_COMMENTDOC,     comment);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_WORD,           keyword);
     SendMessage(hwndEdit, SCI_STYLESETBOLD, SCE_C_WORD,           TRUE);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_WORD2,          COMIC_CODE_TYPE);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_STRING,         COMIC_CODE_STRING);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_NUMBER,         COMIC_CODE_NUMBER);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_PREPROCESSOR,   COMIC_CODE_PREPROC);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_IDENTIFIER,     COMIC_CODE_TEXT);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_WORD2,          typeColor);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_STRING,         stringColor);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_NUMBER,         numberColor);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_PREPROCESSOR,   preproc);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, SCE_C_IDENTIFIER,     editorText);
 
     // Selection: controlled cyan wash
-    SendMessage(hwndEdit, SCI_SETSELBACK, TRUE, COMIC_CODE_SEL);
-    SendMessage(hwndEdit, SCI_SETSELFORE, TRUE, COMIC_WHITE);
+    SendMessage(hwndEdit, SCI_SETSELBACK, TRUE, selection);
+    SendMessage(hwndEdit, SCI_SETSELFORE, TRUE, selectionText);
     SendMessage(hwndEdit, SCI_SETSELALPHA, 96, 0);
     SendMessage(hwndEdit, SCI_SETSELEOLFILLED, TRUE, 0);
 
     // Caret
-    SendMessage(hwndEdit, SCI_SETCARETFORE, COMIC_YELLOW, 0);
+    SendMessage(hwndEdit, SCI_SETCARETFORE, caretColor, 0);
     SendMessage(hwndEdit, SCI_SETCARETWIDTH, 2, 0);
 
     // Caret line: subtle chamber glow
     SendMessage(hwndEdit, SCI_SETCARETLINEVISIBLE, TRUE, 0);
-    SendMessage(hwndEdit, SCI_SETCARETLINEBACK, COMIC_CODE_CARET, 0);
+    SendMessage(hwndEdit, SCI_SETCARETLINEBACK, caretLine, 0);
     SendMessage(hwndEdit, SCI_SETCARETLINEBACKALPHA, 28, 0);
 
     // Gutter / line numbers
-    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_LINENUMBER, COMIC_CODE_GUTTER);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_LINENUMBER, COMIC_CODE_LINENUM);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_LINENUMBER, gutter);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_LINENUMBER, lineNumber);
     SendMessage(hwndEdit, SCI_STYLESETBOLD, STYLE_LINENUMBER, FALSE);
-    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_INDENTGUIDE, COMIC_CODE_BG);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_INDENTGUIDE, RGB(50, 50, 50));
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_INDENTGUIDE, editorBg);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_INDENTGUIDE, indent);
 
     // Fold margin
-    SendMessage(hwndEdit, SCI_SETFOLDMARGINCOLOUR, TRUE, COMIC_CODE_GUTTER);
-    SendMessage(hwndEdit, SCI_SETFOLDMARGINHICOLOUR, TRUE, COMIC_CODE_BG);
+    SendMessage(hwndEdit, SCI_SETFOLDMARGINCOLOUR, TRUE, gutter);
+    SendMessage(hwndEdit, SCI_SETFOLDMARGINHICOLOUR, TRUE, editorBg);
 
     // Brace matches and find markers
-    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_BRACELIGHT, COMIC_BLACK);
-    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_BRACELIGHT, COMIC_YELLOW);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_BRACEBAD, COMIC_WHITE);
-    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_BRACEBAD, COMIC_RED);
-    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_LINEINDICATOR, COMIC_BLACK);
-    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_LINEINDICATOR, RGB(80, 54, 12));
-    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_LINEINDICATOR_FIRST_LAST, COMIC_WHITE);
-    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_LINEINDICATOR_FIRST_LAST, RGB(92, 65, 18));
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_BRACELIGHT, braceText);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_BRACELIGHT, braceBg);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_BRACEBAD, editorText);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_BRACEBAD, BikodeTheme_GetColor(BKCLR_DANGER_RED));
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_LINEINDICATOR, lineIndicatorText);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_LINEINDICATOR, lineIndicatorBg);
+    SendMessage(hwndEdit, SCI_STYLESETFORE, STYLE_LINEINDICATOR_FIRST_LAST, lineIndicatorEdgeText);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, STYLE_LINEINDICATOR_FIRST_LAST, lineIndicatorEdgeBg);
 
     // Edge / right column hint
-    SendMessage(hwndEdit, SCI_SETEDGECOLOUR, RGB(50, 50, 50), 0);
-    SendMessage(hwndEdit, SCI_SETWHITESPACEFORE, TRUE, RGB(50, 50, 50));
-    SendMessage(hwndEdit, SCI_SETWHITESPACEBACK, TRUE, COMIC_CODE_BG);
+    SendMessage(hwndEdit, SCI_SETEDGECOLOUR, indent, 0);
+    SendMessage(hwndEdit, SCI_SETWHITESPACEFORE, TRUE, indent);
+    SendMessage(hwndEdit, SCI_SETWHITESPACEBACK, TRUE, editorBg);
     SendMessage(hwndEdit, SCI_SETHSCROLLBAR, FALSE, 0);
     SendMessage(hwndEdit, SCI_SETVSCROLLBAR, FALSE, 0);
     ShowScrollBar(hwndEdit, SB_BOTH, FALSE);
 
     // Indicators: diagnostics, diffs, and AI callouts
     SendMessage(hwndEdit, SCI_INDICSETSTYLE, 0, INDIC_SQUIGGLE);
-    SendMessage(hwndEdit, SCI_INDICSETFORE, 0, COMIC_RED);
+    SendMessage(hwndEdit, SCI_INDICSETFORE, 0, BikodeTheme_GetColor(BKCLR_DANGER_RED));
     SendMessage(hwndEdit, SCI_INDICSETALPHA, 0, 150);
     SendMessage(hwndEdit, SCI_INDICSETSTYLE, 28, INDIC_ROUNDBOX);
-    SendMessage(hwndEdit, SCI_INDICSETFORE, 28, COMIC_CYAN);
+    SendMessage(hwndEdit, SCI_INDICSETFORE, 28, diffAccent);
     SendMessage(hwndEdit, SCI_INDICSETALPHA, 28, 55);
     SendMessage(hwndEdit, SCI_INDICSETOUTLINEALPHA, 28, 180);
     SendMessage(hwndEdit, SCI_INDICSETSTYLE, 29, INDIC_STRAIGHTBOX);
-    SendMessage(hwndEdit, SCI_INDICSETFORE, 29, COMIC_YELLOW);
+    SendMessage(hwndEdit, SCI_INDICSETFORE, 29, BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
     SendMessage(hwndEdit, SCI_INDICSETALPHA, 29, 42);
     SendMessage(hwndEdit, SCI_INDICSETSTYLE, 30, INDIC_STRAIGHTBOX);
-    SendMessage(hwndEdit, SCI_INDICSETFORE, 30, COMIC_PURPLE);
+    SendMessage(hwndEdit, SCI_INDICSETFORE, 30, BikodeTheme_GetColor(BKCLR_HOT_MAGENTA));
     SendMessage(hwndEdit, SCI_INDICSETALPHA, 30, 42);
     SendMessage(hwndEdit, SCI_INDICSETSTYLE, 31, INDIC_SQUIGGLE);
-    SendMessage(hwndEdit, SCI_INDICSETFORE, 31, COMIC_RED);
+    SendMessage(hwndEdit, SCI_INDICSETFORE, 31, BikodeTheme_GetColor(BKCLR_DANGER_RED));
 
     // Style 240 is reserved for boxed AI annotations.
-    SendMessage(hwndEdit, SCI_STYLESETFORE, 240, COMIC_WHITE);
-    SendMessage(hwndEdit, SCI_STYLESETBACK, 240, RGB(36, 36, 36));
+    SendMessage(hwndEdit, SCI_STYLESETFORE, 240, editorText);
+    SendMessage(hwndEdit, SCI_STYLESETBACK, 240, annotationBg);
     SendMessage(hwndEdit, SCI_STYLESETBOLD, 240, TRUE);
 }
 
@@ -335,6 +396,7 @@ void ComicTheme_ApplyToToolbar(HWND hwndToolbar)
 void ComicTheme_ApplyToSidebar(HWND hwnd)
 {
     if (!hwnd) return;
+    RefreshThemeObjects();
     SetWindowTheme(hwnd, L"", L"");
     SetClassLongPtr(hwnd, GCLP_HBRBACKGROUND, (LONG_PTR)s_hPanelBrush);
     InvalidateRect(hwnd, NULL, TRUE);
@@ -346,6 +408,7 @@ void ComicTheme_ApplyToSidebar(HWND hwnd)
 
 void ComicTheme_ApplyAll(HWND hwndMain, HWND hwndEdit, HWND hwndTB, HWND hwndStatus)
 {
+    RefreshThemeObjects();
     if (hwndEdit)   ComicTheme_ApplyToEditor(hwndEdit);
     if (hwndTB)     ComicTheme_ApplyToToolbar(hwndTB);
     if (hwndStatus) ComicTheme_ApplyToStatusBar(hwndStatus);
