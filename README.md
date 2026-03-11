@@ -55,6 +55,19 @@ Use release builds for distribution; keep using debug builds for local testing.
 2. Run `powershell -ExecutionPolicy Bypass -File scripts/build-installer.ps1`.
 3. The generated installer (`Bikode-Setup-...exe`) will be placed in `dist\`.
 
+## macOS Compatibility Build
+The easiest Mac route in this repo is a thin wrapper around the same Windows
+`Bikode.exe`, launched through Wine or CrossOver on macOS. That keeps Windows
+as the single source of truth and makes Mac updates a repackaging step instead
+of a second app build.
+
+- Build the normal Windows release first.
+- From Windows or any machine with Python 3, run `python scripts/build-mac-wrapper.py --app-version 1.0.0`.
+- For a true one-download Mac app, pass `--runtime-dir <wine-runtime-folder>` or `--runtime-archive <engine-archive.tar.xz>` to embed the runtime inside `Bikode.app`.
+- For the repeatable release path from Windows, use `powershell -ExecutionPolicy Bypass -File scripts/publish-release-assets.ps1`.
+- If you are packaging on a Mac and want the native `.icns` conversion path, `scripts/build-mac-wrapper.sh` is still available.
+- Full notes are in [doc/MacWrapper.md](doc/MacWrapper.md).
+
 ## Replacing Windows (XP/7/10) Notepad
 One obvious way is to overwrite all `Notepad.exe`s inside Windows directory. However, this irritates SFC and may not persist across OS updates.
 
