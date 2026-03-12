@@ -231,6 +231,7 @@ typedef struct ToolCall {
 } ToolCall;
 
 static BOOL ContainsSubstringCI(const char* haystack, const char* needle);
+static BOOL IsPlaceholderResponseText(const char* text);
 static const char* IntentName(AgentIntent intent);
 static AgentIntent DetectIntent(const char* msg);
 static void BuildBudgetContract(BudgetContract* c, const char* msg, AgentIntent intent);
@@ -2475,6 +2476,30 @@ static BOOL ContainsSubstringCI(const char* haystack, const char* needle)
     return FALSE;
 }
 
+static BOOL IsPlaceholderResponseText(const char* text)
+{
+    char buffer[32];
+    int len = 0;
+
+    if (!text)
+        return TRUE;
+
+    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n')
+        text++;
+
+    while (*text && len < (int)sizeof(buffer) - 1)
+    {
+        if (*text != ' ' && *text != '\t' && *text != '\r' && *text != '\n')
+            buffer[len++] = (char)tolower((unsigned char)*text);
+        text++;
+    }
+    buffer[len] = '\0';
+
+    return buffer[0] == '\0' ||
+        strcmp(buffer, "done") == 0 ||
+        strcmp(buffer, "done.") == 0;
+}
+
 
 
 static const char* IntentName(AgentIntent intent)
@@ -2826,7 +2851,7 @@ static char* BuildWorkspaceCompletionMessage(const StrBuf* ops, const char* clea
     }
     else
     {
-        sb_append(&sb, "Done.\n", -1);
+        sb_append(&sb, "Completed the workspace pass in Bikode.\n", -1);
     }
 
     sb_appendf(&sb,
@@ -2872,6 +2897,8 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     const AgentRoleContract* roleContract = GetRoleContract(role);
     const BOOL shadowMode = ContainsSubstringCI(p->szUserMessage, "shadow mode") ||
                             ContainsSubstringCI(p->szUserMessage, "dry run");
+    const BOOL wantsInternalTaskGraph = ContainsSubstringCI(p->szUserMessage, "task graph") ||
+                                        ContainsSubstringCI(p->szUserMessage, "workflow graph");
 
     // Build system prompt
     char* systemPrompt = BuildSystemPrompt(&contract, intent);
@@ -2951,9 +2978,12 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     char touchedFiles[MAX_TRACKED_FILES][260] = { 0 };
     int touchedFileCount = 0;
 
-    PostStatusToUI(p->hwndTarget, "Intent=%s, role=%s, mode=%s, budget: iterations<=%d, tool_calls<=%d",
-        IntentName(intent), roleContract->name, ModeName(contract.mode), contract.maxIterations, contract.maxToolCalls);
-    PostTaskGraphStatus(p->hwndTarget, intent);
+    if (wantsInternalTaskGraph)
+    {
+        PostStatusToUI(p->hwndTarget, "Intent=%s, role=%s, mode=%s, budget: iterations<=%d, tool_calls<=%d",
+            IntentName(intent), roleContract->name, ModeName(contract.mode), contract.maxIterations, contract.maxToolCalls);
+        PostTaskGraphStatus(p->hwndTarget, intent);
+    }
 
     if (shadowMode)
         PostStatusToUI(p->hwndTarget, "Shadow mode enabled: mutation tools will be previewed, not executed.");
@@ -3193,7 +3223,9 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
 
     if (!finalResponse)
     {
-        finalResponse = _strdup("Stopped at budget iteration limit. You can ask for balanced or max quality mode to continue.");
+        finalResponse = _strdup(
+            "I stopped at the current budget limit before getting to a usable final answer. "
+            "Ask for balanced or max quality mode if you want a wider pass.");
     }
 
     // Save to history: user message + final response (not intermediate tool calls)
@@ -3202,10 +3234,12 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
 
     // Strip any residual tool call XML from the displayed response
     char* cleanResponse = StripToolCallTags(finalResponse);
-    if (!cleanResponse || !cleanResponse[0])
+    if (!cleanResponse || IsPlaceholderResponseText(cleanResponse))
     {
         if (cleanResponse) free(cleanResponse);
-        cleanResponse = _strdup("Done.");
+        cleanResponse = _strdup(
+            "I finished the run, but the agent did not return a user-facing answer. "
+            "Please retry if you want a clean summary.");
     }
 
     if (codeWriteTask && (workspaceMutated || operationSummary.len > 0))
@@ -3224,7 +3258,8 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
         _snprintf_s(ledgerMsg, sizeof(ledgerMsg), _TRUNCATE,
             "Context ledger: prompt_chars~%lu, tool_calls=%lu, useful=%lu, blocked=%lu, touched_files=%d",
             ledger.approxCharsSent, ledger.toolCalls, ledger.usefulToolCalls, ledger.blockedToolCalls, touchedFileCount);
-        PostStatusToUI(p->hwndTarget, "%s", ledgerMsg);
+        if (wantsInternalTaskGraph || ContainsSubstringCI(p->szUserMessage, "context ledger"))
+            PostStatusToUI(p->hwndTarget, "%s", ledgerMsg);
 
         ContextLedger_Persist(&ledger,
             ModeName(contract.mode),

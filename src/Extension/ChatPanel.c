@@ -219,6 +219,7 @@ static WNDPROC  s_pfnOrigSearchProc = NULL;
 static BOOL     s_bSendHover  = FALSE;
 static BOOL     s_bAttachHover = FALSE;
 static BOOL     s_bSearchHover = FALSE;
+static BOOL     s_bPromptDeckHover = FALSE;
 static BOOL     s_bSendDown = FALSE;
 static BOOL     s_bAttachDown = FALSE;
 static BOOL     s_bSearchDown = FALSE;
@@ -265,6 +266,12 @@ static RECT     s_rcPendingStrip = { 0 };
 static int      s_lastLayoutParentRight = 0;
 static int      s_lastLayoutEditorTop = 0;
 static int      s_lastLayoutEditorHeight = 0;
+
+#define IDM_CHAT_PROMPT_SUMMARY  0xFCE0
+#define IDM_CHAT_PROMPT_BUG      0xFCE1
+#define IDM_CHAT_PROMPT_REVIEW   0xFCE2
+#define IDM_CHAT_PROMPT_PLAN     0xFCE3
+#define IDM_CHAT_PROMPT_COMMANDS 0xFCE4
 
 // Pending attachments (before send)
 static ChatAttachment s_pendingAttachments[AI_MAX_CHAT_ATTACHMENTS];
@@ -1083,6 +1090,17 @@ static void NormalizeStatusCardText(const char* text, WCHAR* out, int cchOut, BO
         StringCchCopyW(out, cchOut, L"Working");
 }
 
+static BOOL IsHiddenStatusCardText(const char* text)
+{
+    if (!text)
+        return FALSE;
+    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n')
+        text++;
+    return _strnicmp(text, "Task graph:", 11) == 0 ||
+        _strnicmp(text, "Context ledger:", 15) == 0 ||
+        _strnicmp(text, "Intent=", 7) == 0;
+}
+
 static void StatusCard_Activate(const char* initialStatus)
 {
     s_bAIWorking = TRUE;
@@ -1753,9 +1771,11 @@ static void DrawPromptDeckChip(HDC hdc, const RECT* rc)
         return;
 
     BikodeTheme_DrawChip(hdc, rc, L"Prompt deck",
-        BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), BikodeTheme_GetColor(BKCLR_APP_BG), 228),
-        BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
-        BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
+        s_bPromptDeckHover
+            ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), 24)
+            : BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), BikodeTheme_GetColor(BKCLR_APP_BG), 228),
+        s_bPromptDeckHover ? BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN) : BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+        s_bPromptDeckHover ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY) : BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
         BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE,
         BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
 }
@@ -3396,24 +3416,27 @@ static void UpdateHeaderHoverState(HWND hwnd, const POINT* pPt)
     BOOL oldClose = s_bCloseHover;
     int oldMode = s_iHeaderHotMode;
     BOOL oldAction = s_bHeaderActionHover;
+    BOOL oldPromptDeck = s_bPromptDeckHover;
 
     if (!pPt)
     {
         s_bCloseHover = FALSE;
         s_iHeaderHotMode = -1;
         s_bHeaderActionHover = FALSE;
+        s_bPromptDeckHover = FALSE;
     }
     else
     {
         s_bCloseHover = PtInRect(&s_rcCloseBtn, *pPt);
         s_iHeaderHotMode = HitTestHeaderMode(*pPt);
         s_bHeaderActionHover = !IsRectEmpty(&s_rcHeaderAction) && PtInRect(&s_rcHeaderAction, *pPt);
+        s_bPromptDeckHover = !IsRectEmpty(&s_rcComposerTag) && PtInRect(&s_rcComposerTag, *pPt);
     }
 
-    if (oldClose != s_bCloseHover || oldMode != s_iHeaderHotMode || oldAction != s_bHeaderActionHover)
+    if (oldClose != s_bCloseHover || oldMode != s_iHeaderHotMode || oldAction != s_bHeaderActionHover || oldPromptDeck != s_bPromptDeckHover)
         InvalidateRect(hwnd, NULL, FALSE);
 
-    if (pPt && (s_bCloseHover || s_iHeaderHotMode >= 0 || s_bHeaderActionHover))
+    if (pPt && (s_bCloseHover || s_iHeaderHotMode >= 0 || s_bHeaderActionHover || s_bPromptDeckHover))
     {
         TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hwnd, 0 };
         TrackMouseEvent(&tme);
@@ -3485,6 +3508,70 @@ static void TriggerHeaderAction(void)
 
     if (s_hwndPanel)
         InvalidateRect(s_hwndPanel, NULL, FALSE);
+}
+
+static void SetComposerPrompt(LPCWSTR wszPrompt)
+{
+    if (!s_hwndInput || !wszPrompt)
+        return;
+
+    SetWindowTextW(s_hwndInput, wszPrompt);
+    SendMessageW(s_hwndInput, EM_SETSEL, (WPARAM)lstrlenW(wszPrompt), (LPARAM)lstrlenW(wszPrompt));
+    SetFocus(s_hwndInput);
+}
+
+static void TriggerPromptDeck(void)
+{
+    HMENU hMenu;
+    RECT rcAnchor;
+    POINT pt;
+    UINT cmd;
+
+    if (!s_hwndPanel || IsRectEmpty(&s_rcComposerTag))
+        return;
+
+    hMenu = CreatePopupMenu();
+    if (!hMenu)
+        return;
+
+    AppendMenuW(hMenu, MF_STRING, IDM_CHAT_PROMPT_SUMMARY,  L"Explain this project");
+    AppendMenuW(hMenu, MF_STRING, IDM_CHAT_PROMPT_BUG,      L"Find the likeliest bug");
+    AppendMenuW(hMenu, MF_STRING, IDM_CHAT_PROMPT_REVIEW,   L"Review for risks");
+    AppendMenuW(hMenu, MF_STRING, IDM_CHAT_PROMPT_PLAN,     L"Plan the smallest safe fix");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hMenu, MF_STRING, IDM_CHAT_PROMPT_COMMANDS, L"Open Command Palette...");
+
+    rcAnchor = s_rcComposerTag;
+    pt.x = rcAnchor.left;
+    pt.y = rcAnchor.bottom;
+    ClientToScreen(s_hwndPanel, &pt);
+    cmd = (UINT)TrackPopupMenuEx(hMenu,
+        TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN | TPM_NONOTIFY,
+        pt.x, pt.y, s_hwndPanel, NULL);
+    DestroyMenu(hMenu);
+
+    switch (cmd)
+    {
+    case IDM_CHAT_PROMPT_SUMMARY:
+        SetComposerPrompt(L"What does this project do? Inspect the workspace and summarize it simply.");
+        break;
+    case IDM_CHAT_PROMPT_BUG:
+        SetComposerPrompt(L"Inspect this workspace and point out the most likely bug, broken edge case, or shaky implementation detail.");
+        break;
+    case IDM_CHAT_PROMPT_REVIEW:
+        SetComposerPrompt(L"Review this code with a critical eye. Call out the biggest correctness risks, regressions, and missing checks.");
+        break;
+    case IDM_CHAT_PROMPT_PLAN:
+        SetComposerPrompt(L"Before editing, inspect the workspace and outline the smallest safe implementation plan for this request.");
+        break;
+    case IDM_CHAT_PROMPT_COMMANDS:
+    {
+        HWND hwndMain = GetParent(s_hwndPanel);
+        if (hwndMain)
+            PostMessageW(hwndMain, WM_COMMAND, MAKEWPARAM(IDM_BIKO_COMMAND_PALETTE, 0), 0);
+        break;
+    }
+    }
 }
 
 static BOOL DispatchChatRequest(const char* prompt,
@@ -3962,7 +4049,8 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             GetCursorPos(&pt);
             ScreenToClient(hwnd, &pt);
             if (PtInRect(&s_rcCloseBtn, pt) || HitTestHeaderMode(pt) >= 0 ||
-                (!IsRectEmpty(&s_rcHeaderAction) && PtInRect(&s_rcHeaderAction, pt))) {
+                (!IsRectEmpty(&s_rcHeaderAction) && PtInRect(&s_rcHeaderAction, pt)) ||
+                (!IsRectEmpty(&s_rcComposerTag) && PtInRect(&s_rcComposerTag, pt))) {
                 SetCursor(LoadCursor(NULL, IDC_HAND));
                 return TRUE;
             }
@@ -3985,6 +4073,10 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
         }
         if (!IsRectEmpty(&s_rcHeaderAction) && PtInRect(&s_rcHeaderAction, pt)) {
             TriggerHeaderAction();
+            return 0;
+        }
+        if (!IsRectEmpty(&s_rcComposerTag) && PtInRect(&s_rcComposerTag, pt)) {
+            TriggerPromptDeck();
             return 0;
         }
         break;
@@ -4015,10 +4107,13 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
         if (msg == WM_AI_AGENT_STATUS) {
             char* pszStatus = (char*)lParam;
             if (pszStatus) {
-                if (!s_bAIWorking)
-                    StatusCard_Activate(pszStatus);
-                else
-                    StatusCard_UpdateStatus(pszStatus);
+                if (!IsHiddenStatusCardText(pszStatus))
+                {
+                    if (!s_bAIWorking)
+                        StatusCard_Activate(pszStatus);
+                    else
+                        StatusCard_UpdateStatus(pszStatus);
+                }
                 free(pszStatus);
             }
             return 0;

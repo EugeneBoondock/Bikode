@@ -170,6 +170,30 @@ static char* DupString(const char* text)
     return out;
 }
 
+static BOOL IsPlaceholderAgentResult(const char* text)
+{
+    char buffer[32];
+    int len = 0;
+
+    if (!text)
+        return TRUE;
+
+    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n')
+        text++;
+
+    while (*text && len < (int)sizeof(buffer) - 1)
+    {
+        if (*text != ' ' && *text != '\t' && *text != '\r' && *text != '\n')
+            buffer[len++] = *text;
+        text++;
+    }
+    buffer[len] = '\0';
+
+    return buffer[0] == '\0' ||
+        _stricmp(buffer, "done") == 0 ||
+        _stricmp(buffer, "done.") == 0;
+}
+
 static char* WideToUtf8Dup(LPCWSTR wszText)
 {
     int needed;
@@ -425,6 +449,75 @@ static int CaptureWorkspaceSnapshot(LPCWSTR wszRoot, FileSnapshotEntry* entries,
     if (count > 1)
         qsort(entries, count, sizeof(FileSnapshotEntry), CompareFileSnapshotEntry);
     return count;
+}
+
+static void AppendWorkspacePromptSnapshot(StrBuf* sb, LPCWSTR wszRoot)
+{
+    FileSnapshotEntry entries[160];
+    BOOL selected[160] = { FALSE };
+    int count;
+    int listed = 0;
+    WCHAR wszPattern[MAX_PATH];
+    WIN32_FIND_DATAW fd;
+    HANDLE hFind;
+
+    if (!sb || !wszRoot || !wszRoot[0])
+        return;
+
+    count = CaptureWorkspaceSnapshot(wszRoot, entries, ARRAYSIZE(entries));
+    sb_appendf(sb, "Workspace snapshot: tracked files=%d\n", count);
+
+    if (FAILED(StringCchPrintfW(wszPattern, ARRAYSIZE(wszPattern), L"%s\\*", wszRoot)))
+        return;
+
+    hFind = FindFirstFileW(wszPattern, &fd);
+    if (hFind != INVALID_HANDLE_VALUE)
+    {
+        sb_append(sb, "Top-level entries:\n", -1);
+        do
+        {
+            char* entryUtf8;
+            if (ShouldSkipWorkspaceChild(&fd))
+                continue;
+            entryUtf8 = WideToUtf8Dup(fd.cFileName);
+            if (entryUtf8)
+            {
+                sb_appendf(sb, "- %s%s\n",
+                    (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? "[dir] " : "",
+                    entryUtf8);
+                free(entryUtf8);
+            }
+            listed++;
+        } while (listed < 12 && FindNextFileW(hFind, &fd));
+        FindClose(hFind);
+    }
+
+    if (count > 0)
+    {
+        sb_append(sb, "Recent files in snapshot:\n", -1);
+        for (int sample = 0; sample < min(count, 8); sample++)
+        {
+            int best = -1;
+            for (int i = 0; i < count; i++)
+            {
+                if (selected[i])
+                    continue;
+                if (best < 0 || CompareFileTime(&entries[i].writeTime, &entries[best].writeTime) > 0)
+                    best = i;
+            }
+            if (best < 0)
+                break;
+            selected[best] = TRUE;
+            {
+                char* relUtf8 = WideToUtf8Dup(entries[best].relativePath);
+                if (relUtf8)
+                {
+                    sb_appendf(sb, "- %s\n", relUtf8);
+                    free(relUtf8);
+                }
+            }
+        }
+    }
 }
 
 static int CollectChangedFiles(LPCWSTR wszRoot,
@@ -1891,6 +1984,16 @@ static char* BuildNodePrompt(int nodeIndex)
         "- Keep the work grounded in the current workspace.\n"
         "- End with what changed, what you checked, and remaining risk.\n"
         "- Prefer concise, technical language over fluff.\n\n", -1);
+    if (spec->backend == AGENT_BACKEND_API)
+    {
+        sb_append(&sb,
+            "Provider-backed node note:\n"
+            "- This node cannot call live workspace tools.\n"
+            "- Reason from the workspace snapshot and dependency summaries below instead of asking the user to paste files.\n"
+            "- If the snapshot is insufficient, say exactly what evidence is still missing.\n\n", -1);
+        AppendWorkspacePromptSnapshot(&sb, s_runtime.nodes[nodeIndex].workspacePath);
+        sb_append(&sb, "\n", 1);
+    }
     AppendRepoIndexHitsToPrompt(nodeIndex, &sb);
     sb_append(&sb, "\n", 1);
     sb_append(&sb, "Task:\n", -1);
@@ -2020,13 +2123,20 @@ static char* RunSingleSubscriptionAgent(int nodeIndex, AgentBackend backend, LPC
     WaitForSingleObject(pi.hProcess, INFINITE);
     GetExitCodeProcess(pi.hProcess, &exitCode);
     if (!final)
-        final = DupString(exitCode == 0 ? "Done." : "Error: Agent exited without a final response.");
+        final = DupString(exitCode == 0
+            ? "Error: The embedded agent finished without returning a user-facing answer."
+            : "Error: Agent exited without a final response.");
     else if (exitCode != 0 && strncmp(final, "Error:", 6) != 0)
     {
         char buffer[512];
         _snprintf_s(buffer, sizeof(buffer), _TRUNCATE, "Error: Agent exited with code %lu.\n%s", (unsigned long)exitCode, final);
         free(final);
         final = DupString(buffer);
+    }
+    else if (exitCode == 0 && IsPlaceholderAgentResult(final))
+    {
+        free(final);
+        final = DupString("Error: The embedded agent finished without returning a usable final answer.");
     }
 
 cleanup:
@@ -2447,7 +2557,12 @@ BOOL AgentRuntime_Start(const OrgSpec* pSpec)
 
 void AgentRuntime_Cancel(void)
 {
+    if (!AgentRuntime_IsRunning())
+        return;
+    InterlockedExchange(&s_runtime.isPaused, FALSE);
     InterlockedExchange(&s_runtime.isCanceled, TRUE);
+    RuntimeAddEvent(-1, AGENT_EVENT_SYSTEM, "Mission Control cancellation requested.");
+    RuntimeWriteManifest();
 }
 
 void AgentRuntime_SetPaused(BOOL bPaused)

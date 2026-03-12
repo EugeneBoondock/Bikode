@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <ctype.h>
 #include <process.h>
 
 #pragma comment(lib, "Shell32.lib")
@@ -395,6 +396,30 @@ static const char* GetDrivingStatus(EAIChatAccessMode mode)
 static BOOL IsErrorResult(const char* text)
 {
     return text && strncmp(text, "Error:", 6) == 0;
+}
+
+static BOOL IsPlaceholderFinalText(const char* text)
+{
+    char buffer[32];
+    int len = 0;
+
+    if (!text)
+        return TRUE;
+
+    while (*text == ' ' || *text == '\t' || *text == '\r' || *text == '\n')
+        text++;
+
+    while (*text && len < (int)sizeof(buffer) - 1)
+    {
+        if (*text != ' ' && *text != '\t' && *text != '\r' && *text != '\n')
+            buffer[len++] = (char)tolower((unsigned char)*text);
+        text++;
+    }
+    buffer[len] = '\0';
+
+    return buffer[0] == '\0' ||
+        strcmp(buffer, "done") == 0 ||
+        strcmp(buffer, "done.") == 0;
 }
 
 static void sb_init(StrBuf* sb, int cap)
@@ -808,7 +833,8 @@ static void AppendEmbeddedHouseRules(StrBuf* sb)
         "- Use calm confidence and avoid sycophantic language.\n"
         "- Prefer direct workspace edits over long pasted code blocks.\n"
         "- Read current files before changing them and keep changes reviewable.\n"
-        "- End with what changed, what you checked, and any remaining risk.\n"
+        "- You have direct access to the current workspace. Do not claim you lack filesystem access when Bikode already gave you a workspace root.\n"
+        "- Only use a what-changed / what-checked / remaining-risk wrap-up after you actually inspected files, ran checks, or changed the workspace.\n"
         "- In prose, avoid em dashes when a plain alternative works.\n", -1);
 }
 
@@ -860,6 +886,7 @@ static char* BuildPrompt(const SubscriptionJob* job, LPCWSTR wszWorkspaceRoot,
     sb_append(&sb, "SYSTEM PROMPT -- Bikode Embedded Agent\n\n", -1);
     sb_appendf(&sb, "You are %s operating inside Bikode's embedded chat panel.\n", GetAgentName(agentMode));
     sb_append(&sb, "The workspace runs on Windows and the on-disk workspace is the source of truth.\n", -1);
+    sb_append(&sb, "The current working directory is already the workspace root, so inspect files on disk directly instead of asking the user to paste them back to you.\n", -1);
     sb_append(&sb, "Prefer making file changes directly in the workspace over dumping long code blocks into chat.\n\n", -1);
 
     AppendEmbeddedHouseRules(&sb);
@@ -889,7 +916,9 @@ static char* BuildPrompt(const SubscriptionJob* job, LPCWSTR wszWorkspaceRoot,
         sb_append(&sb, "\nExecution instructions:\n", -1);
         sb_appendf(&sb, "- Act like %s driving the workspace when code or files need to change.\n",
                    GetAgentName(agentMode));
-        sb_append(&sb, "- End with a concise summary of what you changed, checked, or found.\n", -1);
+        sb_append(&sb,
+            "- Answer the user directly. Only add a what-changed / what-checked / remaining-risk wrap-up when you actually inspected files, ran commands, or changed the workspace.\n",
+            -1);
     }
 
     sb_append(&sb, "\nWorkspace context:\n", -1);
@@ -1472,7 +1501,9 @@ static char* RunAgent(const SubscriptionJob* job, EAIChatAccessMode agentMode,
         if (full.data && full.data[0])
             final = DupString(full.data);
         else
-            final = DupString(exitCode == 0 ? "Done." : "Error: The subscription agent did not return a response.");
+            final = DupString(exitCode == 0
+                ? "Error: The embedded agent finished without returning a user-facing answer."
+                : "Error: The subscription agent did not return a response.");
     }
     else if (exitCode != 0 && strncmp(final, "Error:", 6) != 0)
     {
@@ -1481,6 +1512,11 @@ static char* RunAgent(const SubscriptionJob* job, EAIChatAccessMode agentMode,
                     (unsigned long)exitCode, final);
         free(final);
         final = DupString(errorBuf);
+    }
+    else if (exitCode == 0 && IsPlaceholderFinalText(final))
+    {
+        free(final);
+        final = DupString("Error: The embedded agent finished without returning a usable final answer.");
     }
 
     sb_free(&line);

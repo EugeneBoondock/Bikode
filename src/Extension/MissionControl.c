@@ -1055,8 +1055,8 @@ static void RefreshUi(void)
             useNativeMap = ShouldUseNativeMapFallback(snapshot);
             hasSelection = (s_mc.selectedNode >= 0 && s_mc.selectedNode < snapshot->nodeCount);
             EnableWindow(s_mc.hwndRun, !snapshot->isRunning);
-            EnableWindow(s_mc.hwndPause, snapshot->hasRun);
-            EnableWindow(s_mc.hwndCancel, snapshot->isRunning || snapshot->hasRun);
+            EnableWindow(s_mc.hwndPause, snapshot->isRunning);
+            EnableWindow(s_mc.hwndCancel, snapshot->isRunning);
             EnableWindow(s_mc.hwndDuplicate, canRunWorkflow && !snapshot->isRunning);
             EnableWindow(s_mc.hwndAddNode, s_mc.hasProjectContext && !snapshot->isRunning);
             EnableWindow(s_mc.hwndToggleView, snapshot->nodeCount > 0 || snapshot->hasRun);
@@ -1079,9 +1079,16 @@ static void RefreshUi(void)
         {
             UpdateSnapshotSummary(NULL);
             EnableWindow(s_mc.hwndRun, s_mc.hasProjectContext);
+            EnableWindow(s_mc.hwndPause, FALSE);
+            EnableWindow(s_mc.hwndCancel, FALSE);
             EnableWindow(s_mc.hwndDuplicate, canRunWorkflow);
             EnableWindow(s_mc.hwndAddNode, s_mc.hasProjectContext);
             EnableWindow(s_mc.hwndToggleView, FALSE);
+            EnableWindow(s_mc.hwndHideIdle, FALSE);
+            EnableWindow(s_mc.hwndOpenFile, FALSE);
+            EnableWindow(s_mc.hwndOpenWorkspace, FALSE);
+            EnableWindow(s_mc.hwndOpenTranscript, FALSE);
+            EnableWindow(s_mc.hwndOpenProof, FALSE);
             SetWindowTextW(s_mc.hwndRun,
                 !s_mc.hasProjectContext ? L"Open Folder..." : (canRunWorkflow ? L"Run Workflow" : L"Create Workflow"));
             SetWindowTextW(s_mc.hwndAddNode, canRunWorkflow ? L"Add Agent..." : L"Create Workflow");
@@ -1923,13 +1930,15 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             AgentRuntimeSnapshot* snapshot = AllocSnapshot();
             if (snapshot)
             {
-                AgentRuntime_SetPaused(!snapshot->isPaused);
+                if (snapshot->isRunning)
+                    AgentRuntime_SetPaused(!snapshot->isPaused);
                 FreeSnapshot(snapshot);
             }
         }
             return 0;
         case IDC_MC_CANCEL:
-            AgentRuntime_Cancel();
+            if (AgentRuntime_IsRunning())
+                AgentRuntime_Cancel();
             return 0;
         case IDC_MC_DUPLICATE:
             DuplicateSelectedOrg();
