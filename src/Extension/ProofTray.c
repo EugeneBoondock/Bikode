@@ -9,9 +9,11 @@
 
 #include "ProofTray.h"
 #include "AICommands.h"
+#include "DiffPreview.h"
 #include "DarkMode.h"
 #include "CommonUtils.h"
 #include <uxtheme.h>
+#include <stdio.h>
 #include <string.h>
 
 #define PT_HEIGHT_DEFAULT   196
@@ -174,11 +176,11 @@ static void UpdateSelection(void)
 
 static void UpdateButtons(void)
 {
-    BOOL bHasItem = (s_iSelected >= 0 && s_iSelected < s_iItemCount);
-    EnableWindow(s_hwndApply, bHasItem);
-    EnableWindow(s_hwndReject, bHasItem);
-    EnableWindow(s_hwndRefine, bHasItem);
-    EnableWindow(s_hwndNext, bHasItem);
+    BOOL bHasPreview = DiffPreview_IsActive();
+    EnableWindow(s_hwndApply, bHasPreview);
+    EnableWindow(s_hwndReject, bHasPreview);
+    EnableWindow(s_hwndRefine, bHasPreview);
+    EnableWindow(s_hwndNext, bHasPreview);
 }
 
 static void LayoutControls(HWND hwnd)

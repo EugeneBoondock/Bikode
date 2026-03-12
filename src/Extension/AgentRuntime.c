@@ -77,6 +77,8 @@ static unsigned __stdcall RuntimeSchedulerThreadProc(void* pParam);
 static unsigned __stdcall RuntimeNodeThreadProc(void* pParam);
 static const char* SkipWhitespace(const char* p);
 static char* JsonExtractString(const char* json, const char* key);
+static char* NormalizeCommandExecutionText(const char* text);
+static char* WideToUtf8Dup(LPCWSTR wszText);
 
 static void sb_init(StrBuf* sb, int cap)
 {
@@ -170,6 +172,118 @@ static char* DupString(const char* text)
     return out;
 }
 
+static char* NormalizeQuotedShellPayload(const char* text)
+{
+    StrBuf sb;
+    char quote;
+
+    if (!text || (*text != '"' && *text != '\''))
+        return DupString(text ? text : "");
+
+    quote = *text++;
+    sb_init(&sb, 128);
+    while (*text && *text != quote)
+    {
+        if (*text == '\\' && *(text + 1))
+        {
+            text++;
+            switch (*text)
+            {
+            case 'n': sb_append(&sb, "\n", 1); break;
+            case 'r': sb_append(&sb, "\r", 1); break;
+            case 't': sb_append(&sb, "\t", 1); break;
+            case '\\': sb_append(&sb, "\\", 1); break;
+            case '"': sb_append(&sb, "\"", 1); break;
+            case '\'': sb_append(&sb, "\'", 1); break;
+            default: sb_append(&sb, text, 1); break;
+            }
+        }
+        else
+        {
+            sb_append(&sb, text, 1);
+        }
+        text++;
+    }
+    return sb.data ? sb.data : DupString("");
+}
+
+static char* NormalizeCommandExecutionText(const char* text)
+{
+    const char* commandArg;
+
+    if (!text || !text[0])
+        return DupString("");
+
+    commandArg = StrStrIA(text, " -Command ");
+    if (commandArg)
+    {
+        commandArg = SkipWhitespace(commandArg + 10);
+        return NormalizeQuotedShellPayload(commandArg);
+    }
+
+    commandArg = StrStrIA(text, " /c ");
+    if (commandArg)
+    {
+        commandArg = SkipWhitespace(commandArg + 4);
+        return NormalizeQuotedShellPayload(commandArg);
+    }
+
+    return DupString(text);
+}
+
+static AgentBackend BackendForChatAccessMode(EAIChatAccessMode mode)
+{
+    switch (mode)
+    {
+    case AI_CHAT_ACCESS_CODEX:
+        return AGENT_BACKEND_CODEX;
+    case AI_CHAT_ACCESS_CLAUDE:
+        return AGENT_BACKEND_CLAUDE;
+    case AI_CHAT_ACCESS_CODEX_CLAUDE:
+        return AGENT_BACKEND_RELAY;
+    case AI_CHAT_ACCESS_API_PROVIDER:
+    default:
+        return AGENT_BACKEND_API;
+    }
+}
+
+static AgentBackend ResolveRuntimeBackend(AgentBackend requested, EAIChatAccessMode mode)
+{
+    AgentBackend selected = BackendForChatAccessMode(mode);
+
+    if (mode == AI_CHAT_ACCESS_API_PROVIDER)
+        return AGENT_BACKEND_API;
+    if (requested == AGENT_BACKEND_API)
+        return AGENT_BACKEND_API;
+    return selected;
+}
+
+static void ApplyConfiguredRuntimeModel(OrgNodeSpec* node, const AIConfig* pCfg)
+{
+    char* modelUtf8;
+
+    if (!node || !pCfg)
+        return;
+
+    node->model[0] = '\0';
+    if (node->backend == AGENT_BACKEND_API)
+    {
+        if (pCfg->providerCfg.szModel[0])
+            CopyStringSafe(node->model, COUNTOF(node->model), pCfg->providerCfg.szModel);
+        return;
+    }
+
+    if (!pCfg->wszChatDriverModel[0])
+        return;
+
+    modelUtf8 = WideToUtf8Dup(pCfg->wszChatDriverModel);
+    if (modelUtf8)
+    {
+        CopyStringSafe(node->model, COUNTOF(node->model), modelUtf8);
+        free(modelUtf8);
+    }
+}
+
 static BOOL IsPlaceholderAgentResult(const char* text)
 {
     char buffer[32];
@@ -192,6 +306,30 @@ static BOOL IsPlaceholderAgentResult(const char* text)
     return buffer[0] == '\0' ||
         _stricmp(buffer, "done") == 0 ||
         _stricmp(buffer, "done.") == 0;
+}
+
+static BOOL IsMissingFinalAnswerError(const char* text)
+{
+    if (!text)
+        return FALSE;
+
+    return strcmp(text, "Error: The embedded agent finished without returning a user-facing answer.") == 0 ||
+        strcmp(text, "Error: The embedded agent finished without returning a usable final answer.") == 0;
+}
+
+static char* BuildRelayHandoffSummary(const char* codexResult)
+{
+    if (codexResult &&
+        codexResult[0] &&
+        strncmp(codexResult, "Error:", 6) != 0 &&
+        !IsPlaceholderAgentResult(codexResult))
+    {
+        return DupString(codexResult);
+    }
+
+    return DupString(
+        "Codex completed an implementation pass in the workspace but did not leave a polished textual handoff. "
+        "Review the current files on disk, verify the actual edits, and write the final user-facing summary from that workspace state.");
 }
 
 static char* WideToUtf8Dup(LPCWSTR wszText)
@@ -1786,7 +1924,10 @@ static void HandleCodexLine(int nodeIndex, const char* line, char** ppszFinal)
         value = JsonExtractString(line, "command");
         if (value)
         {
-            RuntimeAddEvent(nodeIndex, AGENT_EVENT_TOOL, value);
+            char* normalized = NormalizeCommandExecutionText(value);
+            RuntimeAddEvent(nodeIndex, AGENT_EVENT_TOOL, normalized ? normalized : value);
+            if (normalized)
+                free(normalized);
             free(value);
         }
         return;
@@ -2173,11 +2314,28 @@ static char* RunApiNode(int nodeIndex, const OrgNodeSpec* spec, StrBuf* pTranscr
     return response ? response : DupString("Error: The provider did not return a response.");
 }
 
+static char* BuildRelayFallbackResult(const char* codexSummary, const char* claudeIssue)
+{
+    StrBuf sb;
+    sb_init(&sb, 1024);
+    sb_append(&sb,
+        "Codex completed the implementation pass, but Claude did not finish the review pass.\n\n"
+        "Codex handoff:\n", -1);
+    sb_append(&sb, codexSummary && codexSummary[0] ? codexSummary : "(no handoff summary)", -1);
+    if (claudeIssue && claudeIssue[0])
+    {
+        sb_append(&sb, "\n\nClaude issue:\n", -1);
+        sb_append(&sb, claudeIssue, -1);
+    }
+    return sb.data;
+}
+
 static char* RunSubscriptionNode(int nodeIndex, const OrgNodeSpec* spec, StrBuf* pTranscript)
 {
     char* prompt;
     char* first = NULL;
     char* second = NULL;
+    char* handoffSummary = NULL;
     WCHAR wszModel[128] = L"";
     Utf8ToWide(spec->model, wszModel, ARRAYSIZE(wszModel));
     if (spec->backend == AGENT_BACKEND_CODEX && !AISubscriptionAgent_IsAuthenticated(AI_CHAT_ACCESS_CODEX))
@@ -2194,26 +2352,37 @@ static char* RunSubscriptionNode(int nodeIndex, const OrgNodeSpec* spec, StrBuf*
         char* mergedPrompt;
         RuntimeAddEvent(nodeIndex, AGENT_EVENT_STATUS, "Relay flow starting with Codex.");
         first = RunSingleSubscriptionAgent(nodeIndex, AGENT_BACKEND_CODEX, s_runtime.nodes[nodeIndex].workspacePath, wszModel, prompt, pTranscript);
-        if (first && strncmp(first, "Error:", 6) == 0)
+        if (first && strncmp(first, "Error:", 6) == 0 && !IsMissingFinalAnswerError(first))
         {
             free(prompt);
             return first;
         }
+        handoffSummary = BuildRelayHandoffSummary(first);
         sb_append(pTranscript, "\n\n--- Relay Handoff ---\n\n", -1);
-        if (first)
-            sb_append(pTranscript, first, -1);
+        if (handoffSummary)
+            sb_append(pTranscript, handoffSummary, -1);
         RuntimeAddEvent(nodeIndex, AGENT_EVENT_HANDOFF, "Codex handoff ready. Claude is reviewing the same workspace.");
         sb_init(&handoff, 4096);
         sb_append(&handoff, prompt, -1);
         sb_append(&handoff, "\n\nCodex handoff summary:\n", -1);
-        sb_append(&handoff, first ? first : "(no handoff)", -1);
+        sb_append(&handoff, handoffSummary ? handoffSummary : "(no handoff)", -1);
         mergedPrompt = handoff.data;
         second = RunSingleSubscriptionAgent(nodeIndex, AGENT_BACKEND_CLAUDE, s_runtime.nodes[nodeIndex].workspacePath, wszModel, mergedPrompt, pTranscript);
         sb_free(&handoff);
         free(prompt);
         if (first)
             free(first);
-        return second ? second : DupString("Error: Relay review did not produce a final response.");
+        if (!second)
+            second = BuildRelayFallbackResult(handoffSummary, "Error: Relay review did not produce a final response.");
+        else if (strncmp(second, "Error:", 6) == 0)
+        {
+            char* relayFallback = BuildRelayFallbackResult(handoffSummary, second);
+            free(second);
+            second = relayFallback;
+        }
+        if (handoffSummary)
+            free(handoffSummary);
+        return second;
     }
     first = RunSingleSubscriptionAgent(nodeIndex, spec->backend, s_runtime.nodes[nodeIndex].workspacePath, wszModel, prompt, pTranscript);
     free(prompt);
@@ -2307,14 +2476,20 @@ static unsigned __stdcall RuntimeNodeThreadProc(void* pParam)
     const OrgNodeSpec* spec;
     FileSnapshotEntry baseline[512];
     int baselineCount;
+    int changedCount = 0;
     StrBuf transcript;
     char* result = NULL;
+    char changeMessage[1024];
+    char* firstChangedUtf8 = NULL;
+    WCHAR wszFirstChanged[MAX_PATH];
     if (!ctx)
         return 0;
     nodeIndex = ctx->nodeIndex;
     free(ctx);
     spec = &s_runtime.org.nodes[nodeIndex];
     sb_init(&transcript, 8192);
+    wszFirstChanged[0] = L'\0';
+    changeMessage[0] = '\0';
 
     if (!PrepareWorkspaceForNode(nodeIndex, s_runtime.nodes[nodeIndex].workspacePath, COUNTOF(s_runtime.nodes[nodeIndex].workspacePath)))
     {
@@ -2344,8 +2519,26 @@ static unsigned __stdcall RuntimeNodeThreadProc(void* pParam)
 
     EnterCriticalSection(&s_runtime.cs);
     CopyStringSafe(s_runtime.nodes[nodeIndex].summary, COUNTOF(s_runtime.nodes[nodeIndex].summary), result ? result : "");
-    CollectChangedFiles(s_runtime.nodes[nodeIndex].workspacePath, baseline, baselineCount, &s_runtime.nodes[nodeIndex]);
+    changedCount = CollectChangedFiles(s_runtime.nodes[nodeIndex].workspacePath, baseline, baselineCount, &s_runtime.nodes[nodeIndex]);
+    if (changedCount > 0 && s_runtime.nodes[nodeIndex].changedFiles[0][0])
+        CopyWideSafe(wszFirstChanged, COUNTOF(wszFirstChanged), s_runtime.nodes[nodeIndex].changedFiles[0]);
     LeaveCriticalSection(&s_runtime.cs);
+    if (changedCount > 0)
+    {
+        firstChangedUtf8 = WideToUtf8Dup(wszFirstChanged);
+        _snprintf_s(changeMessage, sizeof(changeMessage), _TRUNCATE,
+            "Changed %d file%s.%s%s",
+            changedCount,
+            changedCount == 1 ? "" : "s",
+            firstChangedUtf8 && firstChangedUtf8[0] ? " First: " : "",
+            firstChangedUtf8 && firstChangedUtf8[0] ? firstChangedUtf8 : "");
+        RuntimeAddEvent(nodeIndex, AGENT_EVENT_FILE, changeMessage);
+        if (firstChangedUtf8)
+        {
+            free(firstChangedUtf8);
+            firstChangedUtf8 = NULL;
+        }
+    }
     RuntimeWriteManifest();
 
 finish:
@@ -2505,6 +2698,8 @@ BOOL AgentRuntime_Start(const OrgSpec* pSpec)
     WCHAR wszRuns[MAX_PATH];
     WCHAR wszRunIdW[AGENT_RUNTIME_TEXT_SMALL];
     uintptr_t hThread;
+    const AIConfig* pCfg;
+    EAIChatAccessMode chatMode;
     int i;
     if (!pSpec)
         return FALSE;
@@ -2515,6 +2710,8 @@ BOOL AgentRuntime_Start(const OrgSpec* pSpec)
     s_runtime.org = *pSpec;
     s_runtime.eventCount = 0;
     s_runtime.nextEventSeq = 0;
+    pCfg = AIBridge_GetConfig();
+    chatMode = pCfg ? pCfg->eChatAccessMode : AI_CHAT_ACCESS_API_PROVIDER;
     CopyWideSafe(s_runtime.workspaceRoot, COUNTOF(s_runtime.workspaceRoot), pSpec->root[0] ? pSpec->root : RuntimeWorkspaceRoot());
     GetLocalTime(&st);
     _snprintf_s(s_runtime.runId, sizeof(s_runtime.runId), _TRUNCATE, "%04d%02d%02d-%02d%02d%02d",
@@ -2526,9 +2723,11 @@ BOOL AgentRuntime_Start(const OrgSpec* pSpec)
     EnsureDirExists(s_runtime.runRoot);
     for (i = 0; i < s_runtime.org.nodeCount; i++)
     {
-        const OrgNodeSpec* spec = &s_runtime.org.nodes[i];
+        OrgNodeSpec* spec = &s_runtime.org.nodes[i];
         AgentNodeSnapshot* node = &s_runtime.nodes[i];
         ZeroMemory(node, sizeof(*node));
+        spec->backend = ResolveRuntimeBackend(spec->backend, chatMode);
+        ApplyConfiguredRuntimeModel(spec, pCfg);
         CopyStringSafe(node->id, COUNTOF(node->id), spec->id);
         CopyStringSafe(node->title, COUNTOF(node->title), spec->title);
         CopyStringSafe(node->role, COUNTOF(node->role), spec->role);

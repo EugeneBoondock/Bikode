@@ -24,6 +24,8 @@
 #include <windowsx.h>
 #include <strsafe.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
 
 #define MC_MAX_ORGS 32
 
@@ -115,6 +117,12 @@ typedef struct MissionControlUi {
     int orgCount;
 } MissionControlUi;
 
+typedef struct WideTextBuffer {
+    WCHAR* data;
+    size_t len;
+    size_t cap;
+} WideTextBuffer;
+
 static MissionControlUi s_mc;
 extern WCHAR szCurFile[MAX_PATH + 40];
 
@@ -131,6 +139,147 @@ static BOOL ShouldUseNativeMapFallback(const AgentRuntimeSnapshot* pSnapshot);
 static void UpdateMapFallback(const AgentRuntimeSnapshot* pSnapshot);
 static UINT ShowAddAgentMenu(HWND hwndAnchor);
 static BOOL AddTemplatedNode(OrgSpec* pSpec, UINT commandId, WCHAR* wszAddedTitle, int cchAddedTitle);
+static void EnsureWorkflowSupportPanelsVisible(LPCWSTR wszStatus);
+
+static BOOL WideTextBuffer_Init(WideTextBuffer* pBuf, size_t cchInitial)
+{
+    if (!pBuf)
+        return FALSE;
+    ZeroMemory(pBuf, sizeof(*pBuf));
+    pBuf->cap = cchInitial > 512 ? cchInitial : 512;
+    pBuf->data = (WCHAR*)malloc(sizeof(WCHAR) * pBuf->cap);
+    if (!pBuf->data)
+    {
+        pBuf->cap = 0;
+        return FALSE;
+    }
+    pBuf->data[0] = L'\0';
+    return TRUE;
+}
+
+static void WideTextBuffer_Free(WideTextBuffer* pBuf)
+{
+    if (!pBuf)
+        return;
+    if (pBuf->data)
+        free(pBuf->data);
+    ZeroMemory(pBuf, sizeof(*pBuf));
+}
+
+static BOOL WideTextBuffer_Reserve(WideTextBuffer* pBuf, size_t cchAdditional)
+{
+    WCHAR* grown;
+    size_t needed;
+    size_t nextCap;
+
+    if (!pBuf || !pBuf->data)
+        return FALSE;
+
+    needed = pBuf->len + cchAdditional + 1;
+    if (needed <= pBuf->cap)
+        return TRUE;
+
+    nextCap = pBuf->cap;
+    while (nextCap < needed)
+        nextCap *= 2;
+
+    grown = (WCHAR*)realloc(pBuf->data, sizeof(WCHAR) * nextCap);
+    if (!grown)
+        return FALSE;
+
+    pBuf->data = grown;
+    pBuf->cap = nextCap;
+    return TRUE;
+}
+
+static BOOL WideTextBuffer_AppendN(WideTextBuffer* pBuf, const WCHAR* wszText, size_t cchText)
+{
+    if (!pBuf || !pBuf->data || !wszText)
+        return FALSE;
+    if (!WideTextBuffer_Reserve(pBuf, cchText))
+        return FALSE;
+    memcpy(pBuf->data + pBuf->len, wszText, sizeof(WCHAR) * cchText);
+    pBuf->len += cchText;
+    pBuf->data[pBuf->len] = L'\0';
+    return TRUE;
+}
+
+static BOOL WideTextBuffer_Append(WideTextBuffer* pBuf, const WCHAR* wszText)
+{
+    if (!wszText)
+        return TRUE;
+    return WideTextBuffer_AppendN(pBuf, wszText, lstrlenW(wszText));
+}
+
+static BOOL WideTextBuffer_AppendFormat(WideTextBuffer* pBuf, LPCWSTR wszFormat, ...)
+{
+    va_list args;
+    int needed;
+
+    if (!pBuf || !pBuf->data || !wszFormat)
+        return FALSE;
+
+    va_start(args, wszFormat);
+    needed = _vscwprintf(wszFormat, args);
+    va_end(args);
+    if (needed < 0)
+        return FALSE;
+    if (!WideTextBuffer_Reserve(pBuf, (size_t)needed))
+        return FALSE;
+
+    va_start(args, wszFormat);
+    if (vswprintf_s(pBuf->data + pBuf->len, pBuf->cap - pBuf->len, wszFormat, args) < 0)
+    {
+        va_end(args);
+        return FALSE;
+    }
+    va_end(args);
+
+    pBuf->len += (size_t)needed;
+    return TRUE;
+}
+
+static BOOL WideTextBuffer_AppendEscapedHtml(WideTextBuffer* pBuf, const WCHAR* wszText)
+{
+    const WCHAR* p;
+
+    if (!wszText)
+        return TRUE;
+
+    for (p = wszText; *p; ++p)
+    {
+        switch (*p)
+        {
+        case L'&':
+            if (!WideTextBuffer_Append(pBuf, L"&amp;"))
+                return FALSE;
+            break;
+        case L'<':
+            if (!WideTextBuffer_Append(pBuf, L"&lt;"))
+                return FALSE;
+            break;
+        case L'>':
+            if (!WideTextBuffer_Append(pBuf, L"&gt;"))
+                return FALSE;
+            break;
+        case L'"':
+            if (!WideTextBuffer_Append(pBuf, L"&quot;"))
+                return FALSE;
+            break;
+        case L'\r':
+            break;
+        case L'\n':
+            if (!WideTextBuffer_Append(pBuf, L"<br/>"))
+                return FALSE;
+            break;
+        default:
+            if (!WideTextBuffer_AppendN(pBuf, p, 1))
+                return FALSE;
+            break;
+        }
+    }
+    return TRUE;
+}
 
 static BOOL ResolveProjectRoot(WCHAR* wszOut, int cchOut)
 {
@@ -150,6 +299,22 @@ static BOOL ResolveProjectRoot(WCHAR* wszOut, int cchOut)
         return wszOut[0] != L'\0';
     }
     return FALSE;
+}
+
+static void EnsureWorkflowSupportPanelsVisible(LPCWSTR wszStatus)
+{
+    const WCHAR* wszRoot = s_mc.workspaceRoot[0] ? s_mc.workspaceRoot : AgentRuntime_GetWorkspaceRoot();
+
+    if (wszRoot && wszRoot[0] &&
+        (!FileManager_IsVisible() || _wcsicmp(FileManager_GetRootPath(), wszRoot) != 0))
+    {
+        FileManager_OpenFolder(wszRoot);
+    }
+
+    if (wszStatus && wszStatus[0])
+        ProofTray_SetMissionStatus(wszStatus);
+    if (!ProofTray_IsVisible())
+        ProofTray_Show(s_mc.hwndMain);
 }
 
 static void RequestFullPanelRedraw(HWND hwnd)
@@ -889,8 +1054,7 @@ static void UpdateMapFallback(const AgentRuntimeSnapshot* pSnapshot)
 
 static void UpdateGraph(const AgentRuntimeSnapshot* pSnapshot)
 {
-    WCHAR wszHtml[32768];
-    WCHAR wszNode[1024];
+    WideTextBuffer html;
     WCHAR wszAppBg[16];
     WCHAR wszCardBg[16];
     WCHAR wszText[16];
@@ -924,100 +1088,98 @@ static void UpdateGraph(const AgentRuntimeSnapshot* pSnapshot)
         return;
     if ((GetTickCount() - s_mc.lastGraphTick) < 600)
         return;
+    if (!WideTextBuffer_Init(&html, 8192))
+        return;
     ColorToHtml(BikodeTheme_GetColor(BKCLR_APP_BG), wszAppBg, ARRAYSIZE(wszAppBg));
     ColorToHtml(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), wszCardBg, ARRAYSIZE(wszCardBg));
     ColorToHtml(BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY), wszText, ARRAYSIZE(wszText));
     ColorToHtml(BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY), wszMuted, ARRAYSIZE(wszMuted));
     ColorToHtml(BikodeTheme_GetColor(BKCLR_STROKE_SOFT), wszBorder, ARRAYSIZE(wszBorder));
     ColorToHtml(BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), wszAccent, ARRAYSIZE(wszAccent));
-    StringCchCopyW(wszHtml, ARRAYSIZE(wszHtml),
+    if (!WideTextBuffer_AppendFormat(&html,
         L"<html><head><meta charset='utf-8'><style>"
-        L"body{margin:0;font-family:'Segoe UI',sans-serif;background:");
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszAppBg);
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-        L";color:");
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszText);
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-        L";padding:20px 20px 24px;}"
-        L".hero{margin-bottom:16px;padding:16px 18px;border:1px solid ");
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszBorder);
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-        L";border-radius:16px;background:");
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszCardBg);
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-        L";}"
-        L".eyebrow{display:inline-block;margin-bottom:8px;padding:4px 10px;border-radius:999px;background:");
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszAppBg);
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-        L";color:");
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszMuted);
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-        L";font-size:12px;letter-spacing:.08em;text-transform:uppercase;}"
+        L"body{margin:0;font-family:'Segoe UI',sans-serif;background:%s;color:%s;padding:20px 20px 24px;}"
+        L".hero{margin-bottom:16px;padding:16px 18px;border:1px solid %s;border-radius:16px;background:%s;}"
+        L".eyebrow{display:inline-block;margin-bottom:8px;padding:4px 10px;border-radius:999px;background:%s;color:%s;font-size:12px;letter-spacing:.08em;text-transform:uppercase;}"
         L"h1{margin:0 0 8px;font-size:22px;}"
-        L".lede{margin:0;color:");
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszMuted);
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-        L";line-height:1.5;}"
+        L".lede{margin:0;color:%s;line-height:1.5;}"
         L".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;}"
-        L".card{border:1px solid ");
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszBorder);
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-        L";border-radius:16px;padding:14px 16px;background:");
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszCardBg);
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-        L";box-shadow:0 1px 0 rgba(0,0,0,.06);}"
+        L".card{border:1px solid %s;border-radius:16px;padding:14px 16px;background:%s;box-shadow:0 1px 0 rgba(0,0,0,.06);}"
         L".card h3{margin:0 0 8px;font-size:17px;}"
-        L".meta,.body{font-size:12px;line-height:1.45;color:");
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszMuted);
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-        L";}"
+        L".meta,.body{font-size:12px;line-height:1.45;color:%s;}"
         L".body{margin-top:10px;font-size:13px;}"
-        L".state{display:inline-block;padding:4px 10px;border-radius:999px;background:");
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszAppBg);
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-        L";margin-bottom:10px;font-size:12px;border-left:4px solid var(--accent);}"
+        L".state{display:inline-block;padding:4px 10px;border-radius:999px;background:%s;margin-bottom:10px;font-size:12px;border-left:4px solid var(--accent);}"
         L".accent{height:3px;border-radius:999px;background:var(--accent);margin-top:12px;}"
         L"</style></head><body><div class='hero'><div class='eyebrow'>Map view</div>"
         L"<h1>See the workflow before you drill into a single agent</h1>"
         L"<p class='lede'>Use board view when you want to act. Use map view when you want the big picture.</p>"
-        L"</div><div class='grid'>");
+        L"</div><div class='grid'>",
+        wszAppBg, wszText, wszBorder, wszCardBg, wszAppBg, wszMuted,
+        wszMuted, wszBorder, wszCardBg, wszMuted, wszAppBg))
+    {
+        WideTextBuffer_Free(&html);
+        return;
+    }
     if (pSnapshot->nodeCount <= 0)
     {
-        StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-            L"<div class='card' style='--accent:");
-        StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszAccent);
-        StringCchCatW(wszHtml, ARRAYSIZE(wszHtml),
-            L"'><div class='state'>Ready</div><h3>No agents are running yet</h3>"
+        if (!WideTextBuffer_AppendFormat(&html,
+            L"<div class='card' style='--accent:%s'><div class='state'>Ready</div>"
+            L"<h3>No agents are running yet</h3>"
             L"<div class='body'>Pick a workflow and start a run to populate the map.</div>"
-            L"<div class='accent'></div></div>");
+            L"<div class='accent'></div></div>",
+            wszAccent))
+        {
+            WideTextBuffer_Free(&html);
+            return;
+        }
     }
     for (int i = 0; i < pSnapshot->nodeCount; i++)
     {
         const AgentNodeSnapshot* node = &pSnapshot->nodes[i];
-        WCHAR wszSummary[256];
+        WCHAR wszSummary[512];
+        WCHAR wszState[64];
+        WCHAR wszTitle[256];
+        WCHAR wszBackend[64];
+        WCHAR wszWorkspace[64];
         WCHAR wszNodeAccent[16];
         Utf8ToWideSafe(node->summary[0] ? node->summary : node->lastAction, wszSummary, ARRAYSIZE(wszSummary));
+        Utf8ToWideSafe(AgentRuntime_StateLabel(node->state), wszState, ARRAYSIZE(wszState));
+        Utf8ToWideSafe(node->title, wszTitle, ARRAYSIZE(wszTitle));
+        Utf8ToWideSafe(AgentRuntime_BackendLabel(node->backend), wszBackend, ARRAYSIZE(wszBackend));
+        Utf8ToWideSafe(AgentRuntime_WorkspaceLabel(node->workspacePolicy), wszWorkspace, ARRAYSIZE(wszWorkspace));
         ColorToHtml(GetStateAccent(node->state), wszNodeAccent, ARRAYSIZE(wszNodeAccent));
-        swprintf_s(wszNode, ARRAYSIZE(wszNode),
-            L"<div class='card' style='--accent:%s'><div class='state'>%S</div><h3>%S</h3><div class='meta'>%S / %S</div><div class='body'>%s</div><div class='accent'></div></div>",
-            wszNodeAccent,
-            AgentRuntime_StateLabel(node->state),
-            node->title,
-            AgentRuntime_BackendLabel(node->backend),
-            AgentRuntime_WorkspaceLabel(node->workspacePolicy),
-            wszSummary);
-        StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), wszNode);
+        if (!WideTextBuffer_AppendFormat(&html, L"<div class='card' style='--accent:%s'><div class='state'>", wszNodeAccent) ||
+            !WideTextBuffer_AppendEscapedHtml(&html, wszState) ||
+            !WideTextBuffer_Append(&html, L"</div><h3>") ||
+            !WideTextBuffer_AppendEscapedHtml(&html, wszTitle) ||
+            !WideTextBuffer_Append(&html, L"</h3><div class='meta'>") ||
+            !WideTextBuffer_AppendEscapedHtml(&html, wszBackend) ||
+            !WideTextBuffer_Append(&html, L" / ") ||
+            !WideTextBuffer_AppendEscapedHtml(&html, wszWorkspace) ||
+            !WideTextBuffer_Append(&html, L"</div><div class='body'>") ||
+            !WideTextBuffer_AppendEscapedHtml(&html, wszSummary) ||
+            !WideTextBuffer_Append(&html, L"</div><div class='accent'></div></div>"))
+        {
+            WideTextBuffer_Free(&html);
+            return;
+        }
     }
-    StringCchCatW(wszHtml, ARRAYSIZE(wszHtml), L"</div></body></html>");
+    if (!WideTextBuffer_Append(&html, L"</div></body></html>"))
+    {
+        WideTextBuffer_Free(&html);
+        return;
+    }
     __try
     {
-        MissionControlWebView_SetHtml(wszHtml);
+        MissionControlWebView_SetHtml(html.data);
     }
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
+        WideTextBuffer_Free(&html);
         s_mc.webViewFaulted = TRUE;
         return;
     }
+    WideTextBuffer_Free(&html);
     s_mc.lastGraphTick = GetTickCount();
 }
 
@@ -1616,6 +1778,7 @@ static void ApplyTheme(void)
 static void RunSelectedOrg(void)
 {
     OrgSpec* org = GetSelectedOrg();
+    WCHAR wszDetails[640];
     if (!s_mc.hasProjectContext)
     {
         SendMessageW(s_mc.hwndMain, WM_COMMAND, IDM_FILEMGR_OPENFOLDER, 0);
@@ -1632,7 +1795,15 @@ static void RunSelectedOrg(void)
         }
         return;
     }
-    AgentRuntime_Start(org);
+    if (AgentRuntime_Start(org))
+    {
+        EnsureWorkflowSupportPanelsVisible(L"Workflow run in progress");
+        StringCchPrintfW(wszDetails, ARRAYSIZE(wszDetails),
+            L"%S is now running in %s.\r\n\r\nThe file sidebar tracks this repo, and this tray will surface changed files, handoffs, and blockers during the run.",
+            org->name[0] ? org->name : "Selected workflow",
+            s_mc.workspaceRoot[0] ? s_mc.workspaceRoot : L"the active workspace");
+        ProofTray_PublishMissionNote(L"Workflow run started", wszDetails);
+    }
     RefreshUi();
 }
 
@@ -2186,12 +2357,16 @@ BOOL MissionControl_HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPa
             if (pEvent)
             {
                 s_mc.lastRuntimeEventTick = GetTickCount();
-                if (pEvent->type == AGENT_EVENT_HANDOFF || pEvent->type == AGENT_EVENT_ERROR)
+                if (pEvent->type == AGENT_EVENT_FILE || pEvent->type == AGENT_EVENT_HANDOFF || pEvent->type == AGENT_EVENT_ERROR)
                 {
                     WCHAR wszTitle[128];
                     WCHAR wszDetails[2048];
+                    LPCWSTR wszStatus = pEvent->type == AGENT_EVENT_ERROR
+                        ? L"Workflow needs attention"
+                        : (pEvent->type == AGENT_EVENT_HANDOFF ? L"Agent handoff ready" : L"Workflow changes ready to inspect");
                     Utf8ToWideSafe(pEvent->nodeTitle[0] ? pEvent->nodeTitle : pEvent->nodeId, wszTitle, ARRAYSIZE(wszTitle));
                     Utf8ToWideSafe(pEvent->message, wszDetails, ARRAYSIZE(wszDetails));
+                    EnsureWorkflowSupportPanelsVisible(wszStatus);
                     if (wszTitle[0] && wszDetails[0])
                         ProofTray_PublishMissionNote(wszTitle, wszDetails);
                 }

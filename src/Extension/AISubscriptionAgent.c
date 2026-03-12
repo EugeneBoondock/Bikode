@@ -59,6 +59,10 @@ typedef struct {
     WCHAR lastOpenedFile[MAX_PATH];
 } WorkspaceTracker;
 
+static char* DupString(const char* text);
+static char* NormalizeCommandExecutionText(const char* text);
+static const char* SkipWhitespace(const char* p);
+
 static void WorkspaceTracker_Init(WorkspaceTracker* tracker)
 {
     if (!tracker)
@@ -422,6 +426,30 @@ static BOOL IsPlaceholderFinalText(const char* text)
         strcmp(buffer, "done.") == 0;
 }
 
+static BOOL IsMissingFinalAnswerError(const char* text)
+{
+    if (!text)
+        return FALSE;
+
+    return strcmp(text, "Error: The embedded agent finished without returning a user-facing answer.") == 0 ||
+        strcmp(text, "Error: The embedded agent finished without returning a usable final answer.") == 0;
+}
+
+static char* BuildRelayHandoffSummary(const char* codexResult)
+{
+    if (codexResult &&
+        codexResult[0] &&
+        strncmp(codexResult, "Error:", 6) != 0 &&
+        !IsPlaceholderFinalText(codexResult))
+    {
+        return DupString(codexResult);
+    }
+
+    return DupString(
+        "Codex completed an implementation pass in the shared workspace but did not leave a polished textual handoff. "
+        "Inspect the files on disk, verify the actual edits, and write the final user-facing summary from that workspace state.");
+}
+
 static void sb_init(StrBuf* sb, int cap)
 {
     if (!sb)
@@ -492,6 +520,65 @@ static char* DupString(const char* text)
     if (out)
         memcpy(out, text, len + 1);
     return out;
+}
+
+static char* NormalizeQuotedShellPayload(const char* text)
+{
+    StrBuf sb;
+    char quote;
+
+    if (!text || (*text != '"' && *text != '\''))
+        return DupString(text ? text : "");
+
+    quote = *text++;
+    sb_init(&sb, 128);
+    while (*text && *text != quote)
+    {
+        if (*text == '\\' && *(text + 1))
+        {
+            text++;
+            switch (*text)
+            {
+            case 'n': sb_append(&sb, "\n", 1); break;
+            case 'r': sb_append(&sb, "\r", 1); break;
+            case 't': sb_append(&sb, "\t", 1); break;
+            case '\\': sb_append(&sb, "\\", 1); break;
+            case '"': sb_append(&sb, "\"", 1); break;
+            case '\'': sb_append(&sb, "\'", 1); break;
+            default: sb_append(&sb, text, 1); break;
+            }
+        }
+        else
+        {
+            sb_append(&sb, text, 1);
+        }
+        text++;
+    }
+    return sb.data ? sb.data : DupString("");
+}
+
+static char* NormalizeCommandExecutionText(const char* text)
+{
+    const char* commandArg;
+
+    if (!text || !text[0])
+        return DupString("");
+
+    commandArg = StrStrIA(text, " -Command ");
+    if (commandArg)
+    {
+        commandArg = SkipWhitespace(commandArg + 10);
+        return NormalizeQuotedShellPayload(commandArg);
+    }
+
+    commandArg = StrStrIA(text, " /c ");
+    if (commandArg)
+    {
+        commandArg = SkipWhitespace(commandArg + 4);
+        return NormalizeQuotedShellPayload(commandArg);
+    }
+
+    return DupString(text);
 }
 
 static void CopyStringSafe(char* dst, size_t cchDst, const char* src)
@@ -1246,7 +1333,10 @@ static void HandleCodexLine(HWND hwndTarget, const char* line, char** ppszFinal)
         value = JsonExtractString(line, "command");
         if (value)
         {
-            PostHeapString(hwndTarget, WM_AI_AGENT_TOOL, value);
+            char* normalized = NormalizeCommandExecutionText(value);
+            PostHeapString(hwndTarget, WM_AI_AGENT_TOOL, normalized ? normalized : value);
+            if (normalized)
+                free(normalized);
             free(value);
         }
         return;
@@ -1555,6 +1645,7 @@ static char* RunCollaborativeFlow(const SubscriptionJob* job, LPCWSTR wszWorkspa
 {
     char* codexPrompt = NULL;
     char* codexResult = NULL;
+    char* codexHandoff = NULL;
     char* claudePrompt = NULL;
     char* final = NULL;
 
@@ -1565,25 +1656,26 @@ static char* RunCollaborativeFlow(const SubscriptionJob* job, LPCWSTR wszWorkspa
     codexResult = RunAgent(job, AI_CHAT_ACCESS_CODEX, wszWorkspaceRoot, wszExtraDirs, cExtraDirs, codexPrompt);
     if (!codexResult)
         codexResult = DupString("Error: Codex did not return a response.");
-    if (IsErrorResult(codexResult))
+    if (IsErrorResult(codexResult) && !IsMissingFinalAnswerError(codexResult))
     {
         final = codexResult;
         codexResult = NULL;
         goto cleanup;
     }
+    codexHandoff = BuildRelayHandoffSummary(codexResult);
 
     PostShortStatus(job->hwndTarget, "Codex handoff ready. Claude Code is reviewing the shared workspace...");
     PostHeapString(job->hwndTarget, WM_AI_AGENT_TOOL, "Shared workspace relay: Claude review and refinement pass");
 
-    claudePrompt = BuildPrompt(job, wszWorkspaceRoot, AI_CHAT_ACCESS_CLAUDE, codexResult);
+    claudePrompt = BuildPrompt(job, wszWorkspaceRoot, AI_CHAT_ACCESS_CLAUDE, codexHandoff ? codexHandoff : codexResult);
     final = RunAgent(job, AI_CHAT_ACCESS_CLAUDE, wszWorkspaceRoot, wszExtraDirs, cExtraDirs, claudePrompt);
     if (!final)
     {
-        final = BuildRelayFallbackResult(codexResult, "Error: Claude Code did not return a response.");
+        final = BuildRelayFallbackResult(codexHandoff ? codexHandoff : codexResult, "Error: Claude Code did not return a response.");
     }
     else if (IsErrorResult(final))
     {
-        char* relayFallback = BuildRelayFallbackResult(codexResult, final);
+        char* relayFallback = BuildRelayFallbackResult(codexHandoff ? codexHandoff : codexResult, final);
         free(final);
         final = relayFallback;
     }
@@ -1593,6 +1685,8 @@ cleanup:
         free(codexPrompt);
     if (codexResult)
         free(codexResult);
+    if (codexHandoff)
+        free(codexHandoff);
     if (claudePrompt)
         free(claudePrompt);
     return final ? final : DupString("Error: Failed to coordinate the shared workspace relay.");
