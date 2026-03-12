@@ -452,3 +452,29 @@ void ProofTray_Publish(const AIResponse* pResp, const AIPatch* pPatches, int iPa
     ProofTray_SetMissionStatus(s_wszMissionStatus);
     ProofTray_Show(s_hwndMain);
 }
+
+void ProofTray_PublishMissionNote(LPCWSTR wszTitle, LPCWSTR wszDetails)
+{
+    ProofItem* item;
+    if (!EnsureWindow()) return;
+    if (s_iItemCount >= PT_MAX_ITEMS)
+    {
+        memmove(&s_items[0], &s_items[1], sizeof(ProofItem) * (PT_MAX_ITEMS - 1));
+        s_iItemCount = PT_MAX_ITEMS - 1;
+    }
+    item = &s_items[s_iItemCount];
+    ZeroMemory(item, sizeof(*item));
+    lstrcpynW(item->wszTitle, wszTitle ? wszTitle : L"Mission note", COUNTOF(item->wszTitle));
+    lstrcpynW(item->wszDetails, wszDetails ? wszDetails : L"", COUNTOF(item->wszDetails));
+    s_iItemCount++;
+
+    SendMessageW(s_hwndList, LB_RESETCONTENT, 0, 0);
+    for (int i = 0; i < s_iItemCount; i++)
+        SendMessageW(s_hwndList, LB_ADDSTRING, 0, (LPARAM)s_items[i].wszTitle);
+
+    s_iSelected = s_iItemCount - 1;
+    SendMessageW(s_hwndList, LB_SETCURSEL, s_iSelected, 0);
+    UpdateSelection();
+    UpdateButtons();
+    ProofTray_Show(s_hwndMain);
+}

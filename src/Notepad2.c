@@ -62,6 +62,8 @@
 #include "Extension/Terminal.h"
 #include "Extension/ProofTray.h"
 #include "Extension/FileManager.h"
+#include "Extension/AgentRuntime.h"
+#include "Extension/MissionControl.h"
 #include "Extension/GitUI.h"
 #include "Extension/MarkdownPreview.h"
 #include "Extension/WelcomeScreen.h"
@@ -1681,6 +1683,7 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT umsg, WPARAM wParam, LPARAM lParam)
     case WM_AI_CONNECTED:
     case WM_AI_DISCONNECTED:
     case WM_AI_CHUNK:
+    case WM_AGENT_RUNTIME_EVENT:
       return AICommands_HandleMessage(hwnd, umsg, wParam, lParam);
 
     // [biko]: AI agent file/editor tool messages
@@ -2458,16 +2461,27 @@ void MsgSize(HWND hwnd, WPARAM wParam, LPARAM lParam)
   }
   // [/biko]
 
-  hdwp = BeginDeferWindowPos(2);
+  if (MissionControl_IsVisible())
+  {
+    ShowWindow(hwndEditFrame, SW_HIDE);
+    ShowWindow(hwndEditParent, SW_HIDE);
+    MissionControl_Layout(hwnd, x, y, cx, cy);
+  }
+  else
+  {
+    if (MissionControl_GetHwnd())
+      ShowWindow(MissionControl_GetHwnd(), SW_HIDE);
+    hdwp = BeginDeferWindowPos(2);
 
-  DeferWindowPos(hdwp, hwndEditFrame, NULL, x, y, cx, cy,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+    DeferWindowPos(hdwp, hwndEditFrame, NULL, x, y, cx, cy,
+                   SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
-  DeferWindowPos(hdwp, hwndEditParent, NULL, x + cxEditFrame, y + cyEditFrame,
-                 cx - 2 * cxEditFrame, cy - 2 * cyEditFrame,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+    DeferWindowPos(hdwp, hwndEditParent, NULL, x + cxEditFrame, y + cyEditFrame,
+                   cx - 2 * cxEditFrame, cy - 2 * cyEditFrame,
+                   SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
 
-  EndDeferWindowPos(hdwp);
+    EndDeferWindowPos(hdwp);
+  }
 
   UpdateStatusbarWidth(cx);
 

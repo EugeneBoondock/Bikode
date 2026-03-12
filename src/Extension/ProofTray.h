@@ -33,6 +33,7 @@ void    ProofTray_Publish(const AIResponse* pResp,
                           const AIPatch* pPatches,
                           int iPatchCount,
                           BOOL bPreviewActive);
+void    ProofTray_PublishMissionNote(LPCWSTR wszTitle, LPCWSTR wszDetails);
 void    ProofTray_Clear(void);
 void    ProofTray_SetMissionStatus(LPCWSTR wszStatus);
 

@@ -22,6 +22,8 @@
 #include "Terminal.h"
 #include "MarkdownPreview.h"
 #include "FileManager.h"
+#include "MissionControl.h"
+#include "AgentRuntime.h"
 #include "ui/dialogs/BikoCommandPalette.h"
 #include "CommonUtils.h"
 #include "SciCall.h"
@@ -142,6 +144,8 @@ void AICommands_Init(HWND hwnd, HWND hwndEd)
     Terminal_Init(hwnd);
     FileManager_Init(hwnd);
     ProofTray_Init(hwnd);
+    AgentRuntime_Init(hwnd);
+    MissionControl_Init(hwnd);
 }
 
 void AICommands_Shutdown(void)
@@ -159,6 +163,8 @@ void AICommands_Shutdown(void)
         s_pszRefineNotes = NULL;
     }
 
+    MissionControl_Shutdown();
+    AgentRuntime_Shutdown();
     ProofTray_Shutdown();
     FileManager_Shutdown();
     Terminal_Shutdown();
@@ -195,6 +201,18 @@ BOOL AICommands_HandleCommand(HWND hwnd, UINT cmd)
     case IDM_AI_CHAT:
     case IDM_AI_TOGGLE_CHAT:
         ChatPanel_Toggle(hwnd);
+        return TRUE;
+
+    case IDM_AI_MISSION_CONTROL:
+        MissionControl_Toggle(hwnd);
+        return TRUE;
+
+    case IDM_AI_DUPLICATE_ORG:
+        PostMessageW(hwnd, WM_COMMAND, IDM_AI_MISSION_CONTROL, 0);
+        return TRUE;
+
+    case IDM_AI_RUN_ACTIVE_ORG:
+        PostMessageW(hwnd, WM_COMMAND, IDM_AI_MISSION_CONTROL, 0);
         return TRUE;
 
     case IDM_AI_CANCEL:
@@ -251,6 +269,7 @@ BOOL AICommands_HandleCommand(HWND hwnd, UINT cmd)
         DarkMode_Toggle();
         DarkMode_ApplyAll(hwnd, s_hwndEdit, hwndToolbar, hwndStatus, hwndReBar);
         ProofTray_ApplyDarkMode();
+        MissionControl_ApplyTheme();
         BikoCommandPalette_ApplyTheme();
         return TRUE;
 
@@ -333,7 +352,8 @@ BOOL AICommands_HandleCommand(HWND hwnd, UINT cmd)
 
 BOOL AICommands_HandleMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    UNREFERENCED_PARAMETER(lParam);
+    if (MissionControl_HandleMessage(hwnd, msg, wParam, lParam))
+        return TRUE;
 
     switch (msg)
     {
@@ -418,7 +438,9 @@ void AICommands_CreateMenu(HMENU hMainMenu)
         AppendMenuW(hView, MF_STRING, IDM_FILEMGR_OPENFOLDER,
                     L"Open Folder...");
         AppendMenuW(hView, MF_STRING, IDM_AI_TOGGLE_CHAT,
-                    L"Chat Panel\tCtrl+Shift+C");
+                    L"Quick Chat\tCtrl+Shift+C");
+        AppendMenuW(hView, MF_STRING, IDM_AI_MISSION_CONTROL,
+                    L"Command Center\tCtrl+Shift+J");
         AppendMenuW(hView, MF_STRING, IDM_BIKO_COMMAND_PALETTE,
                     L"Command Palette...");
         AppendMenuW(hView, MF_STRING, IDM_AI_TOGGLE_PROOF,
@@ -434,7 +456,8 @@ void AICommands_CreateMenu(HMENU hMainMenu)
     // Agents menu: first-class AI actions
     {
         HMENU hAgentsMenu = CreatePopupMenu();
-        AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_TOGGLE_CHAT, L"Chat Panel\tCtrl+Shift+C");
+        AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_TOGGLE_CHAT, L"Quick Chat\tCtrl+Shift+C");
+        AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_MISSION_CONTROL, L"Command Center\tCtrl+Shift+J");
         AppendMenuW(hAgentsMenu, MF_STRING, IDM_BIKO_COMMAND_PALETTE, L"Command Palette...");
         AppendMenuW(hAgentsMenu, MF_STRING, IDM_AI_TOGGLE_PROOF, L"Proof Tray");
         AppendMenuW(hAgentsMenu, MF_SEPARATOR, 0, NULL);

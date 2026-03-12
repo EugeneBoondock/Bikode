@@ -142,7 +142,7 @@ static void BuildItems(void)
       submii.cch = 63;
       if (GetMenuItemInfoW(s_items[i].hPopup, 0, TRUE, &submii) && submii.wID)
         firstCmd = submii.wID;
-      if (firstCmd == IDM_AI_TOGGLE_CHAT || firstCmd == IDM_BIKO_COMMAND_PALETTE ||
+      if (firstCmd == IDM_AI_TOGGLE_CHAT || firstCmd == IDM_AI_MISSION_CONTROL || firstCmd == IDM_BIKO_COMMAND_PALETTE ||
           firstCmd == IDM_AI_TRANSFORM) {
         lstrcpyW(s_items[i].szRaw, L"&Agents");
         lstrcpyW(s_items[i].szLabel, L"Agents");

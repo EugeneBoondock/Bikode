@@ -11,18 +11,25 @@
 ******************************************************************************/
 
 #include "AIAgent.h"
+#include "AIContext.h"
 #include "AIDirectCall.h"
 #include "AIBridge.h"
+#include "CodeEmbeddingIndex.h"
 #include "CommonUtils.h"
 #include "Externals.h"
+#include "FileManager.h"
 #include "Terminal.h"
 #include "Utils.h"
 #include "ViewHelper.h"
 #include <windows.h>
+#include <shlwapi.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <process.h>
+
+#pragma comment(lib, "Shlwapi.lib")
 
 //=============================================================================
 // Constants
@@ -100,6 +107,93 @@ typedef struct {
 extern WCHAR szCurFile[N2E_MAX_PATH_N_CMD_LINE];
 extern BOOL bModified;
 
+static BOOL IsAbsolutePathA(const char* path)
+{
+    if (!path || !path[0])
+        return FALSE;
+    if ((isalpha((unsigned char)path[0]) && path[1] == ':' &&
+         (path[2] == '\\' || path[2] == '/')) ||
+        (path[0] == '\\' && path[1] == '\\'))
+        return TRUE;
+    return FALSE;
+}
+
+static BOOL ResolveWorkspaceRootW(WCHAR* wszOut, int cchOut)
+{
+    const WCHAR* wszRoot;
+    if (!wszOut || cchOut <= 0)
+        return FALSE;
+    wszOut[0] = L'\0';
+
+    wszRoot = FileManager_GetRootPath();
+    if (wszRoot && wszRoot[0])
+    {
+        lstrcpynW(wszOut, wszRoot, cchOut);
+        return TRUE;
+    }
+    if (szCurFile[0])
+    {
+        if (AIContext_GetProjectRoot(szCurFile, wszOut, cchOut))
+            return TRUE;
+        lstrcpynW(wszOut, szCurFile, cchOut);
+        PathRemoveFileSpecW(wszOut);
+        return wszOut[0] != L'\0';
+    }
+    GetCurrentDirectoryW(cchOut, wszOut);
+    return wszOut[0] != L'\0';
+}
+
+static BOOL ResolveWorkspacePathA(const char* inputPath, char* outPath, int cchOut)
+{
+    WCHAR wszRoot[MAX_PATH];
+    int rootNeeded;
+    char rootUtf8[MAX_PATH];
+    char normalized[MAX_PATH];
+    const char* tail;
+    char* p;
+
+    if (!outPath || cchOut <= 0)
+        return FALSE;
+    outPath[0] = '\0';
+    if (!inputPath || !inputPath[0])
+        return FALSE;
+    if (IsAbsolutePathA(inputPath))
+    {
+        _snprintf_s(outPath, cchOut, _TRUNCATE, "%s", inputPath);
+    }
+    else
+    {
+        if (!ResolveWorkspaceRootW(wszRoot, ARRAYSIZE(wszRoot)))
+            return FALSE;
+        rootNeeded = WideCharToMultiByte(CP_UTF8, 0, wszRoot, -1, rootUtf8, ARRAYSIZE(rootUtf8), NULL, NULL);
+        if (rootNeeded <= 0)
+            return FALSE;
+        tail = inputPath;
+        if ((tail[0] == '.' && (tail[1] == '\\' || tail[1] == '/')) ||
+            (tail[0] == '.' && tail[1] == '.' && (tail[2] == '\\' || tail[2] == '/')))
+        {
+            tail = inputPath;
+        }
+        _snprintf_s(outPath, cchOut, _TRUNCATE, "%s\\%s", rootUtf8, tail);
+    }
+
+    _snprintf_s(normalized, ARRAYSIZE(normalized), _TRUNCATE, "%s", outPath);
+    for (p = normalized; *p; p++)
+    {
+        if (*p == '/')
+            *p = '\\';
+    }
+    _snprintf_s(outPath, cchOut, _TRUNCATE, "%s", normalized);
+    return TRUE;
+}
+
+static void InvalidateWorkspaceIndex(void)
+{
+    WCHAR wszRoot[MAX_PATH];
+    if (ResolveWorkspaceRootW(wszRoot, ARRAYSIZE(wszRoot)))
+        CodeEmbeddingIndex_InvalidateProject(wszRoot);
+}
+
 //=============================================================================
 // Growable string buffer (local copy)
 //=============================================================================
@@ -133,6 +227,7 @@ typedef struct ToolCall {
     char*   cwd;
     int     startLine;
     int     lineCount;
+    int     maxResults;
 } ToolCall;
 
 static BOOL ContainsSubstringCI(const char* haystack, const char* needle);
@@ -150,6 +245,12 @@ static const AgentRoleContract* GetRoleContract(AgentRole role);
 static BOOL IsToolAllowedForRole(const AgentRoleContract* contract, const char* toolName);
 static void ContextLedger_Persist(const ContextLedger* ledger, const char* mode, const char* intent,
                                   int touchedFiles, BOOL shadowMode, const char* topFile);
+static int ExtractFirstInteger(const char* text);
+static char* WideToUtf8Dup(const WCHAR* wsz);
+static BOOL ResolveWorkspaceRootW(WCHAR* wszOut, int cchOut);
+static BOOL ResolveWorkspacePathA(const char* inputPath, char* outPath, int cchOut);
+static void InvalidateWorkspaceIndex(void);
+static char* BuildLocalRepoBrief(const char* userMessage);
 
 static void sb_init(StrBuf* sb, int initialCap)
 {
@@ -400,6 +501,36 @@ static char* WideToUtf8Dup(const WCHAR* wsz)
 
     WideCharToMultiByte(CP_UTF8, 0, wsz, -1, out, len, NULL, NULL);
     return out;
+}
+
+static char* BuildLocalRepoBrief(const char* userMessage)
+{
+    WCHAR wszRoot[MAX_PATH];
+    char* pathHint = NULL;
+    char* hits = NULL;
+    StrBuf sb;
+    if (!userMessage || !userMessage[0])
+        return NULL;
+    if (!ResolveWorkspaceRootW(wszRoot, ARRAYSIZE(wszRoot)))
+        return NULL;
+    if (szCurFile[0])
+        pathHint = WideToUtf8Dup(szCurFile);
+    if (!CodeEmbeddingIndex_QueryProject(wszRoot, userMessage, pathHint, 4, &hits) ||
+        !hits || !hits[0] || strstr(hits, "(no strong repo matches found)") != NULL)
+    {
+        if (pathHint) free(pathHint);
+        if (hits) free(hits);
+        return NULL;
+    }
+
+    sb_init(&sb, (int)strlen(hits) + 256);
+    sb_append(&sb,
+        "Local repo index hits from Bikode's on-device code embeddings. "
+        "Use these as likely starting points, then verify exact text with read_file or get_active_document:\n", -1);
+    sb_append(&sb, hits, -1);
+    free(pathHint);
+    free(hits);
+    return sb.data;
 }
 
 static HWND s_hwndMainForTools = NULL;
@@ -798,6 +929,7 @@ static char* BuildSystemPrompt(const BudgetContract* contract, AgentIntent inten
         "- When the user asks you to write code, modify the actual files via tools instead of dumping large code blocks in the chat response.\n"
         "- Prefer native Bikode actions first: inspect the active document, replace the active document, create a new editor buffer, open files in the editor, create directories, then use shell commands only when needed.\n"
         "- If a file is too large, read it in chunks with start_line and line_count instead of giving up.\n"
+        "- Before reading a long or unfamiliar repo file, use semantic_search to pull likely chunks from the local code index first.\n"
         "- Final answers should describe what changed and where, not reproduce the code verbatim.\n\n"
 
         "Context inference\n"
@@ -933,6 +1065,11 @@ static char* BuildSystemPrompt(const BudgetContract* contract, AgentIntent inten
         "Parameters: name, path\n"
         "Example: {\"name\": \"list_dir\", \"path\": \"src\"}\n\n"
 
+        "### semantic_search\n"
+        "Search the current workspace using Bikode's local code embeddings.\n"
+        "Parameters: name, query, optional path, optional max_results\n"
+        "Example: {\"name\": \"semantic_search\", \"query\": \"mission control resize layout bug\", \"path\": \"src/Extension\", \"max_results\": 4}\n\n"
+
         "### web_search\n"
         "Perform a web search using DuckDuckGo to find information, documentation, or solutions.\n"
         "Parameters: name, query\n"
@@ -950,6 +1087,8 @@ static char* BuildSystemPrompt(const BudgetContract* contract, AgentIntent inten
         "- Use replace_editor_content or new_file_in_editor instead of pasting code into chat when the user asks you to write code without a path.\n"
         "- Use open_file after analysis if you want the user to see a file you touched.\n"
         "- Use make_dir and init_repo when creating project structure; use run_command when you need the terminal.\n"
+        "- Use semantic_search before opening large repo files or when the user describes behavior without naming the exact file.\n"
+        "- Relative file, directory, and cwd values resolve from the current workspace root.\n"
         "- Use start_line and line_count when a file is large.\n"
         "- When a read is truncated and includes [live-embedding-index], use that chunk map to request the most relevant follow-up windows instead of re-reading from line 1.\n"
         "- Use insert_in_editor to put content directly into the user????????s active editor.\n"
@@ -1049,7 +1188,8 @@ static const char* FindRawJsonToolCall(const char* p)
                 strcmp(name, "replace_editor_content") == 0 ||
                 strcmp(name, "new_file_in_editor") == 0 || strcmp(name, "make_dir") == 0 ||
                 strcmp(name, "init_repo") == 0 || strcmp(name, "run_command") == 0 ||
-                strcmp(name, "list_dir") == 0 || strcmp(name, "web_search") == 0 ||
+                strcmp(name, "list_dir") == 0 || strcmp(name, "semantic_search") == 0 ||
+                strcmp(name, "web_search") == 0 ||
                 strcmp(name, "gif_search") == 0)
             {
                 free(name);
@@ -1109,6 +1249,9 @@ static int ParseOneToolCall(const char* json, int jsonLen, ToolCall* tc)
     tc->cwd     = json_extract_string_a(buf, "cwd");
     tc->startLine = json_extract_int_a(buf, "start_line", 0);
     tc->lineCount = json_extract_int_a(buf, "line_count", 0);
+    tc->maxResults = json_extract_int_a(buf, "max_results", 0);
+    if (tc->maxResults <= 0)
+        tc->maxResults = json_extract_int_a(buf, "limit", 0);
     if (!tc->command)
         tc->command = json_extract_string_a(buf, "query"); // Map query -> command
 
@@ -1452,19 +1595,23 @@ static char* ReadEditorTextWindow(int startLine, int lineCount)
 // Main window HWND for tools that need UI interaction (set per agent run)
 static char* Tool_ReadFile(const char* path, int startLine, int lineCount)
 {
+    char resolvedPath[MAX_PATH];
+    const char* actualPath = path;
     if (!path || !path[0])
         return _strdup("Error: No file path specified");
+    if (ResolveWorkspacePathA(path, resolvedPath, ARRAYSIZE(resolvedPath)))
+        actualPath = resolvedPath;
 
     if (startLine > 0 && lineCount > 0)
-        return ReadFileLineWindow(path, startLine, lineCount);
+        return ReadFileLineWindow(actualPath, startLine, lineCount);
 
-    HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+    HANDLE hFile = CreateFileA(actualPath, GENERIC_READ, FILE_SHARE_READ, NULL,
                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE)
     {
         char err[512];
         snprintf(err, sizeof(err), "Error: Cannot open file '%s' (error %lu)",
-                 path, GetLastError());
+                 actualPath, GetLastError());
         return _strdup(err);
     }
 
@@ -1541,24 +1688,28 @@ static char* Tool_GetActiveDocument(int startLine, int lineCount)
 
 static char* Tool_WriteFile(const char* path, const char* content)
 {
+    char resolvedPath[MAX_PATH];
+    const char* actualPath = path;
     DWORD attrs;
     BOOL existed;
 
     if (!path || !path[0])
         return _strdup("Error: No file path specified");
     if (!content) content = "";
+    if (ResolveWorkspacePathA(path, resolvedPath, ARRAYSIZE(resolvedPath)))
+        actualPath = resolvedPath;
 
-    EnsureParentDirExists(path);
-    attrs = GetFileAttributesA(path);
+    EnsureParentDirExists(actualPath);
+    attrs = GetFileAttributesA(actualPath);
     existed = (attrs != INVALID_FILE_ATTRIBUTES) && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
 
-    HANDLE hFile = CreateFileA(path, GENERIC_WRITE, 0, NULL,
+    HANDLE hFile = CreateFileA(actualPath, GENERIC_WRITE, 0, NULL,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE)
     {
         char err[512];
         snprintf(err, sizeof(err), "Error: Cannot create file '%s' (error %lu)",
-                 path, GetLastError());
+                 actualPath, GetLastError());
         return _strdup(err);
     }
 
@@ -1567,30 +1718,35 @@ static char* Tool_WriteFile(const char* path, const char* content)
     WriteFile(hFile, content, len, &written, NULL);
     CloseHandle(hFile);
 
-    OpenFileInEditor(path);
+    OpenFileInEditor(actualPath);
+    InvalidateWorkspaceIndex();
 
     char msg[512];
     snprintf(msg, sizeof(msg), "%s '%s' (%lu bytes)",
-             existed ? "Updated" : "Created", path, written);
+             existed ? "Updated" : "Created", actualPath, written);
     return _strdup(msg);
 }
 
 static char* Tool_ReplaceInFile(const char* path, const char* oldText, const char* newText)
 {
+    char resolvedPath[MAX_PATH];
+    const char* actualPath = path;
     if (!path || !path[0])
         return _strdup("Error: No file path specified");
     if (!oldText || !oldText[0])
         return _strdup("Error: old_text is empty");
     if (!newText) newText = "";
+    if (ResolveWorkspacePathA(path, resolvedPath, ARRAYSIZE(resolvedPath)))
+        actualPath = resolvedPath;
 
     // Read the file
-    HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+    HANDLE hFile = CreateFileA(actualPath, GENERIC_READ, FILE_SHARE_READ, NULL,
                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE)
     {
         char err[512];
         snprintf(err, sizeof(err), "Error: Cannot open file '%s' (error %lu)",
-                 path, GetLastError());
+                 actualPath, GetLastError());
         return _strdup(err);
     }
 
@@ -1630,7 +1786,7 @@ static char* Tool_ReplaceInFile(const char* path, const char* oldText, const cha
     free(fileContent);
 
     // Write back
-    hFile = CreateFileA(path, GENERIC_WRITE, 0, NULL,
+    hFile = CreateFileA(actualPath, GENERIC_WRITE, 0, NULL,
                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE)
     {
@@ -1642,12 +1798,13 @@ static char* Tool_ReplaceInFile(const char* path, const char* oldText, const cha
     WriteFile(hFile, newContent, newTotalLen, &written, NULL);
     CloseHandle(hFile);
     free(newContent);
-    OpenFileInEditor(path);
+    OpenFileInEditor(actualPath);
+    InvalidateWorkspaceIndex();
 
     char msg[512];
     snprintf(msg, sizeof(msg),
              "Successfully replaced text in '%s' (%d bytes -> %d bytes)",
-             path, oldLen, newLen);
+             actualPath, oldLen, newLen);
     return _strdup(msg);
 }
 
@@ -1655,9 +1812,13 @@ static char* Tool_RunCommand(const char* command, const char* cwd)
 {
     BOOL timedOut = FALSE;
     char* safeOutput;
+    char resolvedCwd[MAX_PATH];
+    const char* actualCwd = cwd;
 
     if (!command || !command[0])
         return _strdup("Error: No command specified");
+    if (cwd && cwd[0] && ResolveWorkspacePathA(cwd, resolvedCwd, ARRAYSIZE(resolvedCwd)))
+        actualCwd = resolvedCwd;
 
     // Create pipe for stdout+stderr
     SECURITY_ATTRIBUTES sa;
@@ -1698,7 +1859,7 @@ static char* Tool_RunCommand(const char* command, const char* cwd)
         snprintf(cmdLine, cmdLen + 32, "cmd.exe /c %s", command);
         bCreated = CreateProcessA(
             NULL, cmdLine, NULL, NULL, TRUE,
-            CREATE_NO_WINDOW, NULL, cwd && cwd[0] ? cwd : NULL, &si, &pi);
+            CREATE_NO_WINDOW, NULL, actualCwd && actualCwd[0] ? actualCwd : NULL, &si, &pi);
 
         free(cmdLine);
         CloseHandle(hWritePipe);
@@ -1758,7 +1919,7 @@ static char* Tool_RunCommand(const char* command, const char* cwd)
 
         safeOutput = PrepareToolResultForModel("run_command",
             output.len > 0 ? output.data : "(no output)", MAX_CMD_OUTPUT_SIZE);
-        MirrorCommandActivityToTerminal(cwd, command,
+        MirrorCommandActivityToTerminal(actualCwd, command,
             output.len > 0 ? output.data : "(no output)", exitCode, timedOut);
         sb_free(&output);
     }
@@ -1775,11 +1936,16 @@ static char* Tool_RunCommand(const char* command, const char* cwd)
 
 static char* Tool_ListDir(const char* path)
 {
+    char resolvedPath[MAX_PATH];
+    const char* actualPath = path;
     if (!path || !path[0])
         path = ".";
+    actualPath = path;
+    if (ResolveWorkspacePathA(path, resolvedPath, ARRAYSIZE(resolvedPath)))
+        actualPath = resolvedPath;
 
     char searchPath[MAX_PATH];
-    snprintf(searchPath, sizeof(searchPath), "%s\\*", path);
+    snprintf(searchPath, sizeof(searchPath), "%s\\*", actualPath);
 
     WIN32_FIND_DATAA fd;
     HANDLE hFind = FindFirstFileA(searchPath, &fd);
@@ -1787,7 +1953,7 @@ static char* Tool_ListDir(const char* path)
     {
         char err[512];
         snprintf(err, sizeof(err), "Error: Cannot list directory '%s' (error %lu)",
-                 path, GetLastError());
+                 actualPath, GetLastError());
         return _strdup(err);
     }
 
@@ -1845,20 +2011,24 @@ static char* Tool_InsertInEditor(const char* content)
 
 static char* Tool_OpenFile(const char* path)
 {
+    char resolvedPath[MAX_PATH];
+    const char* actualPath = path;
     DWORD attrs;
 
     if (!path || !path[0])
         return _strdup("Error: No file path specified");
+    if (ResolveWorkspacePathA(path, resolvedPath, ARRAYSIZE(resolvedPath)))
+        actualPath = resolvedPath;
 
-    attrs = GetFileAttributesA(path);
+    attrs = GetFileAttributesA(actualPath);
     if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY))
         return _strdup("Error: File does not exist");
 
-    OpenFileInEditor(path);
+    OpenFileInEditor(actualPath);
 
     {
         char msg[512];
-        snprintf(msg, sizeof(msg), "Opened '%s' in the editor", path);
+        snprintf(msg, sizeof(msg), "Opened '%s' in the editor", actualPath);
         return _strdup(msg);
     }
 }
@@ -1907,22 +2077,27 @@ static char* Tool_NewFileInEditor(const char* content)
 
 static char* Tool_MakeDir(const char* path)
 {
+    char resolvedPath[MAX_PATH];
+    const char* actualPath = path;
     if (!path || !path[0])
         return _strdup("Error: No directory path specified");
+    if (ResolveWorkspacePathA(path, resolvedPath, ARRAYSIZE(resolvedPath)))
+        actualPath = resolvedPath;
 
-    if (!EnsureDirExistsRecursive(path))
+    if (!EnsureDirExistsRecursive(actualPath))
     {
         char err[512];
         snprintf(err, sizeof(err), "Error: Could not create directory '%s' (error %lu)",
-                 path, GetLastError());
+                 actualPath, GetLastError());
         return _strdup(err);
     }
 
-    RevealPathInExplorer(path);
+    RevealPathInExplorer(actualPath);
+    InvalidateWorkspaceIndex();
 
     {
         char msg[512];
-        snprintf(msg, sizeof(msg), "Ensured directory exists: '%s'", path);
+        snprintf(msg, sizeof(msg), "Ensured directory exists: '%s'", actualPath);
         return _strdup(msg);
     }
 }
@@ -1938,14 +2113,33 @@ static char* Tool_InitRepo(const char* path)
     }
     else
     {
-        strncpy(dirPath, path, MAX_PATH - 1);
-        dirPath[MAX_PATH - 1] = '\0';
+        if (!ResolveWorkspacePathA(path, dirPath, ARRAYSIZE(dirPath)))
+        {
+            strncpy(dirPath, path, MAX_PATH - 1);
+            dirPath[MAX_PATH - 1] = '\0';
+        }
         EnsureDirExistsRecursive(dirPath);
     }
 
     result = Tool_RunCommand("git init", dirPath);
+    InvalidateWorkspaceIndex();
     RevealPathInExplorer(dirPath);
     return result;
+}
+
+static char* Tool_SemanticSearch(const char* query, const char* pathHint, int maxResults)
+{
+    WCHAR wszRoot[MAX_PATH];
+    char* hits = NULL;
+    if (!query || !query[0])
+        return _strdup("Error: No semantic_search query specified");
+    if (!ResolveWorkspaceRootW(wszRoot, ARRAYSIZE(wszRoot)))
+        return _strdup("Error: No workspace root is available for semantic_search");
+    if (maxResults <= 0)
+        maxResults = 4;
+    if (!CodeEmbeddingIndex_QueryProject(wszRoot, query, pathHint, maxResults, &hits) || !hits)
+        return _strdup("Error: Local semantic search did not return any repo matches");
+    return hits;
 }
 
 static char* Tool_WebSearch(const char* query)
@@ -2122,6 +2316,8 @@ static char* ExecuteTool(const ToolCall* tc)
         return Tool_RunCommand(tc->command, tc->cwd);
     if (strcmp(tc->name, "list_dir") == 0)
         return Tool_ListDir(tc->path);
+    if (strcmp(tc->name, "semantic_search") == 0)
+        return Tool_SemanticSearch(tc->command ? tc->command : tc->content, tc->path, tc->maxResults);
     if (strcmp(tc->name, "web_search") == 0)
         return Tool_WebSearch(tc->command ? tc->command : tc->content);
     if (strcmp(tc->name, "gif_search") == 0)
@@ -2397,14 +2593,14 @@ static AgentRole SelectRoleFromIntent(AgentIntent intent)
 static const AgentRoleContract* GetRoleContract(AgentRole role)
 {
     static const AgentRoleContract contracts[] = {
-        { AGENT_ROLE_PLANNER, "Planner Agent", "read_file,get_active_document,list_dir,open_file", 6, 1 },
-        { AGENT_ROLE_IMPLEMENTER, "Implementer Agent", "read_file,get_active_document,write_file,replace_in_file,open_file,insert_in_editor,replace_editor_content,new_file_in_editor,list_dir", 12, 0 },
-        { AGENT_ROLE_REVIEWER, "Reviewer Agent", "read_file,get_active_document,list_dir,open_file,run_command", 8, 1 },
-        { AGENT_ROLE_DEBUG, "Debug Agent", "read_file,get_active_document,run_command,list_dir,replace_in_file", 10, 0 },
-        { AGENT_ROLE_TEST, "Test Agent", "read_file,get_active_document,run_command,list_dir", 8, 1 },
-        { AGENT_ROLE_REFACTOR, "Refactor Agent", "read_file,get_active_document,replace_in_file,write_file,open_file,list_dir", 12, 0 },
-        { AGENT_ROLE_RESEARCH, "Research Agent", "read_file,get_active_document,list_dir,web_search", 6, 1 },
-        { AGENT_ROLE_SETUP, "Setup Agent", "read_file,get_active_document,list_dir,make_dir,init_repo,run_command,write_file", 10, 0 }
+        { AGENT_ROLE_PLANNER, "Planner Agent", "semantic_search,read_file,get_active_document,list_dir,open_file", 6, 1 },
+        { AGENT_ROLE_IMPLEMENTER, "Implementer Agent", "semantic_search,read_file,get_active_document,write_file,replace_in_file,open_file,insert_in_editor,replace_editor_content,new_file_in_editor,list_dir", 12, 0 },
+        { AGENT_ROLE_REVIEWER, "Reviewer Agent", "semantic_search,read_file,get_active_document,list_dir,open_file,run_command", 8, 1 },
+        { AGENT_ROLE_DEBUG, "Debug Agent", "semantic_search,read_file,get_active_document,run_command,list_dir,replace_in_file", 10, 0 },
+        { AGENT_ROLE_TEST, "Test Agent", "semantic_search,read_file,get_active_document,run_command,list_dir", 8, 1 },
+        { AGENT_ROLE_REFACTOR, "Refactor Agent", "semantic_search,read_file,get_active_document,replace_in_file,write_file,open_file,list_dir", 12, 0 },
+        { AGENT_ROLE_RESEARCH, "Research Agent", "semantic_search,read_file,get_active_document,list_dir,web_search", 6, 1 },
+        { AGENT_ROLE_SETUP, "Setup Agent", "semantic_search,read_file,get_active_document,list_dir,make_dir,init_repo,run_command,write_file", 10, 0 }
     };
 
     for (int i = 0; i < (int)(sizeof(contracts) / sizeof(contracts[0])); i++)
@@ -2419,6 +2615,8 @@ static BOOL IsToolAllowedForRole(const AgentRoleContract* contract, const char* 
 {
     if (!contract || !contract->allowedTools || !toolName || !toolName[0])
         return FALSE;
+    if (strcmp(toolName, "semantic_search") == 0)
+        return TRUE;
 
     const char* pos = contract->allowedTools;
     size_t toolLen = strlen(toolName);
@@ -2698,6 +2896,22 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     msgs[msgCount].content = systemPrompt;
     ownedStrings[msgCount] = systemPrompt;
     msgCount++;
+
+    if (intent != INTENT_ASK && msgCount < MAX_MESSAGES_PER_CALL - 4)
+    {
+        char* repoBrief = BuildLocalRepoBrief(p->szUserMessage);
+        if (repoBrief && repoBrief[0])
+        {
+            msgs[msgCount].role = "system";
+            msgs[msgCount].content = repoBrief;
+            ownedStrings[msgCount] = repoBrief;
+            msgCount++;
+        }
+        else if (repoBrief)
+        {
+            free(repoBrief);
+        }
+    }
 
     // Copy conversation history
     EnterCriticalSection(&s_csHistory);

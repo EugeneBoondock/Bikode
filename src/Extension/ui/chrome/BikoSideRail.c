@@ -12,6 +12,7 @@
 #include "../../AICommands.h"
 #include "../../FileManager.h"
 #include "../../ChatPanel.h"
+#include "../../MissionControl.h"
 #include "../../GitUI.h"
 #include "../../PluginManager.h"
 #include "../../DarkMode.h"
@@ -19,7 +20,8 @@
 #include <commctrl.h>
 #include <windowsx.h>
 
-#define RAIL_BTN_COUNT 7
+#define RAIL_BTN_COUNT 8
+#define RAIL_MISSION_INDEX 4
 
 typedef struct RailButton {
     UINT        cmdId;
@@ -40,7 +42,8 @@ static RailButton s_buttons[RAIL_BTN_COUNT] = {
     { IDM_EDIT_FIND,       BKGLYPH_SEARCH,   L"Search",   {0} },
     { IDM_VIEW_SHOWOUTLINE,BKGLYPH_SYMBOLS,  L"Symbols",  {0} },
     { IDM_GIT_STATUS,      BKGLYPH_GIT,      L"Git",      {0} },
-    { IDM_AI_TOGGLE_CHAT,  BKGLYPH_AGENT,    L"Agents",   {0} },
+    { IDM_AI_MISSION_CONTROL, BKGLYPH_COMMAND, L"Command Center", {0} },
+    { IDM_AI_TOGGLE_CHAT,  BKGLYPH_AGENT,    L"Quick Chat",   {0} },
     { IDM_PLUGIN_SETTINGS, BKGLYPH_PLUGIN,   L"Plugins",  {0} },
     { IDM_AI_SETTINGS,     BKGLYPH_SETTINGS, L"Settings", {0} }
 };
@@ -82,6 +85,7 @@ static int HitTest(int x, int y)
 static UINT GetActiveCommand(void)
 {
     if (FileManager_IsVisible()) return IDM_FILEMGR_TOGGLE;
+    if (MissionControl_IsVisible()) return IDM_AI_MISSION_CONTROL;
     if (ChatPanel_IsVisible()) return IDM_AI_TOGGLE_CHAT;
     if (GitUI_IsPanelVisible()) return IDM_GIT_STATUS;
     return s_activeCmd;
@@ -103,8 +107,25 @@ static void Paint(HWND hwnd, HDC hdc)
     {
         BOOL hot = (i == s_hover);
         BOOL activeBtn = (s_buttons[i].cmdId == active);
+        if (i == RAIL_MISSION_INDEX)
+        {
+            RECT glow = s_buttons[i].rc;
+            COLORREF glowFill = activeBtn
+                ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW), BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), 48)
+                : BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), hot ? 40 : 18);
+            InflateRect(&glow, 2, 2);
+            BikodeTheme_DrawRoundedPanel(hdc, &glow, glowFill,
+                BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+                activeBtn ? BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW) : BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN),
+                BikodeTheme_GetMetric(BKMETRIC_RADIUS_BUTTON) + 2, FALSE);
+            {
+                RECT dot = { glow.right - 7, glow.top + 3, glow.right - 3, glow.top + 7 };
+                HBRUSH hAccent = CreateSolidBrush(activeBtn ? BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW) : BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN));
+                FillRect(hdc, &dot, hAccent);
+                DeleteObject(hAccent);
+            }
+        }
         BikodeTheme_DrawButton(hdc, &s_buttons[i].rc, L"", s_buttons[i].glyph, hot, FALSE, FALSE, activeBtn);
-
         if (activeBtn)
         {
             RECT strip = { 2, s_buttons[i].rc.top + 4, 5, s_buttons[i].rc.bottom - 4 };
@@ -166,7 +187,8 @@ static LRESULT CALLBACK SideRailProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         if (idx >= 0)
         {
             s_activeCmd = s_buttons[idx].cmdId;
-            SendMessage(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(s_buttons[idx].cmdId, 1), 0);
+            // Avoid re-entering the parent window proc from inside the custom rail callback.
+            PostMessageW(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(s_buttons[idx].cmdId, 0), 0);
             InvalidateRect(hwnd, NULL, FALSE);
         }
         return 0;

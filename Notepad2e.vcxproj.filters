@@ -1142,6 +1142,9 @@
     <ClCompile Include="src\Extension\User32Helper.c">
       <Filter>Source Files\Extension</Filter>
     </ClCompile>
+    <ClCompile Include="src\Extension\CodeEmbeddingIndex.c">
+      <Filter>Source Files\Extension</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="src\Notepad2.rc">

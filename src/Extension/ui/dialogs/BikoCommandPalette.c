@@ -32,7 +32,8 @@ static const PaletteItem s_items[] = {
     { IDM_AI_EXPLAIN, L"Agents", L"Explain selection", L"AI" },
     { IDM_AI_FIX, L"Agents", L"Fix error", L"AI" },
     { IDM_AI_REFACTOR, L"Agents", L"Refactor symbol", L"AI" },
-    { IDM_AI_CHAT, L"Agents", L"Open mission control", L"Ctrl+Shift+C" },
+    { IDM_AI_MISSION_CONTROL, L"Agents", L"Open command center", L"Ctrl+Shift+J" },
+    { IDM_AI_CHAT, L"Agents", L"Open quick chat", L"Ctrl+Shift+C" },
     { IDM_AI_SETTINGS, L"Settings", L"Open AI settings", L"" },
     { IDM_FILEMGR_TOGGLE, L"Workspace", L"Toggle explorer", L"" },
     { IDM_EDIT_FIND, L"Search", L"Find in file", L"Ctrl+F" },
@@ -147,7 +148,7 @@ static LRESULT CALLBACK PaletteProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         SelectObject(hdc, BikodeTheme_GetFont(BKFONT_UI_SMALL));
         SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY));
         subtitle.left = 20; subtitle.top = 36; subtitle.right = rc.right - 20; subtitle.bottom = 54;
-        DrawTextW(hdc, L"Search commands, tools, and mission shortcuts", -1, &subtitle,
+        DrawTextW(hdc, L"Search commands, tools, and command center shortcuts", -1, &subtitle,
             DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
         EndPaint(hwnd, &ps);
         return 0;

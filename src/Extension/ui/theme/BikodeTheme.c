@@ -408,7 +408,7 @@ static WCHAR GetIconGlyph(BikodeGlyph glyph)
     case BKGLYPH_PLUGIN:    return 0xEA86; // Puzzle
     case BKGLYPH_SETTINGS:  return 0xE713; // Setting
     case BKGLYPH_TERMINAL:  return 0xE756; // CommandPrompt
-    case BKGLYPH_COMMAND:   return 0xE773; // SearchAndApps
+    case BKGLYPH_COMMAND:   return 0xF246; // ViewDashboard
     default:                return 0;
     }
 }
@@ -504,9 +504,9 @@ void BikodeTheme_DrawGlyph(HDC hdc, BikodeGlyph glyph, const RECT* rc, COLORREF 
         L2(hdc, ox + 9, oy + 12, ox + s - 4, oy + 12);
         break;
     case BKGLYPH_COMMAND:
-        RoundRect(hdc, ox + 1, oy + 2, ox + s - 1, oy + s - 2, 6, 6);
-        L2(hdc, ox + 4, oy + 6, ox + s - 4, oy + 6);
-        L2(hdc, ox + 4, oy + 10, ox + s - 7, oy + 10);
+        RoundRect(hdc, ox + 1, oy + 1, ox + s - 1, oy + s - 1, 6, 6);
+        L2(hdc, ox + s / 2, oy + 3, ox + s / 2, oy + s - 3);
+        L2(hdc, ox + 3, oy + s / 2, ox + s - 3, oy + s / 2);
         break;
     case BKGLYPH_NEW:
         Rectangle(hdc, ox + 3, oy + 2, ox + s - 3, oy + s - 2);

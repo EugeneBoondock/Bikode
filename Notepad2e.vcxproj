@@ -480,6 +480,8 @@
     <ClCompile Include="src\Extension\AISubscriptionAgent.c" />
     <ClCompile Include="src\Extension\AIContext.c" />
     <ClCompile Include="src\Extension\AICommands.c" />
+    <ClCompile Include="src\Extension\AgentRuntime.c" />
+    <ClCompile Include="src\Extension\CodeEmbeddingIndex.c" />
     <ClCompile Include="src\Extension\AIProvider.c" />
     <ClCompile Include="src\Extension\PluginManager.c" />
     <ClCompile Include="src\Extension\DiffParse.c" />
@@ -500,6 +502,8 @@
     <ClCompile Include="src\Extension\ProofTray.c" />
     <ClCompile Include="src\Extension\FileManager.c" />
     <ClCompile Include="src\Extension\MarkdownPreview.c" />
+    <ClCompile Include="src\Extension\MissionControl.c" />
+    <ClCompile Include="src\Extension\MissionControlWebView.cpp" />
     <ClCompile Include="src\Extension\PreviewTab.c" />
     <ClCompile Include="src\Extension\WebViewUI.cpp" />
     <ClCompile Include="src\Extension\WelcomeScreen.c" />
