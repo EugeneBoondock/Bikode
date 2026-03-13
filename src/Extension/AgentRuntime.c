@@ -320,7 +320,8 @@ static BOOL IsMissingFinalAnswerError(const char* text)
         return FALSE;
 
     return strcmp(text, "Error: The embedded agent finished without returning a user-facing answer.") == 0 ||
-        strcmp(text, "Error: The embedded agent finished without returning a usable final answer.") == 0;
+        strcmp(text, "Error: The embedded agent finished without returning a usable final answer.") == 0 ||
+        strcmp(text, "Error: Agent exited without a final response.") == 0;
 }
 
 static char* BuildRelayHandoffSummary(const char* codexResult)
@@ -336,6 +337,31 @@ static char* BuildRelayHandoffSummary(const char* codexResult)
     return DupString(
         "Codex completed an implementation pass in the workspace but did not leave a polished textual handoff. "
         "Review the current files on disk, verify the actual edits, and write the final user-facing summary from that workspace state.");
+}
+
+static char* BuildWorkspaceChangeFallbackResult(const char* nodeTitle, int changedCount, LPCWSTR wszFirstChanged)
+{
+    StrBuf sb;
+    char* firstChangedUtf8 = NULL;
+
+    sb_init(&sb, 512);
+    sb_appendf(&sb,
+        "%s changed %d file%s but exited before leaving a polished final handoff. "
+        "Continue from the saved workspace diff and transcript instead of treating the implementation pass as lost.",
+        (nodeTitle && nodeTitle[0]) ? nodeTitle : "This agent",
+        changedCount,
+        changedCount == 1 ? "" : "s");
+
+    if (wszFirstChanged && wszFirstChanged[0])
+    {
+        firstChangedUtf8 = WideToUtf8Dup(wszFirstChanged);
+        if (firstChangedUtf8 && firstChangedUtf8[0])
+            sb_appendf(&sb, " First changed file: %s.", firstChangedUtf8);
+    }
+
+    if (firstChangedUtf8)
+        free(firstChangedUtf8);
+    return sb.data;
 }
 
 static char* WideToUtf8Dup(LPCWSTR wszText)
@@ -787,6 +813,7 @@ const char* AgentRuntime_StateLabel(AgentNodeState state)
 {
     switch (state)
     {
+    case AGENT_NODE_QUEUED:   return "Queued";
     case AGENT_NODE_BLOCKED:  return "Blocked";
     case AGENT_NODE_RUNNING:  return "Running";
     case AGENT_NODE_DONE:     return "Done";
@@ -1966,12 +1993,59 @@ static void RuntimeSetNodeState(int nodeIndex, AgentNodeState state, const char*
     s_runtime.nodes[nodeIndex].state = state;
     if (state == AGENT_NODE_RUNNING)
         s_runtime.nodes[nodeIndex].startTick = GetTickCount();
-    if (state == AGENT_NODE_DONE || state == AGENT_NODE_ERROR || state == AGENT_NODE_CANCELED)
+    if (state == AGENT_NODE_DONE || state == AGENT_NODE_BLOCKED || state == AGENT_NODE_ERROR || state == AGENT_NODE_CANCELED)
         s_runtime.nodes[nodeIndex].endTick = GetTickCount();
     if (action)
         CopyStringSafe(s_runtime.nodes[nodeIndex].lastAction, COUNTOF(s_runtime.nodes[nodeIndex].lastAction), action);
     LeaveCriticalSection(&s_runtime.cs);
     RuntimeWriteManifest();
+}
+
+static BOOL IsPendingNodeState(AgentNodeState state)
+{
+    return state == AGENT_NODE_IDLE || state == AGENT_NODE_QUEUED;
+}
+
+static BOOL IsDependencyFailureState(AgentNodeState state)
+{
+    return state == AGENT_NODE_BLOCKED || state == AGENT_NODE_ERROR || state == AGENT_NODE_CANCELED;
+}
+
+static BOOL NodeHasFailedDependencyLocked(int nodeIndex, char* pszReason, int cchReason)
+{
+    int i;
+    const OrgNodeSpec* spec = &s_runtime.org.nodes[nodeIndex];
+
+    if (pszReason && cchReason > 0)
+        pszReason[0] = '\0';
+
+    for (i = 0; i < spec->dependsOnCount; i++)
+    {
+        int depIndex = FindNodeIndexByIdLocked(spec->dependsOn[i]);
+        AgentNodeState depState;
+
+        if (depIndex < 0)
+        {
+            if (pszReason && cchReason > 0)
+                _snprintf_s(pszReason, cchReason, _TRUNCATE, "Blocked: missing dependency '%s'.", spec->dependsOn[i]);
+            return TRUE;
+        }
+
+        depState = s_runtime.nodes[depIndex].state;
+        if (IsDependencyFailureState(depState))
+        {
+            if (pszReason && cchReason > 0)
+            {
+                _snprintf_s(pszReason, cchReason, _TRUNCATE,
+                    "Blocked by %s (%s).",
+                    s_runtime.nodes[depIndex].title[0] ? s_runtime.nodes[depIndex].title : s_runtime.nodes[depIndex].id,
+                    AgentRuntime_StateLabel(depState));
+            }
+            return TRUE;
+        }
+    }
+
+    return FALSE;
 }
 
 static BOOL NodeDepsSatisfiedLocked(int nodeIndex)
@@ -2748,6 +2822,7 @@ static unsigned __stdcall RuntimeNodeThreadProc(void* pParam)
     char* result = NULL;
     char changeMessage[1024];
     char* firstChangedUtf8 = NULL;
+    BOOL missingFinalAnswer = FALSE;
     WCHAR wszFirstChanged[MAX_PATH];
     if (!ctx)
         return 0;
@@ -2773,6 +2848,23 @@ static unsigned __stdcall RuntimeNodeThreadProc(void* pParam)
     else
         result = RunSubscriptionNode(nodeIndex, spec, &transcript);
 
+    missingFinalAnswer = IsMissingFinalAnswerError(result);
+
+    EnterCriticalSection(&s_runtime.cs);
+    changedCount = CollectChangedFiles(s_runtime.nodes[nodeIndex].workspacePath, baseline, baselineCount, &s_runtime.nodes[nodeIndex]);
+    if (changedCount > 0 && s_runtime.nodes[nodeIndex].changedFiles[0][0])
+        CopyWideSafe(wszFirstChanged, COUNTOF(wszFirstChanged), s_runtime.nodes[nodeIndex].changedFiles[0]);
+    LeaveCriticalSection(&s_runtime.cs);
+
+    if (missingFinalAnswer && changedCount > 0)
+    {
+        char* fallback = BuildWorkspaceChangeFallbackResult(spec->title, changedCount, wszFirstChanged);
+        if (result)
+            free(result);
+        result = fallback;
+        RuntimeAddEvent(nodeIndex, AGENT_EVENT_STATUS, "Changes were captured even though the agent skipped the final handoff.");
+    }
+
     if (result && strncmp(result, "Error:", 6) == 0)
     {
         RuntimeSetNodeState(nodeIndex, AGENT_NODE_ERROR, result);
@@ -2786,10 +2878,8 @@ static unsigned __stdcall RuntimeNodeThreadProc(void* pParam)
 
     EnterCriticalSection(&s_runtime.cs);
     CopyStringSafe(s_runtime.nodes[nodeIndex].summary, COUNTOF(s_runtime.nodes[nodeIndex].summary), result ? result : "");
-    changedCount = CollectChangedFiles(s_runtime.nodes[nodeIndex].workspacePath, baseline, baselineCount, &s_runtime.nodes[nodeIndex]);
-    if (changedCount > 0 && s_runtime.nodes[nodeIndex].changedFiles[0][0])
-        CopyWideSafe(wszFirstChanged, COUNTOF(wszFirstChanged), s_runtime.nodes[nodeIndex].changedFiles[0]);
     LeaveCriticalSection(&s_runtime.cs);
+
     if (changedCount > 0)
     {
         firstChangedUtf8 = WideToUtf8Dup(wszFirstChanged);
@@ -2832,7 +2922,7 @@ static unsigned __stdcall RuntimeSchedulerThreadProc(void* pParam)
             EnterCriticalSection(&s_runtime.cs);
             for (i = 0; i < s_runtime.org.nodeCount; i++)
             {
-                if (s_runtime.nodes[i].state == AGENT_NODE_IDLE || s_runtime.nodes[i].state == AGENT_NODE_BLOCKED)
+                if (IsPendingNodeState(s_runtime.nodes[i].state))
                     s_runtime.nodes[i].state = AGENT_NODE_CANCELED;
             }
             LeaveCriticalSection(&s_runtime.cs);
@@ -2848,27 +2938,40 @@ static unsigned __stdcall RuntimeSchedulerThreadProc(void* pParam)
         for (i = 0; i < s_runtime.org.nodeCount; i++)
         {
             AgentNodeState state = s_runtime.nodes[i].state;
+            char reason[256];
             if (state == AGENT_NODE_RUNNING)
                 anyRunning = TRUE;
-            if (state == AGENT_NODE_IDLE || state == AGENT_NODE_BLOCKED)
+            if (IsPendingNodeState(state))
             {
-                anyPending = TRUE;
-                if (NodeDepsSatisfiedLocked(i))
+                if (NodeHasFailedDependencyLocked(i, reason, ARRAYSIZE(reason)))
                 {
-                    if (s_runtime.org.nodes[i].workspacePolicy == AGENT_WORKSPACE_SHARED_MUTATING && SharedMutatorRunningLocked())
-                    {
-                        s_runtime.nodes[i].state = AGENT_NODE_BLOCKED;
-                    }
-                    else if (launchIndex < 0)
-                    {
-                        launchIndex = i;
-                        s_runtime.nodes[i].state = AGENT_NODE_RUNNING;
-                        s_runtime.nodes[i].startTick = GetTickCount();
-                    }
+                    s_runtime.nodes[i].state = AGENT_NODE_BLOCKED;
+                    s_runtime.nodes[i].endTick = GetTickCount();
+                    CopyStringSafe(s_runtime.nodes[i].lastAction, COUNTOF(s_runtime.nodes[i].lastAction), reason);
                 }
                 else
                 {
-                    s_runtime.nodes[i].state = AGENT_NODE_BLOCKED;
+                    anyPending = TRUE;
+                    if (NodeDepsSatisfiedLocked(i))
+                    {
+                        if (s_runtime.org.nodes[i].workspacePolicy == AGENT_WORKSPACE_SHARED_MUTATING && SharedMutatorRunningLocked())
+                        {
+                            s_runtime.nodes[i].state = AGENT_NODE_QUEUED;
+                            CopyStringSafe(s_runtime.nodes[i].lastAction, COUNTOF(s_runtime.nodes[i].lastAction), "Queued behind another mutating node.");
+                        }
+                        else if (launchIndex < 0)
+                        {
+                            launchIndex = i;
+                            s_runtime.nodes[i].state = AGENT_NODE_RUNNING;
+                            s_runtime.nodes[i].startTick = GetTickCount();
+                            CopyStringSafe(s_runtime.nodes[i].lastAction, COUNTOF(s_runtime.nodes[i].lastAction), "Queued node is starting.");
+                        }
+                    }
+                    else
+                    {
+                        s_runtime.nodes[i].state = AGENT_NODE_QUEUED;
+                        CopyStringSafe(s_runtime.nodes[i].lastAction, COUNTOF(s_runtime.nodes[i].lastAction), "Queued behind unfinished dependencies.");
+                    }
                 }
             }
         }
@@ -3001,7 +3104,9 @@ BOOL AgentRuntime_Start(const OrgSpec* pSpec)
         CopyStringSafe(node->group, COUNTOF(node->group), spec->group);
         node->backend = spec->backend;
         node->workspacePolicy = spec->workspacePolicy;
-        node->state = spec->dependsOnCount > 0 ? AGENT_NODE_BLOCKED : AGENT_NODE_IDLE;
+        node->state = spec->dependsOnCount > 0 ? AGENT_NODE_QUEUED : AGENT_NODE_IDLE;
+        CopyStringSafe(node->lastAction, COUNTOF(node->lastAction),
+            spec->dependsOnCount > 0 ? "Queued behind unfinished dependencies." : "Waiting to be scheduled.");
     }
     LeaveCriticalSection(&s_runtime.cs);
     InterlockedExchange(&s_runtime.isCanceled, FALSE);

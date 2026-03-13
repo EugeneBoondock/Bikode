@@ -441,6 +441,7 @@ static COLORREF GetStateAccent(AgentNodeState state)
         return BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
     case AGENT_NODE_DONE:
         return BikodeTheme_GetColor(BKCLR_SUCCESS_GREEN);
+    case AGENT_NODE_QUEUED:
     case AGENT_NODE_BLOCKED:
     case AGENT_NODE_PAUSED:
         return BikodeTheme_GetColor(BKCLR_WARNING_ORANGE);
@@ -782,6 +783,7 @@ static void UpdateSnapshotSummary(const AgentRuntimeSnapshot* pSnapshot)
         case AGENT_NODE_DONE:
             s_mc.doneCount++;
             break;
+        case AGENT_NODE_QUEUED:
         case AGENT_NODE_BLOCKED:
         case AGENT_NODE_PAUSED:
             s_mc.blockedCount++;
@@ -2768,7 +2770,7 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                         cd->clrText = BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN);
                     else if (_wcsicmp(wszState, L"Done") == 0)
                         cd->clrText = BikodeTheme_GetColor(BKCLR_SUCCESS_GREEN);
-                    else if (_wcsicmp(wszState, L"Blocked") == 0 || _wcsicmp(wszState, L"Paused") == 0)
+                    else if (_wcsicmp(wszState, L"Queued") == 0 || _wcsicmp(wszState, L"Blocked") == 0 || _wcsicmp(wszState, L"Paused") == 0)
                         cd->clrText = BikodeTheme_GetColor(BKCLR_WARNING_ORANGE);
                     else if (_wcsicmp(wszState, L"Error") == 0 || _wcsicmp(wszState, L"Canceled") == 0)
                         cd->clrText = BikodeTheme_GetColor(BKCLR_DANGER_RED);

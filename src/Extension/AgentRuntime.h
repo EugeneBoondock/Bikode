@@ -43,6 +43,7 @@ typedef enum AgentBackend {
 
 typedef enum AgentNodeState {
     AGENT_NODE_IDLE = 0,
+    AGENT_NODE_QUEUED,
     AGENT_NODE_BLOCKED,
     AGENT_NODE_RUNNING,
     AGENT_NODE_DONE,
