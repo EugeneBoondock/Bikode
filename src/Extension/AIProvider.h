@@ -132,6 +132,15 @@ const AIProviderDef* AIProvider_FindByName(const char* szName);
 // Get provider count.
 int AIProvider_GetCount(void);
 
+// Probe known local model servers and return the first responding provider.
+// Returns AI_PROVIDER_COUNT if none found.
+EAIProvider AIProvider_DetectLocal(void);
+
+// Fetch available models from a local provider's API.
+// Returns semicolon-separated model list (caller must free with free()).
+// Falls back to the static szModels if the fetch fails.
+char* AIProvider_FetchModelList(EAIProvider eProvider, const char* szHost, int iPort);
+
 //=============================================================================
 // Active provider configuration (runtime, user-configurable)
 //=============================================================================

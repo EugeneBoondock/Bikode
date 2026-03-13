@@ -56,6 +56,53 @@
 #define IDM_MC_ADD_REVIEW      0xFD21
 #define IDM_MC_ADD_VALIDATE    0xFD22
 
+/* --- The Agency: Engineering Division --- */
+#define IDM_MC_ADD_FRONTEND_DEV       0xFD30
+#define IDM_MC_ADD_BACKEND_ARCHITECT  0xFD31
+#define IDM_MC_ADD_SOFTWARE_ARCHITECT 0xFD32
+#define IDM_MC_ADD_CODE_REVIEWER      0xFD33
+#define IDM_MC_ADD_SECURITY_ENGINEER  0xFD34
+#define IDM_MC_ADD_DEVOPS_AUTOMATOR   0xFD35
+#define IDM_MC_ADD_DATABASE_OPTIMIZER 0xFD36
+#define IDM_MC_ADD_RAPID_PROTOTYPER   0xFD37
+#define IDM_MC_ADD_TECHNICAL_WRITER   0xFD38
+#define IDM_MC_ADD_SRE                0xFD39
+#define IDM_MC_ADD_GIT_WORKFLOW       0xFD3A
+#define IDM_MC_ADD_INCIDENT_COMMANDER 0xFD3B
+/* --- The Agency: Design Division --- */
+#define IDM_MC_ADD_UX_ARCHITECT       0xFD40
+#define IDM_MC_ADD_UI_DESIGNER        0xFD41
+#define IDM_MC_ADD_UX_RESEARCHER      0xFD42
+/* --- The Agency: Testing Division --- */
+#define IDM_MC_ADD_PERF_BENCHMARKER   0xFD48
+#define IDM_MC_ADD_ACCESSIBILITY      0xFD49
+#define IDM_MC_ADD_API_TESTER         0xFD4A
+#define IDM_MC_ADD_REALITY_CHECKER    0xFD4B
+/* --- The Agency: Product Division --- */
+#define IDM_MC_ADD_SPRINT_PRIORITIZER 0xFD50
+#define IDM_MC_ADD_FEEDBACK_SYNTH     0xFD51
+#define IDM_MC_ADD_TREND_RESEARCHER   0xFD52
+/* --- The Agency: Orchestration --- */
+#define IDM_MC_ADD_ORCHESTRATOR       0xFD58
+/* --- Promptfoo: LLM Eval & Red Team --- */
+#define IDM_MC_ADD_PROMPT_EVALUATOR   0xFD60
+#define IDM_MC_ADD_RED_TEAMER         0xFD61
+#define IDM_MC_ADD_MODEL_COMPARATOR   0xFD62
+#define IDM_MC_ADD_REGRESSION_GUARD   0xFD63
+/* --- Impeccable: Frontend Design Quality --- */
+#define IDM_MC_ADD_DESIGN_AUDITOR     0xFD68
+#define IDM_MC_ADD_DESIGN_CRITIC      0xFD69
+#define IDM_MC_ADD_DESIGN_POLISHER    0xFD6A
+#define IDM_MC_ADD_TYPOGRAPHY_EXPERT  0xFD6B
+#define IDM_MC_ADD_COLOR_SPECIALIST   0xFD6C
+#define IDM_MC_ADD_MOTION_DESIGNER    0xFD6D
+/* --- OpenViking: Context & Memory Management --- */
+#define IDM_MC_ADD_CONTEXT_ARCHITECT  0xFD70
+#define IDM_MC_ADD_MEMORY_CURATOR     0xFD71
+#define IDM_MC_ADD_RETRIEVAL_OPTIMIZER 0xFD72
+/* --- Backend toggle --- */
+#define IDM_MC_TOGGLE_LOCAL_BACKEND   0xFD80
+
 typedef struct MissionControlUi {
     HWND hwndMain;
     HWND hwndPanel;
@@ -124,6 +171,7 @@ typedef struct WideTextBuffer {
 } WideTextBuffer;
 
 static MissionControlUi s_mc;
+static BOOL s_bUseLocalBackend = FALSE;
 extern WCHAR szCurFile[MAX_PATH + 40];
 
 static LRESULT CALLBACK MissionControlProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -765,12 +813,13 @@ static void PopulateBoard(const AgentRuntimeSnapshot* pSnapshot)
         ZeroMemory(&col, sizeof(col));
         col.mask = LVCF_TEXT | LVCF_WIDTH;
         col.pszText = L"Status"; col.cx = 92; ListView_InsertColumn(s_mc.hwndBoard, 0, &col);
-        col.pszText = L"Agent"; col.cx = 172; ListView_InsertColumn(s_mc.hwndBoard, 1, &col);
-        col.pszText = L"Setup"; col.cx = 136; ListView_InsertColumn(s_mc.hwndBoard, 2, &col);
-        col.pszText = L"What it's doing"; col.cx = 280; ListView_InsertColumn(s_mc.hwndBoard, 3, &col);
-        col.pszText = L"Tools"; col.cx = 54; ListView_InsertColumn(s_mc.hwndBoard, 4, &col);
-        col.pszText = L"Files"; col.cx = 54; ListView_InsertColumn(s_mc.hwndBoard, 5, &col);
-        col.pszText = L"Time"; col.cx = 64; ListView_InsertColumn(s_mc.hwndBoard, 6, &col);
+        col.pszText = L"Agent"; col.cx = 152; ListView_InsertColumn(s_mc.hwndBoard, 1, &col);
+        col.pszText = L"Source"; col.cx = 82; ListView_InsertColumn(s_mc.hwndBoard, 2, &col);
+        col.pszText = L"Setup"; col.cx = 120; ListView_InsertColumn(s_mc.hwndBoard, 3, &col);
+        col.pszText = L"What it's doing"; col.cx = 240; ListView_InsertColumn(s_mc.hwndBoard, 4, &col);
+        col.pszText = L"Tools"; col.cx = 48; ListView_InsertColumn(s_mc.hwndBoard, 5, &col);
+        col.pszText = L"Files"; col.cx = 48; ListView_InsertColumn(s_mc.hwndBoard, 6, &col);
+        col.pszText = L"Time"; col.cx = 58; ListView_InsertColumn(s_mc.hwndBoard, 7, &col);
     }
     ResizeBoardColumns();
     for (int i = 0; i < pSnapshot->nodeCount; i++)
@@ -798,14 +847,16 @@ static void PopulateBoard(const AgentRuntimeSnapshot* pSnapshot)
         ListView_InsertItem(s_mc.hwndBoard, &item);
         Utf8ToWideSafe(node->title, wszText, ARRAYSIZE(wszText));
         ListView_SetItemText(s_mc.hwndBoard, item.iItem, 1, wszText);
-        ListView_SetItemText(s_mc.hwndBoard, item.iItem, 2, wszSetup);
-        ListView_SetItemText(s_mc.hwndBoard, item.iItem, 3, wszAction);
+        Utf8ToWideSafe(node->group[0] ? node->group : "—", wszText, ARRAYSIZE(wszText));
+        ListView_SetItemText(s_mc.hwndBoard, item.iItem, 2, wszText);
+        ListView_SetItemText(s_mc.hwndBoard, item.iItem, 3, wszSetup);
+        ListView_SetItemText(s_mc.hwndBoard, item.iItem, 4, wszAction);
         swprintf_s(wszText, ARRAYSIZE(wszText), L"%d", node->toolCount);
-        ListView_SetItemText(s_mc.hwndBoard, item.iItem, 4, wszText);
-        swprintf_s(wszText, ARRAYSIZE(wszText), L"%d", node->fileCount);
         ListView_SetItemText(s_mc.hwndBoard, item.iItem, 5, wszText);
-        swprintf_s(wszText, ARRAYSIZE(wszText), L"%lus", (unsigned long)elapsed);
+        swprintf_s(wszText, ARRAYSIZE(wszText), L"%d", node->fileCount);
         ListView_SetItemText(s_mc.hwndBoard, item.iItem, 6, wszText);
+        swprintf_s(wszText, ARRAYSIZE(wszText), L"%lus", (unsigned long)elapsed);
+        ListView_SetItemText(s_mc.hwndBoard, item.iItem, 7, wszText);
         if (i == s_mc.selectedNode)
             selectedRow = item.iItem;
         if (fallbackRow < 0)
@@ -862,9 +913,10 @@ static void BuildInspectorText(const AgentRuntimeSnapshot* pSnapshot, int nodeIn
     {
     case 0:
         swprintf_s(wszOut, cchOut,
-            L"%S\r\n\r\nRole: %S\r\nState: %S\r\nBackend: %S\r\nWorkspace: %S\r\nTools used: %d\r\nFiles touched: %d\r\n\r\nCurrent focus:\r\n%S\r\n\r\nSummary:\r\n%S",
+            L"%S\r\n\r\nRole: %S\r\nSource: %S\r\nState: %S\r\nBackend: %S\r\nWorkspace: %S\r\nTools used: %d\r\nFiles touched: %d\r\n\r\nCurrent focus:\r\n%S\r\n\r\nSummary:\r\n%S",
             node->title,
             node->role[0] ? node->role : "agent",
+            node->group[0] ? node->group : "custom",
             AgentRuntime_StateLabel(node->state),
             AgentRuntime_BackendLabel(node->backend),
             AgentRuntime_WorkspaceLabel(node->workspacePolicy),
@@ -1109,13 +1161,14 @@ static void UpdateGraph(const AgentRuntimeSnapshot* pSnapshot)
         L".meta,.body{font-size:12px;line-height:1.45;color:%s;}"
         L".body{margin-top:10px;font-size:13px;}"
         L".state{display:inline-block;padding:4px 10px;border-radius:999px;background:%s;margin-bottom:10px;font-size:12px;border-left:4px solid var(--accent);}"
+        L".source{display:inline-block;padding:3px 8px;border-radius:999px;background:%s;color:%s;font-size:11px;margin-left:6px;text-transform:uppercase;letter-spacing:.06em;}"
         L".accent{height:3px;border-radius:999px;background:var(--accent);margin-top:12px;}"
         L"</style></head><body><div class='hero'><div class='eyebrow'>Map view</div>"
         L"<h1>See the workflow before you drill into a single agent</h1>"
         L"<p class='lede'>Use board view when you want to act. Use map view when you want the big picture.</p>"
         L"</div><div class='grid'>",
         wszAppBg, wszText, wszBorder, wszCardBg, wszAppBg, wszMuted,
-        wszMuted, wszBorder, wszCardBg, wszMuted, wszAppBg))
+        wszMuted, wszBorder, wszCardBg, wszMuted, wszAppBg, wszBorder, wszMuted))
     {
         WideTextBuffer_Free(&html);
         return;
@@ -1141,16 +1194,21 @@ static void UpdateGraph(const AgentRuntimeSnapshot* pSnapshot)
         WCHAR wszTitle[256];
         WCHAR wszBackend[64];
         WCHAR wszWorkspace[64];
+        WCHAR wszGroup[64];
         WCHAR wszNodeAccent[16];
         Utf8ToWideSafe(node->summary[0] ? node->summary : node->lastAction, wszSummary, ARRAYSIZE(wszSummary));
         Utf8ToWideSafe(AgentRuntime_StateLabel(node->state), wszState, ARRAYSIZE(wszState));
         Utf8ToWideSafe(node->title, wszTitle, ARRAYSIZE(wszTitle));
         Utf8ToWideSafe(AgentRuntime_BackendLabel(node->backend), wszBackend, ARRAYSIZE(wszBackend));
         Utf8ToWideSafe(AgentRuntime_WorkspaceLabel(node->workspacePolicy), wszWorkspace, ARRAYSIZE(wszWorkspace));
+        Utf8ToWideSafe(node->group[0] ? node->group : "", wszGroup, ARRAYSIZE(wszGroup));
         ColorToHtml(GetStateAccent(node->state), wszNodeAccent, ARRAYSIZE(wszNodeAccent));
         if (!WideTextBuffer_AppendFormat(&html, L"<div class='card' style='--accent:%s'><div class='state'>", wszNodeAccent) ||
             !WideTextBuffer_AppendEscapedHtml(&html, wszState) ||
-            !WideTextBuffer_Append(&html, L"</div><h3>") ||
+            !WideTextBuffer_Append(&html, node->group[0] ? L"</div><span class='source'>" : L"</div>") ||
+            (node->group[0] && (!WideTextBuffer_AppendEscapedHtml(&html, wszGroup) ||
+            !WideTextBuffer_Append(&html, L"</span>"))) ||
+            !WideTextBuffer_Append(&html, L"<h3>") ||
             !WideTextBuffer_AppendEscapedHtml(&html, wszTitle) ||
             !WideTextBuffer_Append(&html, L"</h3><div class='meta'>") ||
             !WideTextBuffer_AppendEscapedHtml(&html, wszBackend) ||
@@ -1832,7 +1890,7 @@ static BOOL CreateDraftWorkflow(void)
 
 static UINT ShowAddAgentMenu(HWND hwndAnchor)
 {
-    HMENU hMenu;
+    HMENU hMenu, hEngineering, hDesign, hTesting, hProduct;
     RECT rc;
     UINT cmd = 0;
 
@@ -1843,9 +1901,86 @@ static UINT ShowAddAgentMenu(HWND hwndAnchor)
     if (!hMenu)
         return 0;
 
+    /* Quick-add basics */
     AppendMenuW(hMenu, MF_STRING, IDM_MC_ADD_RESEARCH, L"Research Agent");
     AppendMenuW(hMenu, MF_STRING, IDM_MC_ADD_REVIEW, L"Review Agent");
     AppendMenuW(hMenu, MF_STRING, IDM_MC_ADD_VALIDATE, L"Validation Agent");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+
+    /* The Agency: Engineering Division */
+    hEngineering = CreatePopupMenu();
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_FRONTEND_DEV,       L"Frontend Developer");
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_BACKEND_ARCHITECT,  L"Backend Architect");
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_SOFTWARE_ARCHITECT, L"Software Architect");
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_CODE_REVIEWER,      L"Code Reviewer");
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_SECURITY_ENGINEER,  L"Security Engineer");
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_DEVOPS_AUTOMATOR,   L"DevOps Automator");
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_DATABASE_OPTIMIZER, L"Database Optimizer");
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_RAPID_PROTOTYPER,   L"Rapid Prototyper");
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_TECHNICAL_WRITER,   L"Technical Writer");
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_SRE,                L"SRE");
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_GIT_WORKFLOW,       L"Git Workflow Master");
+    AppendMenuW(hEngineering, MF_STRING, IDM_MC_ADD_INCIDENT_COMMANDER, L"Incident Commander");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hEngineering, L"Engineering");
+
+    /* The Agency: Design Division */
+    hDesign = CreatePopupMenu();
+    AppendMenuW(hDesign, MF_STRING, IDM_MC_ADD_UX_ARCHITECT,  L"UX Architect");
+    AppendMenuW(hDesign, MF_STRING, IDM_MC_ADD_UI_DESIGNER,   L"UI Designer");
+    AppendMenuW(hDesign, MF_STRING, IDM_MC_ADD_UX_RESEARCHER, L"UX Researcher");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hDesign, L"Design");
+
+    /* The Agency: Testing Division */
+    hTesting = CreatePopupMenu();
+    AppendMenuW(hTesting, MF_STRING, IDM_MC_ADD_PERF_BENCHMARKER, L"Performance Benchmarker");
+    AppendMenuW(hTesting, MF_STRING, IDM_MC_ADD_ACCESSIBILITY,    L"Accessibility Auditor");
+    AppendMenuW(hTesting, MF_STRING, IDM_MC_ADD_API_TESTER,       L"API Tester");
+    AppendMenuW(hTesting, MF_STRING, IDM_MC_ADD_REALITY_CHECKER,  L"Reality Checker");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hTesting, L"Testing");
+
+    /* The Agency: Product Division */
+    hProduct = CreatePopupMenu();
+    AppendMenuW(hProduct, MF_STRING, IDM_MC_ADD_SPRINT_PRIORITIZER, L"Sprint Prioritizer");
+    AppendMenuW(hProduct, MF_STRING, IDM_MC_ADD_FEEDBACK_SYNTH,     L"Feedback Synthesizer");
+    AppendMenuW(hProduct, MF_STRING, IDM_MC_ADD_TREND_RESEARCHER,   L"Trend Researcher");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hProduct, L"Product");
+
+    /* Promptfoo: LLM Eval & Red Team */
+    {
+        HMENU hPromptfoo = CreatePopupMenu();
+        AppendMenuW(hPromptfoo, MF_STRING, IDM_MC_ADD_PROMPT_EVALUATOR, L"Prompt Evaluator");
+        AppendMenuW(hPromptfoo, MF_STRING, IDM_MC_ADD_RED_TEAMER,       L"Red Teamer");
+        AppendMenuW(hPromptfoo, MF_STRING, IDM_MC_ADD_MODEL_COMPARATOR, L"Model Comparator");
+        AppendMenuW(hPromptfoo, MF_STRING, IDM_MC_ADD_REGRESSION_GUARD, L"Regression Guard");
+        AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hPromptfoo, L"Eval && Red Team (Promptfoo)");
+    }
+
+    /* Impeccable: Frontend Design Quality */
+    {
+        HMENU hImpeccable = CreatePopupMenu();
+        AppendMenuW(hImpeccable, MF_STRING, IDM_MC_ADD_DESIGN_AUDITOR,    L"Design Auditor");
+        AppendMenuW(hImpeccable, MF_STRING, IDM_MC_ADD_DESIGN_CRITIC,     L"Design Critic");
+        AppendMenuW(hImpeccable, MF_STRING, IDM_MC_ADD_DESIGN_POLISHER,   L"Design Polisher");
+        AppendMenuW(hImpeccable, MF_STRING, IDM_MC_ADD_TYPOGRAPHY_EXPERT, L"Typography Expert");
+        AppendMenuW(hImpeccable, MF_STRING, IDM_MC_ADD_COLOR_SPECIALIST,  L"Color Specialist");
+        AppendMenuW(hImpeccable, MF_STRING, IDM_MC_ADD_MOTION_DESIGNER,   L"Motion Designer");
+        AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hImpeccable, L"Frontend Design (Impeccable)");
+    }
+
+    /* OpenViking: Context & Memory Management */
+    {
+        HMENU hViking = CreatePopupMenu();
+        AppendMenuW(hViking, MF_STRING, IDM_MC_ADD_CONTEXT_ARCHITECT,   L"Context Architect");
+        AppendMenuW(hViking, MF_STRING, IDM_MC_ADD_MEMORY_CURATOR,      L"Memory Curator");
+        AppendMenuW(hViking, MF_STRING, IDM_MC_ADD_RETRIEVAL_OPTIMIZER, L"Retrieval Optimizer");
+        AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hViking, L"Context && Memory (OpenViking)");
+    }
+
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hMenu, MF_STRING, IDM_MC_ADD_ORCHESTRATOR, L"Orchestrator (The Agency)");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hMenu, MF_STRING | (s_bUseLocalBackend ? MF_CHECKED : MF_UNCHECKED),
+        IDM_MC_TOGGLE_LOCAL_BACKEND, L"Use Local Model Backend");
 
     GetWindowRect(hwndAnchor, &rc);
     cmd = (UINT)TrackPopupMenuEx(hMenu,
@@ -1869,7 +2004,7 @@ static BOOL AddTemplatedNode(OrgSpec* pSpec, UINT commandId, WCHAR* wszAddedTitl
     ZeroMemory(node, sizeof(*node));
 
     StringCchPrintfA(node->id, ARRAYSIZE(node->id), "node-%d", nodeNumber);
-    node->backend = AGENT_BACKEND_API;
+    node->backend = s_bUseLocalBackend ? AGENT_BACKEND_LOCAL : AGENT_BACKEND_API;
     node->workspacePolicy = pSpec->defaultWorkspacePolicy;
     StringCchCopyA(node->group, ARRAYSIZE(node->group), "custom");
 
@@ -1887,6 +2022,418 @@ static BOOL AddTemplatedNode(OrgSpec* pSpec, UINT commandId, WCHAR* wszAddedTitl
         StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
             "Verify the latest changes, run the most relevant checks, and report what still needs attention before shipping.");
         break;
+
+    /* ---- The Agency: Engineering Division ---- */
+    case IDM_MC_ADD_FRONTEND_DEV:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Frontend Developer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Frontend Developer, an expert specializing in modern web technologies, React/Vue/Angular frameworks, UI implementation, and performance optimization. "
+            "Build responsive, accessible, and performant web applications with pixel-perfect design implementation. "
+            "Focus on Core Web Vitals, component architecture, and mobile-first responsive design. "
+            "Deliver clean, well-structured code with proper state management and seamless API integration.");
+        break;
+    case IDM_MC_ADD_BACKEND_ARCHITECT:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Backend Architect");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "planner");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Backend Architect, a senior architect specializing in scalable system design, database architecture, and cloud infrastructure. "
+            "Design microservices architectures that scale horizontally. Create database schemas optimized for performance and consistency. "
+            "Implement robust API architectures with proper versioning. Build event-driven systems for high throughput. "
+            "Include comprehensive security measures, error handling, circuit breakers, and monitoring in all designs.");
+        break;
+    case IDM_MC_ADD_SOFTWARE_ARCHITECT:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Software Architect");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "planner");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Software Architect, an expert who designs maintainable, scalable systems aligned with business domains. "
+            "Think in bounded contexts, trade-off matrices, and architectural decision records. "
+            "No architecture astronautics: every abstraction must justify its complexity. Trade-offs over best practices. "
+            "Domain first, technology second. Prefer reversible decisions. Document decisions with ADRs capturing WHY, not just WHAT. "
+            "Present at least two options with trade-offs for every significant decision.");
+        break;
+    case IDM_MC_ADD_CODE_REVIEWER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Code Reviewer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "reviewer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Code Reviewer, an expert who provides thorough, constructive code reviews. "
+            "Focus on correctness, security, maintainability, and performance. "
+            "Be specific: cite lines and explain why. Prioritize with blockers, suggestions, and nits. "
+            "Praise good code. Check for SQL injection, XSS, auth bypass, race conditions, missing error handling. "
+            "One review, complete feedback. Start with summary, end with encouragement.");
+        break;
+    case IDM_MC_ADD_SECURITY_ENGINEER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Security Engineer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "reviewer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Security Engineer, an expert application security engineer specializing in threat modeling, vulnerability assessment, and secure code review. "
+            "Conduct STRIDE analysis, review for OWASP Top 10 and CWE Top 25. "
+            "Never recommend disabling security controls. Assume all user input is malicious. "
+            "Prefer well-tested libraries over custom crypto. No hardcoded credentials. Default to deny. "
+            "Pair every vulnerability finding with clear, actionable remediation guidance.");
+        break;
+    case IDM_MC_ADD_DEVOPS_AUTOMATOR:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "DevOps Automator");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are DevOps Automator, an expert DevOps engineer specializing in infrastructure automation, CI/CD pipeline development, and cloud operations. "
+            "Design Infrastructure as Code with Terraform, CloudFormation, or CDK. Build CI/CD pipelines with automated testing and deployment. "
+            "Implement zero-downtime deployment strategies. Include monitoring, alerting, and automated rollback. "
+            "Optimize costs with resource right-sizing and multi-environment automation.");
+        break;
+    case IDM_MC_ADD_DATABASE_OPTIMIZER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Database Optimizer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Database Optimizer, a performance expert who thinks in query plans, indexes, and connection pools. "
+            "Design schemas that scale, write queries that fly, and debug slow queries with EXPLAIN ANALYZE. "
+            "Focus on indexing strategies (B-tree, GiST, GIN, partial), N+1 detection, connection pooling, "
+            "migration strategies, and zero-downtime deployments. Every foreign key gets an index, every migration is reversible.");
+        break;
+    case IDM_MC_ADD_RAPID_PROTOTYPER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Rapid Prototyper");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Rapid Prototyper, a specialist in ultra-fast proof-of-concept development and MVP creation. "
+            "Create working prototypes quickly using the most efficient tools and frameworks. "
+            "Focus on core user flows and primary value propositions. Build modular architectures for quick iteration. "
+            "Document assumptions and hypotheses. Plan transition paths from prototype to production.");
+        break;
+    case IDM_MC_ADD_TECHNICAL_WRITER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Technical Writer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "research");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Technical Writer, an expert who creates clear, accurate technical documentation. "
+            "Write developer docs, API references, tutorials, and architecture guides. "
+            "Structure content for scanability. Use consistent terminology. Include working code examples. "
+            "Maintain a glossary for domain-specific terms. Target the right audience level.");
+        break;
+    case IDM_MC_ADD_SRE:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "SRE");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "reviewer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are SRE, a site reliability engineer focused on SLOs, error budgets, observability, and chaos engineering. "
+            "Define meaningful SLIs/SLOs tied to user experience. Build error budgets that balance velocity and reliability. "
+            "Implement structured observability with metrics, logs, and traces. Reduce toil through automation. "
+            "Plan capacity based on growth projections. Design for graceful degradation.");
+        break;
+    case IDM_MC_ADD_GIT_WORKFLOW:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Git Workflow Master");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "reviewer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Git Workflow Master, an expert in branching strategies, conventional commits, and advanced Git operations. "
+            "Design CI-friendly branch management. Enforce conventional commit messages. "
+            "Plan history cleanup and rebasing strategies. Manage release branching and hotfix workflows. "
+            "Ensure traceability from commits to issues.");
+        break;
+    case IDM_MC_ADD_INCIDENT_COMMANDER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Incident Commander");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "debug");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "engineering");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Incident Response Commander, managing production incidents with structured severity assessment, "
+            "clear communication, and blameless post-mortems. Triage by user impact. Coordinate responders. "
+            "Maintain incident timelines. Write actionable post-mortems with concrete follow-up items. "
+            "Build runbooks for recurring scenarios. Focus on MTTR reduction.");
+        break;
+
+    /* ---- The Agency: Design Division ---- */
+    case IDM_MC_ADD_UX_ARCHITECT:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "UX Architect");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "planner");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "design");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are UX Architect, a technical architecture and UX specialist who creates solid foundations for developers. "
+            "Provide CSS design systems with variables, spacing scales, and typography hierarchies. "
+            "Design layout frameworks using modern Grid/Flexbox patterns. Establish component architecture and naming conventions. "
+            "Convert visual requirements into implementable technical architecture. Include light/dark theme support.");
+        break;
+    case IDM_MC_ADD_UI_DESIGNER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "UI Designer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "planner");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "design");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are UI Designer, an expert in visual design, component libraries, and design systems. "
+            "Create cohesive visual language with consistent spacing, typography, and color. "
+            "Build reusable component libraries. Ensure brand consistency across all surfaces. "
+            "Design for accessibility, responsiveness, and delight.");
+        break;
+    case IDM_MC_ADD_UX_RESEARCHER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "UX Researcher");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "research");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "design");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are UX Researcher, an expert in user testing, behavior analysis, and design research. "
+            "Design research plans with clear hypotheses. Conduct usability evaluations. "
+            "Synthesize findings into actionable recommendations. Identify user pain points and opportunities. "
+            "Ground every recommendation in observed user behavior, not assumptions.");
+        break;
+
+    /* ---- The Agency: Testing Division ---- */
+    case IDM_MC_ADD_PERF_BENCHMARKER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Performance Benchmarker");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "testing");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Performance Benchmarker, an expert performance testing and optimization specialist. "
+            "Execute load testing, stress testing, and scalability assessment. Establish performance baselines. "
+            "Identify bottlenecks through systematic analysis. Optimize for Core Web Vitals: LCP < 2.5s, FID < 100ms, CLS < 0.1. "
+            "Create performance budgets and enforce quality gates. All systems must meet SLAs with 95% confidence.");
+        break;
+    case IDM_MC_ADD_ACCESSIBILITY:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Accessibility Auditor");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "testing");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Accessibility Auditor, an expert who ensures products are usable by everyone. "
+            "Audit against WCAG 2.2 AA: Perceivable, Operable, Understandable, Robust. "
+            "Verify screen reader compatibility, keyboard-only navigation, voice control, and zoom usability. "
+            "Automated tools catch 30% of issues -- you catch the other 70%. "
+            "Check ARIA roles, focus management, error announcements, and cognitive accessibility.");
+        break;
+    case IDM_MC_ADD_API_TESTER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "API Tester");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "testing");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are API Tester, an expert in API validation and integration testing. "
+            "Verify endpoint correctness, authentication flows, rate limiting, and error handling. "
+            "Test edge cases: malformed input, missing fields, concurrent requests, large payloads. "
+            "Validate response schemas, status codes, and pagination. Check for security vulnerabilities in API surface.");
+        break;
+    case IDM_MC_ADD_REALITY_CHECKER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Reality Checker");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "testing");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Reality Checker, an evidence-based certification and quality gate specialist. "
+            "Require proof for every claim. Verify production readiness across reliability, security, performance, and UX. "
+            "Check that monitoring, alerting, and rollback procedures are in place. "
+            "No ship without evidence. Provide clear pass/fail verdicts with specific blockers.");
+        break;
+
+    /* ---- The Agency: Product Division ---- */
+    case IDM_MC_ADD_SPRINT_PRIORITIZER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Sprint Prioritizer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "planner");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "product");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Sprint Prioritizer, an expert product manager specializing in agile sprint planning and feature prioritization. "
+            "Use RICE, MoSCoW, and value-vs-effort frameworks. Analyze team velocity and capacity. "
+            "Identify cross-team dependencies. Balance technical debt against new features. "
+            "Define clear sprint goals with measurable outcomes. Prevent scope creep.");
+        break;
+    case IDM_MC_ADD_FEEDBACK_SYNTH:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Feedback Synthesizer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "research");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "product");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Feedback Synthesizer, an expert in user feedback analysis and insight extraction. "
+            "Aggregate feedback from multiple channels. Identify patterns and recurring themes. "
+            "Quantify sentiment and urgency. Translate raw feedback into prioritized product recommendations. "
+            "Distinguish between what users say they want and what they actually need.");
+        break;
+    case IDM_MC_ADD_TREND_RESEARCHER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Trend Researcher");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "research");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "product");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Trend Researcher, an expert in market intelligence and competitive analysis. "
+            "Identify emerging trends and market opportunities. Analyze competitor strategies and positioning. "
+            "Assess technology adoption curves. Provide actionable intelligence for product decisions. "
+            "Separate signal from noise in market data.");
+        break;
+
+    /* ---- Promptfoo: LLM Eval & Red Team ---- */
+    case IDM_MC_ADD_PROMPT_EVALUATOR:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Prompt Evaluator");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "eval");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Prompt Evaluator, an LLM evaluation specialist inspired by promptfoo methodology. "
+            "Design test cases that measure prompt quality across correctness, relevance, and safety. "
+            "Create evaluation matrices comparing expected vs actual outputs. "
+            "Use assertion-based grading: exact match, contains, similarity score, LLM-as-judge. "
+            "Track metrics across iterations to ensure prompts improve over time. Report pass/fail rates with confidence. "
+            "You have access to the eval_prompt tool -- use it to systematically evaluate prompt quality against criteria like clarity, injection risk, bias, and specificity.");
+        break;
+    case IDM_MC_ADD_RED_TEAMER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Red Teamer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "eval");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Red Teamer, an LLM security specialist inspired by promptfoo red-teaming methodology. "
+            "Probe AI systems for vulnerabilities: prompt injection, jailbreaks, data leakage, harmful outputs, bias. "
+            "Generate adversarial test cases systematically. Test boundary conditions and edge cases. "
+            "Classify findings by severity. Provide remediation strategies for each vulnerability found. "
+            "Focus on defensive security: make AI apps safer, not exploitable. "
+            "You have access to the red_team_prompt tool -- use it to probe prompts for injection, jailbreak, leakage, and bias vulnerabilities. "
+            "Also use eval_prompt to assess prompt quality before and after hardening.");
+        break;
+    case IDM_MC_ADD_MODEL_COMPARATOR:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Model Comparator");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "research");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "eval");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Model Comparator, an LLM benchmarking specialist inspired by promptfoo. "
+            "Compare model outputs side-by-side across identical prompts. Evaluate on cost, latency, quality, and safety. "
+            "Design A/B test frameworks for prompt variants. Track token usage and pricing across providers. "
+            "Produce comparison matrices with clear winner/loser verdicts per use case. "
+            "Recommend optimal model selection based on the specific workload requirements. "
+            "You have access to the eval_prompt tool -- use it to score prompt variants for clarity and robustness before benchmarking.");
+        break;
+    case IDM_MC_ADD_REGRESSION_GUARD:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Regression Guard");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "eval");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Regression Guard, a CI/CD quality gate specialist for LLM outputs inspired by promptfoo. "
+            "Define golden test sets that must pass before prompt changes ship. "
+            "Monitor output quality drift over time. Alert on degradation in any evaluation dimension. "
+            "Enforce minimum pass rates for safety, correctness, and relevance. "
+            "Produce automated go/no-go verdicts for prompt deployments. "
+            "You have access to eval_prompt and red_team_prompt tools -- use them to run automated quality and security checks on prompts before approving changes.");
+        break;
+
+    /* ---- Impeccable: Frontend Design Quality ---- */
+    case IDM_MC_ADD_DESIGN_AUDITOR:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Design Auditor");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "design");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Design Auditor, a frontend quality specialist inspired by Impeccable. "
+            "Run technical quality checks: accessibility (WCAG AA), performance (Core Web Vitals), responsive behavior. "
+            "Check for anti-patterns: gray text on colored backgrounds, cards nested in cards, pure black/white, "
+            "overused fonts (Inter, Roboto, Arial), identical card grids, glassmorphism overuse. "
+            "Verify type scale consistency, color contrast ratios, and spatial rhythm. Report issues with severity. "
+            "You have access to the design_audit tool -- use it to check files for typography, color contrast, spacing, hierarchy, and a11y issues systematically.");
+        break;
+    case IDM_MC_ADD_DESIGN_CRITIC:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Design Critic");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "reviewer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "design");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Design Critic, a UX design reviewer inspired by Impeccable. "
+            "Review for hierarchy clarity, emotional resonance, and intentional aesthetics. "
+            "Evaluate whether the design has a bold, committed direction or falls into generic AI slop. "
+            "Check: Is there real visual hierarchy? Does spacing create rhythm? Is color used with purpose? "
+            "Push for distinctive design over safe defaults. Praise bold creative choices. "
+            "You have access to the design_audit tool -- use it to run technical checks on CSS/HTML files for typography, color, and hierarchy issues.");
+        break;
+    case IDM_MC_ADD_DESIGN_POLISHER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Design Polisher");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "design");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Design Polisher, a final-pass refinement specialist inspired by Impeccable. "
+            "Apply production-grade polish: micro-interactions, hover states, focus indicators, loading states. "
+            "Normalize to design system standards. Strip unnecessary complexity. Clarify UX copy. "
+            "Ensure every decorative element serves a functional or emotional purpose. "
+            "This is the last pass before shipping -- make every pixel intentional. "
+            "You have access to the design_audit tool -- use it to verify typography, color, spacing, and a11y before finalizing.");
+        break;
+    case IDM_MC_ADD_TYPOGRAPHY_EXPERT:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Typography Expert");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "design");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Typography Expert, a type systems specialist inspired by Impeccable. "
+            "Design modular type scales with fluid sizing (clamp). Choose distinctive fonts -- avoid Inter, Roboto, Arial. "
+            "Create clear hierarchy with fewer sizes and more contrast. Set vertical rhythm based on line-height. "
+            "Use proper measure (max-width: 65ch). Pair fonts on multiple contrast axes. "
+            "Implement performant font loading to prevent layout shifts. "
+            "You have access to the design_audit tool with checks='typography' -- use it to analyze type scale, line-height, and font choices in target files.");
+        break;
+    case IDM_MC_ADD_COLOR_SPECIALIST:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Color Specialist");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "design");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Color Specialist, a color systems expert inspired by Impeccable. "
+            "Use OKLCH for perceptually uniform palettes. Tint neutrals toward brand hue. "
+            "Follow 60-30-10 rule for visual weight distribution. Reduce chroma at extreme lightness. "
+            "Build functional palettes: primary, neutral (9-11 shades), semantic, surface. "
+            "Never use pure black or pure white. Support light-dark() for theme switching. "
+            "Ensure WCAG AA contrast ratios on all text. "
+            "You have access to the design_audit tool with checks='color,a11y' -- use it to analyze color values, contrast ratios, and accessibility in target files.");
+        break;
+    case IDM_MC_ADD_MOTION_DESIGNER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Motion Designer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "design");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Motion Designer, an animation specialist inspired by Impeccable. "
+            "Use motion to convey state changes: entrances, exits, feedback. "
+            "Apply exponential easing (ease-out-quart/quint) for natural deceleration. "
+            "Orchestrate staggered page load reveals. Respect prefers-reduced-motion. "
+            "Avoid bounce/elastic easing (feels dated). Focus on high-impact moments. "
+            "One well-orchestrated transition beats scattered micro-interactions.");
+        break;
+
+    /* ---- OpenViking: Context & Memory Management ---- */
+    case IDM_MC_ADD_CONTEXT_ARCHITECT:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Context Architect");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "planner");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "context");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Context Architect, a context database designer inspired by OpenViking. "
+            "Organize agent context using a filesystem paradigm: unify memories, resources, and skills. "
+            "Design tiered context loading (L0 always-loaded, L1 on-demand, L2 deep retrieval) to reduce token consumption. "
+            "Structure context directories for recursive retrieval. Define context schemas that support "
+            "automatic session management and long-term memory extraction. Minimize fragmentation. "
+            "You have access to the context_store tool -- use it to store and retrieve architectural knowledge, context schemas, and memory structures for the workspace.");
+        break;
+    case IDM_MC_ADD_MEMORY_CURATOR:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Memory Curator");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "research");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "context");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Memory Curator, an agent memory specialist inspired by OpenViking. "
+            "Extract and compress long-term memories from conversation sessions. "
+            "Distinguish between task memory (what the agent accomplished) and user memory (preferences, context). "
+            "Organize memories hierarchically for efficient retrieval. Prune outdated or conflicting memories. "
+            "Ensure memory iteration makes the agent smarter with each session, not just bigger. "
+            "You have access to the context_store tool -- use it to persist extracted memories, retrieve existing knowledge, and list stored context entries.");
+        break;
+    case IDM_MC_ADD_RETRIEVAL_OPTIMIZER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Retrieval Optimizer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "context");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Retrieval Optimizer, a context retrieval specialist inspired by OpenViking. "
+            "Combine directory positioning with semantic search for precise context acquisition. "
+            "Optimize retrieval trajectories for observability and debuggability. "
+            "Implement tiered loading strategies that balance completeness against token budget. "
+            "Visualize retrieval paths to identify and fix retrieval failures. "
+            "Ensure retrieved context is relevant, minimal, and sufficient for the agent's task. "
+            "You have access to the context_store tool -- use it to test retrieval patterns and optimize what context gets stored vs retrieved.");
+        break;
+
+    /* ---- The Agency: Orchestration ---- */
+    case IDM_MC_ADD_ORCHESTRATOR:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Orchestrator");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "planner");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "agency");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Agents Orchestrator, the autonomous pipeline manager who coordinates multi-agent development workflows. "
+            "Manage the full pipeline from specification to production-ready implementation. "
+            "Ensure each phase completes before advancing. Coordinate handoffs with proper context. "
+            "Implement continuous quality loops: task-by-task validation, automatic retry, quality gates. "
+            "Provide clear status updates and completion summaries. "
+            "You have access to context_store (persist/retrieve knowledge), eval_prompt (evaluate prompt quality), and design_audit (check UI files) tools.");
+        break;
+
     case IDM_MC_ADD_RESEARCH:
     default:
         StringCchPrintfA(node->title, ARRAYSIZE(node->title), "Research %d", nodeNumber);
@@ -1938,6 +2485,11 @@ static void AddNodeToSelectedOrg(void)
     addChoice = ShowAddAgentMenu(s_mc.hwndAddNode);
     if (!addChoice)
         return;
+    if (addChoice == IDM_MC_TOGGLE_LOCAL_BACKEND)
+    {
+        s_bUseLocalBackend = !s_bUseLocalBackend;
+        return;
+    }
     wszAddedTitle[0] = L'\0';
     if (AddTemplatedNode(org, addChoice, wszAddedTitle, ARRAYSIZE(wszAddedTitle)))
     {

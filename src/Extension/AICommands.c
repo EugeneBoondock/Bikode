@@ -977,6 +977,11 @@ static void PopulateChatModeCombo(HWND hDlg, EAIChatAccessMode eCurrentMode)
     if (eCurrentMode == AI_CHAT_ACCESS_CODEX_CLAUDE)
         selIdx = idx;
 
+    idx = (int)SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)L"Local model (auto-detect)");
+    SendMessageW(hCombo, CB_SETITEMDATA, idx, (LPARAM)AI_CHAT_ACCESS_LOCAL);
+    if (eCurrentMode == AI_CHAT_ACCESS_LOCAL)
+        selIdx = idx;
+
     SendMessageW(hCombo, CB_SETCURSEL, selIdx, 0);
 }
 
@@ -994,13 +999,15 @@ static void SettingsDlg_UpdateChatModeControls(HWND hDlg)
     EAIChatAccessMode eMode = GetSelectedChatMode(hDlg);
     HWND hModel = GetDlgItem(hDlg, IDC_SETTINGS_CHATMODEL);
     HWND hAuth = GetDlgItem(hDlg, IDC_SETTINGS_AUTHBTN);
-    BOOL bUsesSubscription = (eMode != AI_CHAT_ACCESS_API_PROVIDER);
+    BOOL bUsesSubscription = (eMode != AI_CHAT_ACCESS_API_PROVIDER && eMode != AI_CHAT_ACCESS_LOCAL);
     BOOL bIsAuthenticated = AISubscriptionAgent_IsAuthenticated(eMode);
 
     EnableWindow(hModel, bUsesSubscription);
     EnableWindow(hAuth, bUsesSubscription);
 
-    if (eMode == AI_CHAT_ACCESS_CODEX)
+    if (eMode == AI_CHAT_ACCESS_LOCAL)
+        SetWindowTextW(hAuth, L"Auto-detect");
+    else if (eMode == AI_CHAT_ACCESS_CODEX)
         SetWindowTextW(hAuth, bIsAuthenticated ? L"Logout Codex" : L"Open Codex Login");
     else if (eMode == AI_CHAT_ACCESS_CLAUDE)
         SetWindowTextW(hAuth, bIsAuthenticated ? L"Logout Claude" : L"Open Claude Login");
@@ -1142,6 +1149,32 @@ static INT_PTR CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
                             L"This mode uses the built-in provider and API-key settings above.",
                             L"Bikode AI Settings",
                             MB_OK | MB_ICONINFORMATION);
+                return TRUE;
+            }
+
+            if (eMode == AI_CHAT_ACCESS_LOCAL)
+            {
+                EAIProvider detected = AIProvider_DetectLocal();
+                if (detected < AI_PROVIDER_COUNT)
+                {
+                    const AIProviderDef* pDef = AIProvider_Get(detected);
+                    WCHAR wszDetected[256];
+                    WCHAR wszName[64];
+                    MultiByteToWideChar(CP_UTF8, 0, pDef->szName, -1, wszName, 64);
+                    StringCchPrintfW(wszDetected, ARRAYSIZE(wszDetected),
+                        L"Detected local model server: %s\r\nNo API key required -- requests go to localhost.",
+                        wszName);
+                    MessageBoxW(hDlg, wszDetected, L"Bikode AI Settings", MB_OK | MB_ICONINFORMATION);
+                }
+                else
+                {
+                    MessageBoxW(hDlg,
+                        L"No local model server detected.\r\n\r\n"
+                        L"Supported servers: Ollama, LM Studio, llama.cpp, vLLM, LocalAI.\r\n"
+                        L"Start one of these before using Local mode.",
+                        L"Bikode AI Settings",
+                        MB_OK | MB_ICONWARNING);
+                }
                 return TRUE;
             }
 

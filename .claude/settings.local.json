@@ -17,7 +17,14 @@
       "Bash(grep:*)",
       "Bash(\"C:/Program Files \\(x86\\)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/amd64/MSBuild.exe\" \"c:/Users/USER/Projects/Bikode/Notepad2e.vcxproj\" /p:Configuration=Debug /p:Platform=x64 /m /nologo)",
       "Bash(powershell:*)",
-      "Bash(git fetch:*)"
+      "Bash(git fetch:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(ls:*)",
+      "Bash(\"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Community\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" Notepad2e.sln /p:Configuration=Release /p:Platform=x64 /v:minimal)",
+      "Bash(git clone:*)",
+      "Bash(del c:UsersUSERProjectsBikodebuild_check.bat c:UsersUSERProjectsBikodebuild_output.txt)"
     ]
   }
 }

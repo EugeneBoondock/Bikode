@@ -241,6 +241,8 @@ static AgentBackend BackendForChatAccessMode(EAIChatAccessMode mode)
         return AGENT_BACKEND_CLAUDE;
     case AI_CHAT_ACCESS_CODEX_CLAUDE:
         return AGENT_BACKEND_RELAY;
+    case AI_CHAT_ACCESS_LOCAL:
+        return AGENT_BACKEND_LOCAL;
     case AI_CHAT_ACCESS_API_PROVIDER:
     default:
         return AGENT_BACKEND_API;
@@ -253,8 +255,12 @@ static AgentBackend ResolveRuntimeBackend(AgentBackend requested, EAIChatAccessM
 
     if (mode == AI_CHAT_ACCESS_API_PROVIDER)
         return AGENT_BACKEND_API;
+    if (mode == AI_CHAT_ACCESS_LOCAL)
+        return AGENT_BACKEND_LOCAL;
     if (requested == AGENT_BACKEND_API)
         return AGENT_BACKEND_API;
+    if (requested == AGENT_BACKEND_LOCAL)
+        return AGENT_BACKEND_LOCAL;
     return selected;
 }
 
@@ -717,6 +723,8 @@ static AgentBackend ParseBackend(const char* text)
         return AGENT_BACKEND_CLAUDE;
     if (_stricmp(text, "relay") == 0)
         return AGENT_BACKEND_RELAY;
+    if (_stricmp(text, "local") == 0)
+        return AGENT_BACKEND_LOCAL;
     return AGENT_BACKEND_API;
 }
 
@@ -727,6 +735,7 @@ static const char* BackendSpecName(AgentBackend backend)
     case AGENT_BACKEND_CODEX:  return "codex";
     case AGENT_BACKEND_CLAUDE: return "claude";
     case AGENT_BACKEND_RELAY:  return "relay";
+    case AGENT_BACKEND_LOCAL:  return "local";
     default:                   return "api";
     }
 }
@@ -738,6 +747,7 @@ const char* AgentRuntime_BackendLabel(AgentBackend backend)
     case AGENT_BACKEND_CODEX:  return "Codex";
     case AGENT_BACKEND_CLAUDE: return "Claude";
     case AGENT_BACKEND_RELAY:  return "Relay";
+    case AGENT_BACKEND_LOCAL:  return "Local";
     default:                   return "API";
     }
 }
@@ -870,6 +880,15 @@ static void InitTemplateSpec(OrgSpec* pSpec, LPCWSTR wszRoot, LPCWSTR wszPath,
     CopyStringSafe(pSpec->name, COUNTOF(pSpec->name), name);
     CopyStringSafe(pSpec->layout, COUNTOF(pSpec->layout), layout);
     pSpec->defaultWorkspacePolicy = AGENT_WORKSPACE_ISOLATED;
+}
+
+static BOOL SaveSpecIfMissing(const OrgSpec* pSpec)
+{
+    if (!pSpec || !pSpec->path[0])
+        return FALSE;
+    if (PathFileExistsW(pSpec->path))
+        return TRUE;
+    return AgentRuntime_SaveOrgSpec(pSpec);
 }
 
 static BOOL JsonWriteStringArray(JsonWriter* pW, char values[][AGENT_RUNTIME_TEXT_SMALL], int count)
@@ -1363,11 +1382,9 @@ BOOL AgentRuntime_EnsureWorkspaceAssets(const WCHAR* wszWorkspaceRoot)
     WCHAR wszRuns[MAX_PATH];
     WCHAR wszWorktrees[MAX_PATH];
     WCHAR wszSandboxes[MAX_PATH];
-    WCHAR wszPattern[MAX_PATH];
-    WIN32_FIND_DATAW fd;
-    HANDLE hFind;
     OrgSpec spec;
     WCHAR wszPath[MAX_PATH];
+    BOOL ok = TRUE;
 
     if (!wszWorkspaceRoot || !wszWorkspaceRoot[0])
         return FALSE;
@@ -1382,14 +1399,6 @@ BOOL AgentRuntime_EnsureWorkspaceAssets(const WCHAR* wszWorkspaceRoot)
         !EnsureDirExists(wszWorktrees) || !EnsureDirExists(wszSandboxes))
         return FALSE;
 
-    PathCombineW(wszPattern, wszOrgs, L"*.json");
-    hFind = FindFirstFileW(wszPattern, &fd);
-    if (hFind != INVALID_HANDLE_VALUE)
-    {
-        FindClose(hFind);
-        return TRUE;
-    }
-
     PathCombineW(wszPath, wszOrgs, L"delivery-line.json");
     InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Delivery Line", "line");
     AppendOrgNode(&spec, "planner", "Planner", "planner", AGENT_BACKEND_API, AGENT_WORKSPACE_ISOLATED,
@@ -1403,7 +1412,7 @@ BOOL AgentRuntime_EnsureWorkspaceAssets(const WCHAR* wszWorkspaceRoot)
     AppendOrgNode(&spec, "tester", "Tester", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
                   "Summarize likely checks to run, note validation gaps, and call out residual risk from the changed files.", "delivery");
     AddDependency(&spec.nodes[3], "reviewer");
-    AgentRuntime_SaveOrgSpec(&spec);
+    ok = SaveSpecIfMissing(&spec) && ok;
 
     PathCombineW(wszPath, wszOrgs, L"bug-hunt.json");
     InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Bug Hunt", "tree");
@@ -1418,7 +1427,7 @@ BOOL AgentRuntime_EnsureWorkspaceAssets(const WCHAR* wszWorkspaceRoot)
     AppendOrgNode(&spec, "validate", "Validate", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
                   "Generate a concise validation checklist for the fix, including regression concerns.", "bugs");
     AddDependency(&spec.nodes[3], "review");
-    AgentRuntime_SaveOrgSpec(&spec);
+    ok = SaveSpecIfMissing(&spec) && ok;
 
     PathCombineW(wszPath, wszOrgs, L"research-swarm.json");
     InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Research Swarm", "mesh");
@@ -1430,7 +1439,7 @@ BOOL AgentRuntime_EnsureWorkspaceAssets(const WCHAR* wszWorkspaceRoot)
                   "Merge the research threads into one practical execution brief with sharp tradeoffs.", "research");
     AddDependency(&spec.nodes[2], "research-a");
     AddDependency(&spec.nodes[2], "research-b");
-    AgentRuntime_SaveOrgSpec(&spec);
+    ok = SaveSpecIfMissing(&spec) && ok;
 
     PathCombineW(wszPath, wszOrgs, L"refactor-design.json");
     InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Refactor Design", "hub");
@@ -1442,7 +1451,7 @@ BOOL AgentRuntime_EnsureWorkspaceAssets(const WCHAR* wszWorkspaceRoot)
     AppendOrgNode(&spec, "proof", "Proof", "reviewer", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_ISOLATED,
                   "Review the refactor for clarity, regressions, and incomplete migrations.", "refactor");
     AddDependency(&spec.nodes[2], "refactor");
-    AgentRuntime_SaveOrgSpec(&spec);
+    ok = SaveSpecIfMissing(&spec) && ok;
 
     PathCombineW(wszPath, wszOrgs, L"paired-review.json");
     InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Codex Claude Pair", "line");
@@ -1451,8 +1460,254 @@ BOOL AgentRuntime_EnsureWorkspaceAssets(const WCHAR* wszWorkspaceRoot)
     AppendOrgNode(&spec, "claude-pass", "Claude Pass", "reviewer", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_ISOLATED,
                   "Review and refine the Codex pass, preserving good changes and tightening correctness.", "pair");
     AddDependency(&spec.nodes[1], "codex-pass");
-    AgentRuntime_SaveOrgSpec(&spec);
-    return TRUE;
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- The Agency: Startup MVP Pipeline ---- */
+    PathCombineW(wszPath, wszOrgs, L"agency-startup-mvp.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Agency: Startup MVP", "tree");
+    AppendOrgNode(&spec, "architect", "Software Architect", "planner", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Software Architect. Design the system architecture for this MVP. Identify bounded contexts, "
+        "select appropriate patterns (modular monolith vs microservices), and produce an ADR covering key trade-offs. "
+        "Domain first, technology second. Prefer reversible decisions. Hand off a concrete implementation brief.", "engineering");
+    AppendOrgNode(&spec, "backend", "Backend Architect", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Backend Architect. Implement the API layer and data model from the architecture brief. "
+        "Design schemas optimized for performance and consistency. Include proper error handling, input validation, "
+        "and security measures. Leave a clear handoff describing endpoints, models, and integration points.", "engineering");
+    AddDependency(&spec.nodes[1], "architect");
+    AppendOrgNode(&spec, "frontend", "Frontend Developer", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Frontend Developer. Build the UI layer integrating with the backend API. "
+        "Focus on core user flows, responsive design, and accessibility. Use component architecture for reusability. "
+        "Optimize for Core Web Vitals. Include mobile-first responsive patterns.", "engineering");
+    AddDependency(&spec.nodes[2], "architect");
+    AppendOrgNode(&spec, "reviewer", "Code Reviewer", "reviewer", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Code Reviewer. Review all implementation work for correctness, security, and maintainability. "
+        "Prioritize findings as blockers, suggestions, and nits. Check for injection, XSS, auth issues, and race conditions. "
+        "Provide specific, actionable feedback with line references. Praise good patterns.", "engineering");
+    AddDependency(&spec.nodes[3], "backend");
+    AddDependency(&spec.nodes[3], "frontend");
+    AppendOrgNode(&spec, "checker", "Reality Checker", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Reality Checker. Verify production readiness across reliability, security, performance, and UX. "
+        "Require evidence for every claim. Check monitoring, alerting, and rollback procedures. "
+        "Provide a clear pass/fail verdict with specific blockers if any.", "testing");
+    AddDependency(&spec.nodes[4], "reviewer");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- The Agency: Security Hardening Pipeline ---- */
+    PathCombineW(wszPath, wszOrgs, L"agency-security-hardening.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Agency: Security Hardening", "line");
+    AppendOrgNode(&spec, "threat-model", "Security Engineer", "reviewer", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Security Engineer. Perform STRIDE threat modeling on this codebase. Identify attack surfaces, "
+        "trust boundaries, and data classification. Review for OWASP Top 10 and CWE Top 25 vulnerabilities. "
+        "Assume all user input is malicious. Classify findings by risk level. "
+        "Hand off a prioritized list of vulnerabilities with remediation guidance.", "engineering");
+    AppendOrgNode(&spec, "fix", "Security Implementer", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "Apply the security remediations from the threat model. Fix critical and high-severity findings first. "
+        "Use parameterized queries, proper input validation, secure authentication patterns, and secrets management. "
+        "Never disable security controls as a fix. Prefer well-tested libraries over custom crypto.", "engineering");
+    AddDependency(&spec.nodes[1], "threat-model");
+    AppendOrgNode(&spec, "audit", "Code Reviewer", "reviewer", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Code Reviewer. Audit the security fixes for correctness and completeness. "
+        "Verify that each vulnerability from the threat model has been properly addressed. "
+        "Check for regressions or newly introduced issues. Confirm no hardcoded secrets remain.", "engineering");
+    AddDependency(&spec.nodes[2], "fix");
+    AppendOrgNode(&spec, "sre-check", "SRE", "reviewer", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are SRE. Verify that security changes maintain system reliability. Check that SLOs are preserved, "
+        "monitoring covers new security controls, and graceful degradation paths exist. "
+        "Validate that deployment can be rolled back safely if issues arise.", "engineering");
+    AddDependency(&spec.nodes[3], "audit");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- The Agency: Full-Stack Feature ---- */
+    PathCombineW(wszPath, wszOrgs, L"agency-fullstack-feature.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Agency: Full-Stack Feature", "tree");
+    AppendOrgNode(&spec, "prioritizer", "Sprint Prioritizer", "planner", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Sprint Prioritizer. Analyze the feature request using RICE or value-vs-effort frameworks. "
+        "Identify dependencies, estimate scope, and define clear acceptance criteria. "
+        "Break down into implementation tasks with priorities. Hand off a structured brief.", "product");
+    AppendOrgNode(&spec, "ux", "UX Architect", "planner", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are UX Architect. Design the technical UI foundation for this feature. "
+        "Define component architecture, layout patterns, and interaction flows. "
+        "Include responsive breakpoints and accessibility considerations. Provide a developer-ready spec.", "design");
+    AddDependency(&spec.nodes[1], "prioritizer");
+    AppendOrgNode(&spec, "impl", "Frontend Developer", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Frontend Developer. Implement the feature following the UX spec and sprint brief. "
+        "Build responsive, accessible components with proper state management. "
+        "Optimize for performance. Leave clear integration notes.", "engineering");
+    AddDependency(&spec.nodes[2], "ux");
+    AppendOrgNode(&spec, "db", "Database Optimizer", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Database Optimizer. Design or update the data layer for this feature. "
+        "Create efficient schemas with proper indexes. Ensure migrations are reversible. "
+        "Optimize queries for performance. Validate foreign key constraints.", "engineering");
+    AddDependency(&spec.nodes[3], "prioritizer");
+    AppendOrgNode(&spec, "review", "Code Reviewer", "reviewer", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Code Reviewer. Review all implementation work across frontend and data layers. "
+        "Focus on correctness, security, maintainability, and performance. "
+        "Ensure the feature meets the acceptance criteria from the sprint brief.", "engineering");
+    AddDependency(&spec.nodes[4], "impl");
+    AddDependency(&spec.nodes[4], "db");
+    AppendOrgNode(&spec, "a11y", "Accessibility Auditor", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Accessibility Auditor. Audit the feature against WCAG 2.2 AA. "
+        "Check keyboard navigation, screen reader compatibility, focus management, and color contrast. "
+        "Catch what automated tools miss. Provide specific findings with remediation steps.", "testing");
+    AddDependency(&spec.nodes[5], "review");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- The Agency: Performance Optimization ---- */
+    PathCombineW(wszPath, wszOrgs, L"agency-perf-optimization.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Agency: Perf Optimization", "mesh");
+    AppendOrgNode(&spec, "bench", "Performance Benchmarker", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Performance Benchmarker. Profile this codebase and establish performance baselines. "
+        "Identify bottlenecks through systematic analysis. Measure Core Web Vitals, API response times, "
+        "and resource utilization. Produce a ranked list of optimization opportunities with expected impact.", "testing");
+    AppendOrgNode(&spec, "db-opt", "Database Optimizer", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Database Optimizer. Optimize the data layer based on performance findings. "
+        "Add missing indexes, fix N+1 queries, optimize slow queries using EXPLAIN ANALYZE. "
+        "Implement connection pooling improvements. Ensure all changes are backwards-compatible.", "engineering");
+    AddDependency(&spec.nodes[1], "bench");
+    AppendOrgNode(&spec, "frontend-opt", "Frontend Developer", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Frontend Developer. Optimize the frontend based on performance findings. "
+        "Implement code splitting, lazy loading, and bundle size reduction. "
+        "Optimize images and assets. Improve Core Web Vitals scores.", "engineering");
+    AddDependency(&spec.nodes[2], "bench");
+    AppendOrgNode(&spec, "verify", "Performance Benchmarker", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Performance Benchmarker. Re-run benchmarks after optimizations. "
+        "Compare against baselines and quantify improvements. Verify SLAs are met with 95% confidence. "
+        "Report remaining opportunities and diminishing-returns threshold.", "testing");
+    AddDependency(&spec.nodes[3], "db-opt");
+    AddDependency(&spec.nodes[3], "frontend-opt");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- The Agency: Incident Response ---- */
+    PathCombineW(wszPath, wszOrgs, L"agency-incident-response.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Agency: Incident Response", "line");
+    AppendOrgNode(&spec, "triage", "Incident Commander", "debug", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Incident Response Commander. Triage this incident by user impact and severity. "
+        "Identify the blast radius, establish a timeline of events, and coordinate the response. "
+        "Determine root cause candidates and assign investigation paths.", "engineering");
+    AppendOrgNode(&spec, "fix", "Rapid Prototyper", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Rapid Prototyper in incident mode. Implement the fastest safe fix for the identified root cause. "
+        "Focus on stopping the bleeding, not perfection. Keep the patch minimal and reversible. "
+        "Document what was changed and why.", "engineering");
+    AddDependency(&spec.nodes[1], "triage");
+    AppendOrgNode(&spec, "verify", "SRE", "reviewer", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are SRE. Verify the incident fix is safe to deploy. Check that SLOs are restored, "
+        "monitoring confirms resolution, and no new issues were introduced. "
+        "Validate rollback procedures are ready. Give a deploy/no-deploy verdict.", "engineering");
+    AddDependency(&spec.nodes[2], "fix");
+    AppendOrgNode(&spec, "postmortem", "Technical Writer", "research", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Technical Writer producing the blameless post-mortem. "
+        "Document the incident timeline, root cause, impact, resolution, and follow-up action items. "
+        "Focus on systemic improvements, not individual blame. Make action items specific and assigned.", "engineering");
+    AddDependency(&spec.nodes[3], "verify");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- Promptfoo: LLM Eval Pipeline ---- */
+    PathCombineW(wszPath, wszOrgs, L"agency-llm-eval.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Agency: LLM Eval Pipeline", "line");
+    AppendOrgNode(&spec, "evaluator", "Prompt Evaluator", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Prompt Evaluator. Design test cases for the prompts in this workspace. "
+        "Create evaluation matrices: expected vs actual, correctness, relevance, safety. "
+        "Use assertion-based grading. Track metrics across prompt iterations. Report pass/fail with confidence.", "eval");
+    AppendOrgNode(&spec, "redteam", "Red Teamer", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Red Teamer. Probe the prompts for vulnerabilities: injection, jailbreaks, data leakage, bias, harmful outputs. "
+        "Generate adversarial test cases systematically. Classify findings by severity. "
+        "Provide remediation strategies for each vulnerability. Focus on making AI outputs safer.", "eval");
+    AddDependency(&spec.nodes[1], "evaluator");
+    AppendOrgNode(&spec, "comparator", "Model Comparator", "research", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Model Comparator. Compare outputs across model configurations. "
+        "Evaluate cost, latency, quality, and safety trade-offs. Produce a comparison matrix with clear recommendations. "
+        "Recommend the optimal model for each use case identified.", "eval");
+    AddDependency(&spec.nodes[2], "redteam");
+    AppendOrgNode(&spec, "guard", "Regression Guard", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Regression Guard. Define the golden test set from evaluation and red-team results. "
+        "Set minimum pass rates for safety, correctness, and relevance. "
+        "Produce a final go/no-go verdict for the prompt configuration.", "eval");
+    AddDependency(&spec.nodes[3], "comparator");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- Impeccable: Design Quality Pipeline ---- */
+    PathCombineW(wszPath, wszOrgs, L"agency-design-quality.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Agency: Design Quality", "tree");
+    AppendOrgNode(&spec, "audit", "Design Auditor", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Design Auditor. Run technical quality checks on the frontend: accessibility (WCAG AA), "
+        "Core Web Vitals, responsive behavior. Flag anti-patterns: nested cards, gray-on-color text, "
+        "pure black/white, overused fonts, identical grids, glassmorphism overuse. Report issues with severity.", "design");
+    AppendOrgNode(&spec, "critique", "Design Critic", "reviewer", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Design Critic. Review for hierarchy clarity, emotional resonance, and intentional aesthetics. "
+        "Does the design have a bold direction or fall into generic AI slop? "
+        "Push for distinctive design over safe defaults. Identify what makes it memorable or forgettable.", "design");
+    AddDependency(&spec.nodes[1], "audit");
+    AppendOrgNode(&spec, "typo", "Typography Expert", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Typography Expert. Fix type system issues from the audit. "
+        "Implement modular type scales with fluid sizing. Replace generic fonts with distinctive choices. "
+        "Establish vertical rhythm and proper measure (65ch). Optimize font loading.", "design");
+    AddDependency(&spec.nodes[2], "critique");
+    AppendOrgNode(&spec, "color", "Color Specialist", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Color Specialist. Fix color system issues from the audit. "
+        "Switch to OKLCH. Tint neutrals toward brand hue. Apply 60-30-10 rule. "
+        "Ensure WCAG AA contrast. Build functional palette with proper semantic colors.", "design");
+    AddDependency(&spec.nodes[3], "critique");
+    AppendOrgNode(&spec, "polish", "Design Polisher", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Design Polisher. Final production pass: micro-interactions, hover states, focus indicators, "
+        "loading states. Normalize to design system. Strip unnecessary complexity. "
+        "Every decorative element must serve a purpose. Make every pixel intentional.", "design");
+    AddDependency(&spec.nodes[4], "typo");
+    AddDependency(&spec.nodes[4], "color");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- OpenViking: Context Architecture Pipeline ---- */
+    PathCombineW(wszPath, wszOrgs, L"agency-context-arch.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Agency: Context Architecture", "line");
+    AppendOrgNode(&spec, "architect", "Context Architect", "planner", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Context Architect. Design the context structure for agents in this workspace. "
+        "Organize using filesystem paradigm: unify memories, resources, skills. "
+        "Define L0/L1/L2 tiered loading strategy. Create context schemas for automatic session management.", "context");
+    AppendOrgNode(&spec, "curator", "Memory Curator", "research", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Memory Curator. Extract and organize long-term memories from existing sessions and codebase. "
+        "Separate task memory from user memory. Prune outdated or conflicting entries. "
+        "Structure memories hierarchically for efficient retrieval.", "context");
+    AddDependency(&spec.nodes[1], "architect");
+    AppendOrgNode(&spec, "retrieval", "Retrieval Optimizer", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Retrieval Optimizer. Implement the context retrieval strategy from the architecture plan. "
+        "Combine directory positioning with semantic search. Optimize for token budget. "
+        "Make retrieval paths observable and debuggable. Verify relevance and completeness.", "context");
+    AddDependency(&spec.nodes[2], "curator");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- Composite: Ship-Ready Feature (all tools) ---- */
+    PathCombineW(wszPath, wszOrgs, L"agency-ship-ready.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Agency: Ship-Ready Feature", "tree");
+    AppendOrgNode(&spec, "plan", "Software Architect", "planner", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Software Architect. Design the architecture for this feature. "
+        "Identify bounded contexts and trade-offs. Produce an ADR and implementation brief. "
+        "Domain first, technology second. Prefer reversible decisions.", "engineering");
+    AppendOrgNode(&spec, "impl", "Frontend Developer", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Frontend Developer. Implement the feature from the architecture brief. "
+        "Build responsive, accessible components. Use distinctive design choices, not generic templates. "
+        "Follow OKLCH color, modular type scales, and spatial rhythm principles.", "engineering");
+    AddDependency(&spec.nodes[1], "plan");
+    AppendOrgNode(&spec, "review", "Code Reviewer", "reviewer", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Code Reviewer. Review for correctness, security, and maintainability. "
+        "Prioritize as blockers, suggestions, nits. Check for OWASP Top 10 issues.", "engineering");
+    AddDependency(&spec.nodes[2], "impl");
+    AppendOrgNode(&spec, "design-qa", "Design Auditor", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Design Auditor. Audit the implementation for frontend quality: "
+        "accessibility, responsive behavior, anti-patterns, type consistency, color contrast, spatial rhythm.", "design");
+    AddDependency(&spec.nodes[3], "review");
+    AppendOrgNode(&spec, "eval", "Prompt Evaluator", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Prompt Evaluator. If this feature includes AI-facing prompts or LLM integrations, "
+        "evaluate prompt quality for correctness, safety, and consistency. "
+        "If no prompts exist, verify that any AI-generated content meets quality standards.", "eval");
+    AddDependency(&spec.nodes[4], "review");
+    AppendOrgNode(&spec, "ship", "Reality Checker", "tester", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Reality Checker. Final ship/no-ship verdict. Verify all prior findings are resolved. "
+        "Check monitoring, rollback, and deployment readiness. Require evidence for every claim. "
+        "Produce a clear verdict with any remaining blockers.", "testing");
+    AddDependency(&spec.nodes[5], "design-qa");
+    AddDependency(&spec.nodes[5], "eval");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    return ok;
 }
 
 BOOL AgentRuntime_LoadOrgSpecs(const WCHAR* wszWorkspaceRoot, OrgSpec* pSpecs, int cMaxSpecs, int* pnSpecs)
@@ -2300,7 +2555,19 @@ static char* RunApiNode(int nodeIndex, const OrgNodeSpec* spec, StrBuf* pTranscr
     char* response;
     if (!pBridgeCfg)
         return DupString("Error: No AI provider configuration is available.");
-    cfg = pBridgeCfg->providerCfg;
+
+    if (spec->backend == AGENT_BACKEND_LOCAL)
+    {
+        EAIProvider detected = AIProvider_DetectLocal();
+        if (detected >= AI_PROVIDER_COUNT)
+            return DupString("Error: No local model server detected (Ollama, LM Studio, llama.cpp, vLLM, LocalAI).");
+        AIProviderConfig_InitDefaults(&cfg, detected);
+        RuntimeAddEvent(nodeIndex, AGENT_EVENT_STATUS, "Using local model server.");
+    }
+    else
+    {
+        cfg = pBridgeCfg->providerCfg;
+    }
     if (spec->model[0])
         CopyStringSafe(cfg.szModel, COUNTOF(cfg.szModel), spec->model);
     prompt = BuildNodePrompt(nodeIndex);
@@ -2501,7 +2768,7 @@ static unsigned __stdcall RuntimeNodeThreadProc(void* pParam)
     baselineCount = CaptureWorkspaceSnapshot(s_runtime.nodes[nodeIndex].workspacePath, baseline, ARRAYSIZE(baseline));
     RuntimeAddEvent(nodeIndex, AGENT_EVENT_STATUS, "Workspace ready. Node execution started.");
 
-    if (spec->backend == AGENT_BACKEND_API)
+    if (spec->backend == AGENT_BACKEND_API || spec->backend == AGENT_BACKEND_LOCAL)
         result = RunApiNode(nodeIndex, spec, &transcript);
     else
         result = RunSubscriptionNode(nodeIndex, spec, &transcript);

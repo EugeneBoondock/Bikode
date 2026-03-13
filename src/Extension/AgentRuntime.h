@@ -37,7 +37,8 @@ typedef enum AgentBackend {
     AGENT_BACKEND_API = 0,
     AGENT_BACKEND_CODEX,
     AGENT_BACKEND_CLAUDE,
-    AGENT_BACKEND_RELAY
+    AGENT_BACKEND_RELAY,
+    AGENT_BACKEND_LOCAL
 } AgentBackend;
 
 typedef enum AgentNodeState {

@@ -50,7 +50,8 @@ typedef enum
     AI_CHAT_ACCESS_API_PROVIDER = 0,
     AI_CHAT_ACCESS_CODEX,
     AI_CHAT_ACCESS_CLAUDE,
-    AI_CHAT_ACCESS_CODEX_CLAUDE
+    AI_CHAT_ACCESS_CODEX_CLAUDE,
+    AI_CHAT_ACCESS_LOCAL
 } EAIChatAccessMode;
 
 //=============================================================================

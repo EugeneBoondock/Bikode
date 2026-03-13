@@ -468,7 +468,7 @@ void AIBridge_LoadConfig(AIConfig* pConfig, LPCWSTR wszIniFile)
     pConfig->eChatAccessMode = (EAIChatAccessMode)GetPrivateProfileIntW(
         L"AI", L"ChatAccessMode", AI_CHAT_ACCESS_API_PROVIDER, wszIniFile);
     if (pConfig->eChatAccessMode < AI_CHAT_ACCESS_API_PROVIDER ||
-        pConfig->eChatAccessMode > AI_CHAT_ACCESS_CODEX_CLAUDE)
+        pConfig->eChatAccessMode > AI_CHAT_ACCESS_LOCAL)
     {
         pConfig->eChatAccessMode = AI_CHAT_ACCESS_API_PROVIDER;
     }
@@ -629,7 +629,8 @@ BOOL AIBridge_HasChatAccess(void)
 {
     if (s_config.eChatAccessMode == AI_CHAT_ACCESS_CODEX ||
         s_config.eChatAccessMode == AI_CHAT_ACCESS_CLAUDE ||
-        s_config.eChatAccessMode == AI_CHAT_ACCESS_CODEX_CLAUDE)
+        s_config.eChatAccessMode == AI_CHAT_ACCESS_CODEX_CLAUDE ||
+        s_config.eChatAccessMode == AI_CHAT_ACCESS_LOCAL)
     {
         return TRUE;
     }

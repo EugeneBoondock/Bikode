@@ -272,14 +272,14 @@ static const AIProviderDef s_providers[AI_PROVIDER_COUNT] = {
         .szName         = "Ollama",
         .szSlug         = "ollama",
         .szDefaultHost  = "127.0.0.1",
-        .szDefaultPath  = "/api/chat",
+        .szDefaultPath  = "/v1/chat/completions",
         .iDefaultPort   = 11434,
         .bUseSSL        = 0,
         .eAuth          = AI_AUTH_NONE,
         .szAuthHeaderName = NULL,
         .szExtraHeaders = NULL,
         .szEnvVarKey    = NULL,
-        .eFormat        = AI_FORMAT_OPENAI,     // Ollama uses OpenAI-compat format
+        .eFormat        = AI_FORMAT_OPENAI,     // Ollama OpenAI-compat endpoint
         .szDefaultModel = "llama3.2",
         .szModels       = "llama3.2;llama3.1;codellama;mistral;mixtral;deepseek-coder-v2;qwen2.5-coder;phi3;gemma2;starcoder2",
         .bRequiresKey   = 0,
@@ -712,4 +712,214 @@ void AIProviderConfig_FromJSON(const char* szJSON, AIProviderConfig* pCfg)
         sp = strchr(sp + 8, ':');
         if (sp) { sp++; while (*sp == ' ') sp++; pCfg->bStream = (*sp == 't') ? 1 : 0; }
     }
+}
+
+//=============================================================================
+// Local model server detection
+//=============================================================================
+
+#ifdef _WIN32
+#include <winhttp.h>
+
+// Quick HTTP GET probe: returns TRUE if the server responds HTTP 200 within
+// the given timeout.  On success, *ppBody receives a heap-allocated copy of
+// the response body (caller must free) and *pBodyLen its length.
+static BOOL ProbeHttp(const char* szHost, int iPort, const char* szPath,
+                      int timeoutMs, char** ppBody, int* pBodyLen)
+{
+    WCHAR wszHost[256];
+    WCHAR wszPath[256];
+    HINTERNET hSession, hConnect, hRequest;
+    BOOL ok = FALSE;
+
+    MultiByteToWideChar(CP_UTF8, 0, szHost, -1, wszHost, 256);
+    MultiByteToWideChar(CP_UTF8, 0, szPath, -1, wszPath, 256);
+
+    hSession = WinHttpOpen(L"Bikode-Probe/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY,
+                           WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) return FALSE;
+
+    WinHttpSetTimeouts(hSession, timeoutMs, timeoutMs, timeoutMs, timeoutMs);
+
+    hConnect = WinHttpConnect(hSession, wszHost, (INTERNET_PORT)iPort, 0);
+    if (!hConnect) { WinHttpCloseHandle(hSession); return FALSE; }
+
+    hRequest = WinHttpOpenRequest(hConnect, L"GET", wszPath, NULL,
+                                  WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+    if (!hRequest) { WinHttpCloseHandle(hConnect); WinHttpCloseHandle(hSession); return FALSE; }
+
+    if (WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0) &&
+        WinHttpReceiveResponse(hRequest, NULL))
+    {
+        DWORD status = 0, sz = sizeof(status);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            NULL, &status, &sz, NULL);
+        if (status == 200)
+        {
+            ok = TRUE;
+            if (ppBody)
+            {
+                char buf[4096];
+                DWORD read = 0;
+                int total = 0;
+                char* body = (char*)malloc(16384);
+                if (body)
+                {
+                    while (WinHttpReadData(hRequest, buf, sizeof(buf), &read) && read > 0 && total < 16000)
+                    {
+                        memcpy(body + total, buf, read);
+                        total += (int)read;
+                        read = 0;
+                    }
+                    body[total] = '\0';
+                    *ppBody = body;
+                    if (pBodyLen) *pBodyLen = total;
+                }
+            }
+        }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return ok;
+}
+#endif
+
+// Provider IDs to probe, with their health/model-list endpoints.
+typedef struct {
+    EAIProvider id;
+    const char* host;
+    int         port;
+    const char* probePath;
+} LocalProbeEntry;
+
+static const LocalProbeEntry s_localProbes[] = {
+    { AI_PROVIDER_OLLAMA,   "127.0.0.1", 11434, "/api/tags" },
+    { AI_PROVIDER_LMSTUDIO, "127.0.0.1", 1234,  "/v1/models" },
+    { AI_PROVIDER_LLAMACPP, "127.0.0.1", 8080,  "/v1/models" },
+    { AI_PROVIDER_VLLM,     "127.0.0.1", 8000,  "/v1/models" },
+    { AI_PROVIDER_LOCALAI,  "127.0.0.1", 8080,  "/v1/models" },
+};
+
+EAIProvider AIProvider_DetectLocal(void)
+{
+#ifdef _WIN32
+    for (int i = 0; i < (int)(sizeof(s_localProbes) / sizeof(s_localProbes[0])); i++)
+    {
+        if (ProbeHttp(s_localProbes[i].host, s_localProbes[i].port,
+                      s_localProbes[i].probePath, 500, NULL, NULL))
+            return s_localProbes[i].id;
+    }
+#endif
+    return AI_PROVIDER_COUNT;
+}
+
+// Extract model names from Ollama /api/tags JSON response:
+//   {"models": [{"name": "llama3.2:latest", ...}, ...]}
+static char* ParseOllamaModels(const char* json)
+{
+    const char* models = strstr(json, "\"models\"");
+    if (!models) return NULL;
+    models = strchr(models, '[');
+    if (!models) return NULL;
+
+    char result[4096];
+    int rlen = 0;
+    const char* p = models;
+    while ((p = strstr(p, "\"name\"")) != NULL)
+    {
+        p = strchr(p + 6, ':');
+        if (!p) break;
+        p++;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p != '"') break;
+        p++;
+        const char* start = p;
+        while (*p && *p != '"') p++;
+        int nlen = (int)(p - start);
+        if (nlen > 0 && rlen + nlen + 2 < (int)sizeof(result))
+        {
+            if (rlen > 0) result[rlen++] = ';';
+            memcpy(result + rlen, start, nlen);
+            rlen += nlen;
+        }
+    }
+    if (rlen == 0) return NULL;
+    result[rlen] = '\0';
+    return _strdup(result);
+}
+
+// Extract model IDs from OpenAI-compat /v1/models JSON response:
+//   {"data": [{"id": "model-name", ...}, ...]}
+static char* ParseOpenAIModels(const char* json)
+{
+    const char* data = strstr(json, "\"data\"");
+    if (!data) return NULL;
+    data = strchr(data, '[');
+    if (!data) return NULL;
+
+    char result[4096];
+    int rlen = 0;
+    const char* p = data;
+    while ((p = strstr(p, "\"id\"")) != NULL)
+    {
+        p = strchr(p + 4, ':');
+        if (!p) break;
+        p++;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p != '"') break;
+        p++;
+        const char* start = p;
+        while (*p && *p != '"') p++;
+        int nlen = (int)(p - start);
+        if (nlen > 0 && rlen + nlen + 2 < (int)sizeof(result))
+        {
+            if (rlen > 0) result[rlen++] = ';';
+            memcpy(result + rlen, start, nlen);
+            rlen += nlen;
+        }
+    }
+    if (rlen == 0) return NULL;
+    result[rlen] = '\0';
+    return _strdup(result);
+}
+
+char* AIProvider_FetchModelList(EAIProvider eProvider, const char* szHost, int iPort)
+{
+#ifdef _WIN32
+    const char* probePath = "/v1/models";
+    if (eProvider == AI_PROVIDER_OLLAMA)
+        probePath = "/api/tags";
+
+    if (!szHost || !szHost[0]) szHost = "127.0.0.1";
+    if (iPort <= 0)
+    {
+        const AIProviderDef* pDef = AIProvider_Get(eProvider);
+        iPort = pDef ? pDef->iDefaultPort : 11434;
+    }
+
+    char* body = NULL;
+    int bodyLen = 0;
+    if (!ProbeHttp(szHost, iPort, probePath, 2000, &body, &bodyLen) || !body)
+    {
+        const AIProviderDef* pDef = AIProvider_Get(eProvider);
+        return pDef && pDef->szModels ? _strdup(pDef->szModels) : NULL;
+    }
+
+    char* list = (eProvider == AI_PROVIDER_OLLAMA)
+        ? ParseOllamaModels(body)
+        : ParseOpenAIModels(body);
+    free(body);
+
+    if (!list)
+    {
+        const AIProviderDef* pDef = AIProvider_Get(eProvider);
+        return pDef && pDef->szModels ? _strdup(pDef->szModels) : NULL;
+    }
+    return list;
+#else
+    const AIProviderDef* pDef = AIProvider_Get(eProvider);
+    return pDef && pDef->szModels ? _strdup(pDef->szModels) : NULL;
+#endif
 }

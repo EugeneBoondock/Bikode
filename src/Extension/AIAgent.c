@@ -1081,6 +1081,28 @@ static char* BuildSystemPrompt(const BudgetContract* contract, AgentIntent inten
         "Parameters: name, query\n"
         "Example: {\"name\": \"gif_search\", \"query\": \"funny coding bug reaction gif\"}\n\n"
 
+        "### eval_prompt\n"
+        "Evaluate a prompt against quality and safety criteria. Checks for clarity, specificity, injection risk, output stability, and bias.\n"
+        "Parameters: name, prompt_text, optional criteria (comma-separated: \"clarity,injection,bias,stability,specificity\")\n"
+        "Example: {\"name\": \"eval_prompt\", \"prompt_text\": \"Summarize this code\", \"criteria\": \"clarity,specificity\"}\n\n"
+
+        "### red_team_prompt\n"
+        "Probe a prompt or system instruction for security vulnerabilities: injection, jailbreak, data leakage, bias, harmful output potential.\n"
+        "Parameters: name, prompt_text, optional attack_vectors (comma-separated: \"injection,jailbreak,leakage,bias\")\n"
+        "Example: {\"name\": \"red_team_prompt\", \"prompt_text\": \"You are a helpful assistant...\", \"attack_vectors\": \"injection,jailbreak\"}\n\n"
+
+        "### design_audit\n"
+        "Audit a UI/CSS/HTML file for design quality: typography, color contrast (WCAG AA/AAA), spacing consistency, visual hierarchy, motion, and accessibility.\n"
+        "Parameters: name, path, optional checks (comma-separated: \"typography,color,spacing,hierarchy,motion,a11y\")\n"
+        "Example: {\"name\": \"design_audit\", \"path\": \"src/styles/main.css\", \"checks\": \"typography,color,a11y\"}\n\n"
+
+        "### context_store\n"
+        "Store, retrieve, or list contextual knowledge entries for the current workspace. Persisted in .bikode/context-store.json.\n"
+        "Operations: store (save a key-value pair), retrieve (fuzzy-search by query), list (show all keys).\n"
+        "Parameters: name, operation (\"store\"|\"retrieve\"|\"list\"), optional key, optional value, optional query\n"
+        "Example: {\"name\": \"context_store\", \"operation\": \"store\", \"key\": \"architecture\", \"value\": \"MVC pattern with service layer\"}\n"
+        "Example: {\"name\": \"context_store\", \"operation\": \"retrieve\", \"query\": \"how does auth work\"}\n\n"
+
         "## Guidelines\n"
         "- Read files before modifying them to understand their current content.\n"
         "- Use get_active_document when the current editor buffer may have unsaved changes.\n"
@@ -1191,7 +1213,11 @@ static const char* FindRawJsonToolCall(const char* p)
                 strcmp(name, "init_repo") == 0 || strcmp(name, "run_command") == 0 ||
                 strcmp(name, "list_dir") == 0 || strcmp(name, "semantic_search") == 0 ||
                 strcmp(name, "web_search") == 0 ||
-                strcmp(name, "gif_search") == 0)
+                strcmp(name, "gif_search") == 0 ||
+                strcmp(name, "eval_prompt") == 0 ||
+                strcmp(name, "red_team_prompt") == 0 ||
+                strcmp(name, "design_audit") == 0 ||
+                strcmp(name, "context_store") == 0)
             {
                 free(name);
                 return s;
@@ -1255,6 +1281,24 @@ static int ParseOneToolCall(const char* json, int jsonLen, ToolCall* tc)
         tc->maxResults = json_extract_int_a(buf, "limit", 0);
     if (!tc->command)
         tc->command = json_extract_string_a(buf, "query"); // Map query -> command
+
+    // Agency tool field mappings:
+    // prompt_text -> content, criteria/attack_vectors/checks/operation -> command
+    // key -> path, value -> newText (for context_store)
+    if (!tc->content)
+        tc->content = json_extract_string_a(buf, "prompt_text");
+    if (!tc->command)
+        tc->command = json_extract_string_a(buf, "criteria");
+    if (!tc->command)
+        tc->command = json_extract_string_a(buf, "attack_vectors");
+    if (!tc->command)
+        tc->command = json_extract_string_a(buf, "checks");
+    if (!tc->command)
+        tc->command = json_extract_string_a(buf, "operation");
+    if (!tc->path)
+        tc->path = json_extract_string_a(buf, "key");
+    if (!tc->newText)
+        tc->newText = json_extract_string_a(buf, "value");
 
     free(buf);
     return (tc->name[0] != '\0') ? 1 : 0;
@@ -2290,6 +2334,537 @@ static char* Tool_GifSearch(const char* query)
     return result;
 }
 
+//=============================================================================
+// Agency tools: eval_prompt, red_team_prompt, design_audit, context_store
+//=============================================================================
+
+static char* Tool_EvalPrompt(const char* promptText, const char* criteria)
+{
+    if (!promptText || !promptText[0])
+        return _strdup("Error: prompt_text parameter is required.");
+
+    StrBuf sb;
+    sb_init(&sb, 2048);
+    int promptLen = (int)strlen(promptText);
+
+    sb_append(&sb, "Prompt Evaluation Report\n========================\n\n", -1);
+    sb_appendf(&sb, "Prompt length: %d characters\n\n", promptLen);
+
+    // Clarity check
+    if (!criteria || strstr(criteria, "clarity") || !criteria[0])
+    {
+        sb_append(&sb, "CLARITY:\n", -1);
+        if (promptLen < 20)
+            sb_append(&sb, "  [WARN] Very short prompt - may lack sufficient context.\n", -1);
+        else if (promptLen > 4000)
+            sb_append(&sb, "  [WARN] Very long prompt - consider condensing.\n", -1);
+        else
+            sb_append(&sb, "  [OK] Prompt length is reasonable.\n", -1);
+
+        if (ContainsSubstringCI(promptText, "do something") ||
+            ContainsSubstringCI(promptText, "help me") ||
+            ContainsSubstringCI(promptText, "figure out"))
+            sb_append(&sb, "  [WARN] Vague phrasing detected. Be more specific about the task.\n", -1);
+        else
+            sb_append(&sb, "  [OK] No obvious vague phrasing.\n", -1);
+    }
+
+    // Injection check
+    if (!criteria || strstr(criteria, "injection") || !criteria[0])
+    {
+        sb_append(&sb, "\nINJECTION RISK:\n", -1);
+        int risks = 0;
+        if (ContainsSubstringCI(promptText, "ignore previous") ||
+            ContainsSubstringCI(promptText, "ignore above") ||
+            ContainsSubstringCI(promptText, "disregard"))
+        { sb_append(&sb, "  [HIGH] Contains override-style injection pattern.\n", -1); risks++; }
+        if (ContainsSubstringCI(promptText, "system:") ||
+            ContainsSubstringCI(promptText, "SYSTEM:") ||
+            ContainsSubstringCI(promptText, "you are now"))
+        { sb_append(&sb, "  [HIGH] Contains role reassignment pattern.\n", -1); risks++; }
+        if (strstr(promptText, "{{") || strstr(promptText, "{%"))
+        { sb_append(&sb, "  [MED] Contains template injection markers.\n", -1); risks++; }
+        if (ContainsSubstringCI(promptText, "<script") || ContainsSubstringCI(promptText, "javascript:"))
+        { sb_append(&sb, "  [MED] Contains XSS-style patterns.\n", -1); risks++; }
+        if (risks == 0)
+            sb_append(&sb, "  [OK] No injection patterns detected.\n", -1);
+    }
+
+    // Bias check
+    if (criteria && strstr(criteria, "bias"))
+    {
+        sb_append(&sb, "\nBIAS:\n", -1);
+        if (ContainsSubstringCI(promptText, "always") || ContainsSubstringCI(promptText, "never"))
+            sb_append(&sb, "  [WARN] Contains absolute terms (always/never) which may introduce bias.\n", -1);
+        else
+            sb_append(&sb, "  [OK] No obvious bias indicators.\n", -1);
+    }
+
+    // Specificity
+    if (!criteria || strstr(criteria, "specificity") || !criteria[0])
+    {
+        sb_append(&sb, "\nSPECIFICITY:\n", -1);
+        if (ContainsSubstringCI(promptText, "example") || ContainsSubstringCI(promptText, "e.g.") ||
+            ContainsSubstringCI(promptText, "for instance"))
+            sb_append(&sb, "  [OK] Contains examples - good for specificity.\n", -1);
+        else
+            sb_append(&sb, "  [SUGGEST] Consider adding examples to improve output quality.\n", -1);
+        if (ContainsSubstringCI(promptText, "format") || ContainsSubstringCI(promptText, "output") ||
+            ContainsSubstringCI(promptText, "json") || ContainsSubstringCI(promptText, "markdown"))
+            sb_append(&sb, "  [OK] Specifies output format.\n", -1);
+        else
+            sb_append(&sb, "  [SUGGEST] Consider specifying the desired output format.\n", -1);
+    }
+
+    return sb.data;
+}
+
+static char* Tool_RedTeamPrompt(const char* promptText, const char* attackVectors)
+{
+    if (!promptText || !promptText[0])
+        return _strdup("Error: prompt_text parameter is required.");
+
+    StrBuf sb;
+    sb_init(&sb, 2048);
+
+    sb_append(&sb, "Red Team Analysis\n==================\n\n", -1);
+
+    // Injection vectors
+    if (!attackVectors || strstr(attackVectors, "injection") || !attackVectors[0])
+    {
+        int found = 0;
+        sb_append(&sb, "INJECTION VECTORS:\n", -1);
+        if (ContainsSubstringCI(promptText, "ignore") && ContainsSubstringCI(promptText, "previous"))
+        { sb_append(&sb, "  [VULN] Direct override: 'ignore previous' pattern found.\n", -1); found++; }
+        if (ContainsSubstringCI(promptText, "forget") && (ContainsSubstringCI(promptText, "instruction") || ContainsSubstringCI(promptText, "rules")))
+        { sb_append(&sb, "  [VULN] Memory wipe: 'forget instructions/rules' pattern.\n", -1); found++; }
+        if (ContainsSubstringCI(promptText, "you are now") || ContainsSubstringCI(promptText, "act as") ||
+            ContainsSubstringCI(promptText, "pretend to be"))
+        { sb_append(&sb, "  [VULN] Role hijack: identity reassignment pattern.\n", -1); found++; }
+        if (strstr(promptText, "{{") || strstr(promptText, "{%") || strstr(promptText, "${"))
+        { sb_append(&sb, "  [VULN] Template injection: unescaped template markers.\n", -1); found++; }
+        if (ContainsSubstringCI(promptText, "SELECT") && ContainsSubstringCI(promptText, "FROM"))
+        { sb_append(&sb, "  [VULN] SQL-like patterns in prompt text.\n", -1); found++; }
+        if (found == 0)
+            sb_append(&sb, "  [PASS] No injection patterns detected.\n", -1);
+    }
+
+    // Jailbreak vectors
+    if (!attackVectors || strstr(attackVectors, "jailbreak") || !attackVectors[0])
+    {
+        int found = 0;
+        sb_append(&sb, "\nJAILBREAK VECTORS:\n", -1);
+        if (ContainsSubstringCI(promptText, "DAN") || ContainsSubstringCI(promptText, "do anything now"))
+        { sb_append(&sb, "  [VULN] Known DAN jailbreak pattern.\n", -1); found++; }
+        if (ContainsSubstringCI(promptText, "developer mode") || ContainsSubstringCI(promptText, "no restrictions"))
+        { sb_append(&sb, "  [VULN] Restriction bypass pattern.\n", -1); found++; }
+        if (ContainsSubstringCI(promptText, "hypothetical") || ContainsSubstringCI(promptText, "fictional"))
+        { sb_append(&sb, "  [WARN] Fictional framing - common jailbreak wrapper.\n", -1); found++; }
+        if (found == 0)
+            sb_append(&sb, "  [PASS] No jailbreak patterns detected.\n", -1);
+    }
+
+    // Data leakage
+    if (!attackVectors || strstr(attackVectors, "leakage") || !attackVectors[0])
+    {
+        int found = 0;
+        sb_append(&sb, "\nDATA LEAKAGE:\n", -1);
+        if (ContainsSubstringCI(promptText, "repeat") && ContainsSubstringCI(promptText, "system"))
+        { sb_append(&sb, "  [VULN] System prompt extraction: 'repeat system' pattern.\n", -1); found++; }
+        if (ContainsSubstringCI(promptText, "show me your") && (ContainsSubstringCI(promptText, "instructions") || ContainsSubstringCI(promptText, "prompt")))
+        { sb_append(&sb, "  [VULN] Direct prompt extraction attempt.\n", -1); found++; }
+        if (strstr(promptText, "../") || strstr(promptText, "..\\"))
+        { sb_append(&sb, "  [VULN] Path traversal pattern.\n", -1); found++; }
+        if (found == 0)
+            sb_append(&sb, "  [PASS] No data leakage patterns detected.\n", -1);
+    }
+
+    // Bias
+    if (attackVectors && strstr(attackVectors, "bias"))
+    {
+        sb_append(&sb, "\nBIAS ANALYSIS:\n", -1);
+        if (ContainsSubstringCI(promptText, "always") || ContainsSubstringCI(promptText, "never") ||
+            ContainsSubstringCI(promptText, "must always"))
+            sb_append(&sb, "  [WARN] Contains absolute directives that may introduce systematic bias.\n", -1);
+        else
+            sb_append(&sb, "  [PASS] No obvious bias-inducing patterns.\n", -1);
+    }
+
+    return sb.data;
+}
+
+static char* Tool_DesignAudit(const char* path, const char* checks)
+{
+    if (!path || !path[0])
+        return _strdup("Error: path parameter is required.");
+
+    // Read the file content
+    char* content = Tool_ReadFile(path, 0, 0);
+    if (!content || strncmp(content, "Error:", 6) == 0)
+        return content ? content : _strdup("Error: Failed to read file.");
+
+    StrBuf sb;
+    sb_init(&sb, 4096);
+    sb_appendf(&sb, "Design Audit: %s\n", path);
+    sb_append(&sb, "============================\n\n", -1);
+
+    // Typography
+    if (!checks || strstr(checks, "typography") || !checks[0])
+    {
+        sb_append(&sb, "TYPOGRAPHY:\n", -1);
+        if (strstr(content, "font-size"))
+            sb_append(&sb, "  [FOUND] font-size declarations present.\n", -1);
+        else
+            sb_append(&sb, "  [MISSING] No font-size declarations found.\n", -1);
+
+        if (strstr(content, "line-height"))
+            sb_append(&sb, "  [FOUND] line-height declarations present.\n", -1);
+        else
+            sb_append(&sb, "  [SUGGEST] Consider adding line-height for readability (1.4-1.6 for body text).\n", -1);
+
+        if (strstr(content, "font-family"))
+            sb_append(&sb, "  [FOUND] font-family declarations present.\n", -1);
+        else
+            sb_append(&sb, "  [SUGGEST] Consider declaring font-family with a proper font stack.\n", -1);
+
+        if (ContainsSubstringCI(content, "letter-spacing"))
+            sb_append(&sb, "  [FOUND] letter-spacing used.\n", -1);
+    }
+
+    // Color
+    if (!checks || strstr(checks, "color") || !checks[0])
+    {
+        sb_append(&sb, "\nCOLOR & CONTRAST:\n", -1);
+        int hexCount = 0;
+        const char* p = content;
+        while ((p = strstr(p, "#")) != NULL) { hexCount++; p++; }
+        sb_appendf(&sb, "  [INFO] Found %d hex color references.\n", hexCount);
+
+        if (strstr(content, "oklch") || strstr(content, "OKLCH"))
+            sb_append(&sb, "  [GOOD] OKLCH color space used (perceptually uniform).\n", -1);
+        if (strstr(content, "rgb") || strstr(content, "rgba"))
+            sb_append(&sb, "  [INFO] RGB/RGBA colors found.\n", -1);
+        if (strstr(content, "hsl") || strstr(content, "hsla"))
+            sb_append(&sb, "  [INFO] HSL/HSLA colors found.\n", -1);
+        if (ContainsSubstringCI(content, "contrast") || ContainsSubstringCI(content, "WCAG"))
+            sb_append(&sb, "  [GOOD] Contrast/WCAG references found.\n", -1);
+        else
+            sb_append(&sb, "  [SUGGEST] Consider verifying WCAG AA contrast ratios (4.5:1 for text, 3:1 for large text).\n", -1);
+    }
+
+    // Spacing
+    if (!checks || strstr(checks, "spacing") || !checks[0])
+    {
+        sb_append(&sb, "\nSPACING:\n", -1);
+        BOOL hasPx = strstr(content, "px") != NULL;
+        BOOL hasRem = strstr(content, "rem") != NULL;
+        BOOL hasEm = strstr(content, "em") != NULL;
+        if (hasPx && (hasRem || hasEm))
+            sb_append(&sb, "  [WARN] Mixed units (px + rem/em). Consider standardizing on rem for consistency.\n", -1);
+        else if (hasRem)
+            sb_append(&sb, "  [GOOD] Using rem units for consistent spacing.\n", -1);
+        else if (hasPx)
+            sb_append(&sb, "  [INFO] Using px units. Consider rem for responsive design.\n", -1);
+
+        if (strstr(content, "gap") || strstr(content, "grid-gap"))
+            sb_append(&sb, "  [GOOD] CSS gap property used for layout spacing.\n", -1);
+    }
+
+    // Hierarchy
+    if (!checks || strstr(checks, "hierarchy") || !checks[0])
+    {
+        sb_append(&sb, "\nHIERARCHY:\n", -1);
+        for (int h = 1; h <= 6; h++)
+        {
+            char tag[8];
+            snprintf(tag, sizeof(tag), "<h%d", h);
+            if (strstr(content, tag))
+                sb_appendf(&sb, "  [FOUND] h%d heading tag used.\n", h);
+        }
+        if (strstr(content, "z-index"))
+            sb_append(&sb, "  [INFO] z-index declarations found. Verify stacking order is intentional.\n", -1);
+    }
+
+    // Accessibility
+    if (checks && strstr(checks, "a11y"))
+    {
+        sb_append(&sb, "\nACCESSIBILITY:\n", -1);
+        if (ContainsSubstringCI(content, "aria-"))
+            sb_append(&sb, "  [GOOD] ARIA attributes found.\n", -1);
+        else
+            sb_append(&sb, "  [SUGGEST] Consider adding ARIA attributes for screen readers.\n", -1);
+        if (ContainsSubstringCI(content, "alt=") || ContainsSubstringCI(content, "alt ="))
+            sb_append(&sb, "  [GOOD] alt attributes found on images.\n", -1);
+        if (ContainsSubstringCI(content, "role="))
+            sb_append(&sb, "  [GOOD] ARIA role attributes found.\n", -1);
+        if (ContainsSubstringCI(content, ":focus") || ContainsSubstringCI(content, "focus-visible"))
+            sb_append(&sb, "  [GOOD] Focus styles defined.\n", -1);
+        else
+            sb_append(&sb, "  [SUGGEST] Consider adding :focus-visible styles for keyboard navigation.\n", -1);
+    }
+
+    // Append truncated file content for AI to do deeper analysis
+    sb_append(&sb, "\n--- File excerpt (first 200 lines) ---\n", -1);
+    int lineCount = 0;
+    const char* lp = content;
+    while (*lp && lineCount < 200)
+    {
+        const char* eol = strchr(lp, '\n');
+        if (!eol) eol = lp + strlen(lp);
+        int lineLen = (int)(eol - lp);
+        if (lineLen > 300) lineLen = 300;
+        sb_appendf(&sb, "%4d| ", lineCount + 1);
+        sb_append(&sb, lp, lineLen);
+        sb_append(&sb, "\n", 1);
+        lp = *eol ? eol + 1 : eol;
+        lineCount++;
+    }
+
+    free(content);
+    return sb.data;
+}
+
+static char* Tool_ContextStore(const char* operation, const char* key,
+                                const char* value, const char* query)
+{
+    char storePath[MAX_PATH];
+    char cwd[MAX_PATH];
+    GetCurrentDirectoryA(MAX_PATH, cwd);
+    snprintf(storePath, sizeof(storePath), "%s\\.bikode\\context-store.json", cwd);
+
+    if (!operation || !operation[0])
+        return _strdup("Error: operation parameter is required (store, retrieve, or list).");
+
+    // Ensure .bikode directory exists
+    {
+        char dirPath[MAX_PATH];
+        snprintf(dirPath, sizeof(dirPath), "%s\\.bikode", cwd);
+        CreateDirectoryA(dirPath, NULL);
+    }
+
+    if (_stricmp(operation, "store") == 0)
+    {
+        if (!key || !key[0])
+            return _strdup("Error: key parameter is required for store operation.");
+        if (!value || !value[0])
+            return _strdup("Error: value parameter is required for store operation.");
+
+        // Read existing store
+        HANDLE hFile = CreateFileA(storePath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        StrBuf existing;
+        sb_init(&existing, 1024);
+        if (hFile != INVALID_HANDLE_VALUE)
+        {
+            char buf[4096];
+            DWORD read;
+            while (ReadFile(hFile, buf, sizeof(buf) - 1, &read, NULL) && read > 0)
+            {
+                buf[read] = '\0';
+                sb_append(&existing, buf, (int)read);
+            }
+            CloseHandle(hFile);
+        }
+
+        // Build new JSON - simple approach: rebuild from scratch
+        // Parse existing entries
+        StrBuf out;
+        sb_init(&out, 2048);
+        sb_append(&out, "{\n", -1);
+
+        // Add existing entries (except the key we're updating)
+        if (existing.data && existing.len > 2)
+        {
+            // Simple key-value extraction from existing JSON
+            const char* p = existing.data;
+            while ((p = strstr(p, "\"")) != NULL)
+            {
+                p++; // skip opening quote
+                const char* keyStart = p;
+                const char* keyEnd = strchr(p, '"');
+                if (!keyEnd) break;
+
+                // Skip colon
+                const char* afterKey = keyEnd + 1;
+                while (*afterKey == ' ' || *afterKey == ':' || *afterKey == '\t' || *afterKey == '\n' || *afterKey == '\r') afterKey++;
+                if (*afterKey != '"') { p = afterKey; continue; }
+
+                int existingKeyLen = (int)(keyEnd - keyStart);
+                char existingKey[256];
+                if (existingKeyLen < (int)sizeof(existingKey))
+                {
+                    memcpy(existingKey, keyStart, existingKeyLen);
+                    existingKey[existingKeyLen] = '\0';
+
+                    // Skip if this is the key we're updating
+                    if (strcmp(existingKey, key) != 0)
+                    {
+                        afterKey++; // skip value opening quote
+                        const char* valEnd = afterKey;
+                        while (*valEnd && (*valEnd != '"' || *(valEnd - 1) == '\\')) valEnd++;
+
+                        if (out.len > 3) sb_append(&out, ",\n", -1);
+                        sb_append(&out, "  \"", -1);
+                        sb_append(&out, existingKey, existingKeyLen);
+                        sb_append(&out, "\": \"", -1);
+                        sb_append(&out, afterKey, (int)(valEnd - afterKey));
+                        sb_append(&out, "\"", -1);
+                    }
+                }
+                p = afterKey;
+            }
+        }
+
+        // Add the new key-value
+        if (out.len > 3) sb_append(&out, ",\n", -1);
+        sb_append(&out, "  \"", -1);
+        sb_append(&out, key, -1);
+        sb_append(&out, "\": \"", -1);
+        // Escape the value
+        for (const char* v = value; *v; v++)
+        {
+            if (*v == '"') sb_append(&out, "\\\"", 2);
+            else if (*v == '\\') sb_append(&out, "\\\\", 2);
+            else if (*v == '\n') sb_append(&out, "\\n", 2);
+            else sb_append(&out, v, 1);
+        }
+        sb_append(&out, "\"\n}\n", -1);
+
+        sb_free(&existing);
+
+        // Write back
+        hFile = CreateFileA(storePath, GENERIC_WRITE, 0, NULL,
+                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile != INVALID_HANDLE_VALUE)
+        {
+            DWORD written;
+            WriteFile(hFile, out.data, out.len, &written, NULL);
+            CloseHandle(hFile);
+        }
+        sb_free(&out);
+
+        StrBuf result;
+        sb_init(&result, 256);
+        sb_appendf(&result, "Stored: %s = %s", key, value);
+        return result.data;
+    }
+    else if (_stricmp(operation, "retrieve") == 0)
+    {
+        if (!query || !query[0])
+            return _strdup("Error: query parameter is required for retrieve operation.");
+
+        HANDLE hFile = CreateFileA(storePath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile == INVALID_HANDLE_VALUE)
+            return _strdup("Context store is empty. No entries stored yet.");
+
+        char buf[16384];
+        DWORD read;
+        ReadFile(hFile, buf, sizeof(buf) - 1, &read, NULL);
+        buf[read] = '\0';
+        CloseHandle(hFile);
+
+        // Fuzzy match: search keys and values for query terms
+        StrBuf result;
+        sb_init(&result, 1024);
+        sb_appendf(&result, "Context store results for \"%s\":\n\n", query);
+
+        int found = 0;
+        const char* p = buf;
+        while ((p = strstr(p, "\"")) != NULL)
+        {
+            p++;
+            const char* keyStart = p;
+            const char* keyEnd = strchr(p, '"');
+            if (!keyEnd) break;
+
+            const char* afterKey = keyEnd + 1;
+            while (*afterKey == ' ' || *afterKey == ':' || *afterKey == '\t') afterKey++;
+            if (*afterKey != '"') { p = afterKey; continue; }
+            afterKey++;
+            const char* valEnd = afterKey;
+            while (*valEnd && (*valEnd != '"' || *(valEnd - 1) == '\\')) valEnd++;
+
+            int klen = (int)(keyEnd - keyStart);
+            int vlen = (int)(valEnd - afterKey);
+            char k[256], v[4096];
+            if (klen >= (int)sizeof(k)) klen = (int)sizeof(k) - 1;
+            if (vlen >= (int)sizeof(v)) vlen = (int)sizeof(v) - 1;
+            memcpy(k, keyStart, klen); k[klen] = '\0';
+            memcpy(v, afterKey, vlen); v[vlen] = '\0';
+
+            if (ContainsSubstringCI(k, query) || ContainsSubstringCI(v, query))
+            {
+                sb_appendf(&result, "  %s: %s\n", k, v);
+                found++;
+            }
+            p = valEnd + 1;
+        }
+        if (found == 0)
+            sb_append(&result, "  (no matching entries found)\n", -1);
+
+        return result.data;
+    }
+    else if (_stricmp(operation, "list") == 0)
+    {
+        HANDLE hFile = CreateFileA(storePath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile == INVALID_HANDLE_VALUE)
+            return _strdup("Context store is empty. No entries stored yet.");
+
+        char buf[16384];
+        DWORD read;
+        ReadFile(hFile, buf, sizeof(buf) - 1, &read, NULL);
+        buf[read] = '\0';
+        CloseHandle(hFile);
+
+        StrBuf result;
+        sb_init(&result, 1024);
+        sb_append(&result, "Context store entries:\n\n", -1);
+
+        const char* p = buf;
+        int count = 0;
+        while ((p = strstr(p, "\"")) != NULL)
+        {
+            p++;
+            const char* keyEnd = strchr(p, '"');
+            if (!keyEnd) break;
+
+            const char* afterKey = keyEnd + 1;
+            while (*afterKey == ' ' || *afterKey == ':' || *afterKey == '\t') afterKey++;
+            if (*afterKey != '"') { p = afterKey; continue; }
+            afterKey++;
+            const char* valEnd = afterKey;
+            while (*valEnd && (*valEnd != '"' || *(valEnd - 1) == '\\')) valEnd++;
+
+            int klen = (int)(keyEnd - p);
+            int vlen = (int)(valEnd - afterKey);
+            char k[256];
+            if (klen >= (int)sizeof(k)) klen = (int)sizeof(k) - 1;
+            memcpy(k, p, klen); k[klen] = '\0';
+
+            sb_appendf(&result, "  %s", k);
+            if (vlen > 80)
+                sb_appendf(&result, ": %.80s...\n", afterKey);
+            else
+            {
+                char v[256];
+                if (vlen >= (int)sizeof(v)) vlen = (int)sizeof(v) - 1;
+                memcpy(v, afterKey, vlen); v[vlen] = '\0';
+                sb_appendf(&result, ": %s\n", v);
+            }
+            count++;
+            p = valEnd + 1;
+        }
+        if (count == 0)
+            sb_append(&result, "  (empty)\n", -1);
+
+        return result.data;
+    }
+
+    return _strdup("Error: operation must be 'store', 'retrieve', or 'list'.");
+}
+
 // Dispatch a single tool call
 static char* ExecuteTool(const ToolCall* tc)
 {
@@ -2323,6 +2898,14 @@ static char* ExecuteTool(const ToolCall* tc)
         return Tool_WebSearch(tc->command ? tc->command : tc->content);
     if (strcmp(tc->name, "gif_search") == 0)
         return Tool_GifSearch(tc->command ? tc->command : tc->content);
+    if (strcmp(tc->name, "eval_prompt") == 0)
+        return Tool_EvalPrompt(tc->content, tc->cwd);
+    if (strcmp(tc->name, "red_team_prompt") == 0)
+        return Tool_RedTeamPrompt(tc->content, tc->cwd);
+    if (strcmp(tc->name, "design_audit") == 0)
+        return Tool_DesignAudit(tc->path, tc->cwd);
+    if (strcmp(tc->name, "context_store") == 0)
+        return Tool_ContextStore(tc->command, tc->path, tc->newText, tc->content);
 
     char err[128];
     snprintf(err, sizeof(err), "Error: Unknown tool '%s'", tc->name);
@@ -2525,6 +3108,16 @@ static AgentIntent DetectIntent(const char* msg)
     if (ContainsSubstringCI(msg, "theme") || ContainsSubstringCI(msg, "layout") || ContainsSubstringCI(msg, "density")) return INTENT_DESIGN_CHANGE;
     if (ContainsSubstringCI(msg, "install support") || ContainsSubstringCI(msg, "provider") || ContainsSubstringCI(msg, "model ")) return INTENT_SELF_MODIFY_IDE;
     if (ContainsSubstringCI(msg, "refactor")) return INTENT_REFACTOR;
+    /* Agency: security & hardening → review role */
+    if (ContainsSubstringCI(msg, "security") || ContainsSubstringCI(msg, "vulnerab") || ContainsSubstringCI(msg, "harden") || ContainsSubstringCI(msg, "audit")) return INTENT_REVIEW;
+    /* Agency: eval & red-team → run role */
+    if (ContainsSubstringCI(msg, "evaluat") || ContainsSubstringCI(msg, "red team") || ContainsSubstringCI(msg, "benchmark") || ContainsSubstringCI(msg, "regression guard")) return INTENT_RUN;
+    /* Agency: architecture & design quality → design */
+    if (ContainsSubstringCI(msg, "architect") || ContainsSubstringCI(msg, "typography") || ContainsSubstringCI(msg, "color contrast") || ContainsSubstringCI(msg, "accessibility") || ContainsSubstringCI(msg, "a11y")) return INTENT_DESIGN_CHANGE;
+    /* Agency: devops & SRE → build role */
+    if (ContainsSubstringCI(msg, "deploy") || ContainsSubstringCI(msg, "pipeline") || ContainsSubstringCI(msg, "ci/cd") || ContainsSubstringCI(msg, "infra") || ContainsSubstringCI(msg, "incident")) return INTENT_BUILD;
+    /* Agency: performance & optimization → refactor role */
+    if (ContainsSubstringCI(msg, "optimi") || ContainsSubstringCI(msg, "perf") || ContainsSubstringCI(msg, "slow") || ContainsSubstringCI(msg, "latency")) return INTENT_REFACTOR;
     if (ContainsSubstringCI(msg, "fix") || ContainsSubstringCI(msg, "implement") || ContainsSubstringCI(msg, "patch") || ContainsSubstringCI(msg, "change ")) return INTENT_PATCH;
     if (ContainsSubstringCI(msg, "run ") || ContainsSubstringCI(msg, "test") || ContainsSubstringCI(msg, "execute")) return INTENT_RUN;
     if (ContainsSubstringCI(msg, "review")) return INTENT_REVIEW;
@@ -2618,13 +3211,13 @@ static AgentRole SelectRoleFromIntent(AgentIntent intent)
 static const AgentRoleContract* GetRoleContract(AgentRole role)
 {
     static const AgentRoleContract contracts[] = {
-        { AGENT_ROLE_PLANNER, "Planner Agent", "semantic_search,read_file,get_active_document,list_dir,open_file", 6, 1 },
-        { AGENT_ROLE_IMPLEMENTER, "Implementer Agent", "semantic_search,read_file,get_active_document,write_file,replace_in_file,open_file,insert_in_editor,replace_editor_content,new_file_in_editor,list_dir", 12, 0 },
-        { AGENT_ROLE_REVIEWER, "Reviewer Agent", "semantic_search,read_file,get_active_document,list_dir,open_file,run_command", 8, 1 },
+        { AGENT_ROLE_PLANNER, "Planner Agent", "semantic_search,read_file,get_active_document,list_dir,open_file,context_store,eval_prompt", 6, 1 },
+        { AGENT_ROLE_IMPLEMENTER, "Implementer Agent", "semantic_search,read_file,get_active_document,write_file,replace_in_file,open_file,insert_in_editor,replace_editor_content,new_file_in_editor,list_dir,design_audit,context_store", 12, 0 },
+        { AGENT_ROLE_REVIEWER, "Reviewer Agent", "semantic_search,read_file,get_active_document,list_dir,open_file,run_command,eval_prompt,red_team_prompt,design_audit", 8, 1 },
         { AGENT_ROLE_DEBUG, "Debug Agent", "semantic_search,read_file,get_active_document,run_command,list_dir,replace_in_file", 10, 0 },
-        { AGENT_ROLE_TEST, "Test Agent", "semantic_search,read_file,get_active_document,run_command,list_dir", 8, 1 },
+        { AGENT_ROLE_TEST, "Test Agent", "semantic_search,read_file,get_active_document,run_command,list_dir,eval_prompt,red_team_prompt", 8, 1 },
         { AGENT_ROLE_REFACTOR, "Refactor Agent", "semantic_search,read_file,get_active_document,replace_in_file,write_file,open_file,list_dir", 12, 0 },
-        { AGENT_ROLE_RESEARCH, "Research Agent", "semantic_search,read_file,get_active_document,list_dir,web_search", 6, 1 },
+        { AGENT_ROLE_RESEARCH, "Research Agent", "semantic_search,read_file,get_active_document,list_dir,web_search,context_store", 6, 1 },
         { AGENT_ROLE_SETUP, "Setup Agent", "semantic_search,read_file,get_active_document,list_dir,make_dir,init_repo,run_command,write_file", 10, 0 }
     };
 

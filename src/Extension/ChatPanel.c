@@ -121,7 +121,7 @@
 #define CHAT_SEND_SIZE          32
 #define CHAT_BTN_GAP             6
 #define CHAT_HDR_BTN_SIZE       24
-#define CHAT_HEADER_MODE_COUNT   4
+#define CHAT_HEADER_MODE_COUNT   5
 #define CHAT_HEADER_MODE_H      24
 #define CHAT_HEADER_MODE_GAP     2
 #define CHAT_HEADER_ACTION_W    92
@@ -272,6 +272,53 @@ static int      s_lastLayoutEditorHeight = 0;
 #define IDM_CHAT_PROMPT_REVIEW   0xFCE2
 #define IDM_CHAT_PROMPT_PLAN     0xFCE3
 #define IDM_CHAT_PROMPT_COMMANDS 0xFCE4
+
+/* Agency persona prompts */
+#define IDM_CHAT_PERSONA_ARCHITECT    0xFCA0
+#define IDM_CHAT_PERSONA_CODE_REVIEW  0xFCA1
+#define IDM_CHAT_PERSONA_SECURITY     0xFCA2
+#define IDM_CHAT_PERSONA_FRONTEND     0xFCA3
+#define IDM_CHAT_PERSONA_DEVOPS       0xFCA4
+#define IDM_CHAT_PERSONA_DB_OPTIMIZER 0xFCA5
+#define IDM_CHAT_PERSONA_BACKEND      0xFCA6
+#define IDM_CHAT_PERSONA_RAPID_PROTO  0xFCA7
+/* Promptfoo persona prompts */
+#define IDM_CHAT_PERSONA_EVALUATOR    0xFCA8
+#define IDM_CHAT_PERSONA_RED_TEAM     0xFCA9
+#define IDM_CHAT_PERSONA_TECH_WRITER  0xFCAA
+#define IDM_CHAT_PERSONA_SRE          0xFCAB
+/* Impeccable persona prompts */
+#define IDM_CHAT_PERSONA_DESIGN_AUDIT 0xFCAC
+#define IDM_CHAT_PERSONA_DESIGN_CRIT  0xFCAD
+#define IDM_CHAT_PERSONA_TYPOGRAPHY   0xFCAE
+#define IDM_CHAT_PERSONA_COLOR        0xFCAF
+/* OpenViking persona prompts */
+#define IDM_CHAT_PERSONA_CONTEXT_ARCH 0xFCB0
+#define IDM_CHAT_PERSONA_MEMORY       0xFCB1
+#define IDM_CHAT_PERSONA_UX_ARCH      0xFCB2
+#define IDM_CHAT_PERSONA_UI_DESIGNER  0xFCB3
+#define IDM_CHAT_PERSONA_UX_RESEARCH  0xFCB4
+#define IDM_CHAT_PERSONA_PERF_BENCH   0xFCB5
+#define IDM_CHAT_PERSONA_ACCESSIBILITY 0xFCB6
+#define IDM_CHAT_PERSONA_API_TESTER   0xFCB7
+#define IDM_CHAT_PERSONA_REALITY      0xFCB8
+#define IDM_CHAT_PERSONA_SPRINT       0xFCB9
+#define IDM_CHAT_PERSONA_FEEDBACK     0xFCBA
+#define IDM_CHAT_PERSONA_TREND        0xFCBB
+#define IDM_CHAT_PERSONA_ORCHESTRATOR 0xFCBC
+#define IDM_CHAT_PERSONA_GIT_WORKFLOW 0xFCBD
+#define IDM_CHAT_PERSONA_INCIDENT     0xFCBE
+/* Clear persona */
+#define IDM_CHAT_PERSONA_CLEAR        0xFCBF
+#define IDM_CHAT_PERSONA_MODEL_COMPARE 0xFCC0
+#define IDM_CHAT_PERSONA_REGRESSION   0xFCC1
+#define IDM_CHAT_PERSONA_DESIGN_POLISH 0xFCC2
+#define IDM_CHAT_PERSONA_MOTION       0xFCC3
+#define IDM_CHAT_PERSONA_RETRIEVAL    0xFCC4
+
+// Active persona (injected into system prompt)
+static char  s_szActivePersona[512] = { 0 };
+static WCHAR s_wszActivePersonaLabel[64] = { 0 };
 
 // Pending attachments (before send)
 static ChatAttachment s_pendingAttachments[AI_MAX_CHAT_ATTACHMENTS];
@@ -1767,17 +1814,27 @@ static void DrawButtonFace(HDC hdc, const RECT* rc, BOOL hover, BOOL down, BOOL 
 
 static void DrawPromptDeckChip(HDC hdc, const RECT* rc)
 {
+    BOOL hasPersona;
+    COLORREF accentColor;
+    LPCWSTR chipLabel;
+
     if (!rc || IsRectEmpty(rc))
         return;
 
-    BikodeTheme_DrawChip(hdc, rc, L"Prompt deck",
+    hasPersona = s_wszActivePersonaLabel[0] != L'\0';
+    chipLabel = hasPersona ? s_wszActivePersonaLabel : L"Prompt deck";
+    accentColor = hasPersona ? BikodeTheme_GetColor(BKCLR_HOT_MAGENTA) : BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW);
+
+    BikodeTheme_DrawChip(hdc, rc, chipLabel,
         s_bPromptDeckHover
             ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN), 24)
-            : BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), BikodeTheme_GetColor(BKCLR_APP_BG), 228),
-        s_bPromptDeckHover ? BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN) : BikodeTheme_GetColor(BKCLR_STROKE_SOFT),
+            : (hasPersona
+                ? BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_RAISED), BikodeTheme_GetColor(BKCLR_HOT_MAGENTA), 20)
+                : BikodeTheme_Mix(BikodeTheme_GetColor(BKCLR_SURFACE_MAIN), BikodeTheme_GetColor(BKCLR_APP_BG), 228)),
+        s_bPromptDeckHover ? BikodeTheme_GetColor(BKCLR_ELECTRIC_CYAN) : (hasPersona ? BikodeTheme_GetColor(BKCLR_HOT_MAGENTA) : BikodeTheme_GetColor(BKCLR_STROKE_SOFT)),
         s_bPromptDeckHover ? BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY) : BikodeTheme_GetColor(BKCLR_TEXT_SECONDARY),
         BikodeTheme_GetFont(BKFONT_MONO_SMALL), TRUE,
-        BikodeTheme_GetColor(BKCLR_SIGNAL_YELLOW));
+        accentColor);
 }
 
 static void PaintHeaderModeDock(HDC hdc, const RECT* rc)
@@ -3078,8 +3135,8 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
     SetRect(&s_rcHeaderModeDock, modesLeft - 4, modeTop - 3, actionLeft - 10, modeTop + CHAT_HEADER_MODE_H + 3);
 
     {
-        const int baseWidths[CHAT_HEADER_MODE_COUNT] = { 42, 58, 62, 52 };
-        const int baseWidthSum = 214;
+        const int baseWidths[CHAT_HEADER_MODE_COUNT] = { 42, 58, 62, 52, 52 };
+        const int baseWidthSum = 266;
         int dockLeft = s_rcHeaderModeDock.left + 5;
         int dockRight = s_rcHeaderModeDock.right - 5;
         int widthBudget = max(0, dockRight - dockLeft - (CHAT_HEADER_MODE_GAP * (CHAT_HEADER_MODE_COUNT - 1)));
@@ -3282,7 +3339,8 @@ static const EAIChatAccessMode kHeaderModes[CHAT_HEADER_MODE_COUNT] = {
     AI_CHAT_ACCESS_API_PROVIDER,
     AI_CHAT_ACCESS_CODEX,
     AI_CHAT_ACCESS_CLAUDE,
-    AI_CHAT_ACCESS_CODEX_CLAUDE
+    AI_CHAT_ACCESS_CODEX_CLAUDE,
+    AI_CHAT_ACCESS_LOCAL
 };
 
 static EAIChatAccessMode GetCurrentChatAccessMode(void)
@@ -3299,6 +3357,7 @@ static LPCWSTR GetHeaderModeLabel(int idx)
     case 1: return L"Codex";
     case 2: return L"Claude";
     case 3: return L"Relay";
+    case 4: return L"Local";
     default: return L"AI";
     }
 }
@@ -3312,6 +3371,8 @@ static COLORREF GetHeaderModeAccent(EAIChatAccessMode mode)
     case AI_CHAT_ACCESS_CLAUDE:
         return BikodeTheme_GetColor(BKCLR_HOT_MAGENTA);
     case AI_CHAT_ACCESS_CODEX_CLAUDE:
+        return BikodeTheme_GetColor(BKCLR_SUCCESS_GREEN);
+    case AI_CHAT_ACCESS_LOCAL:
         return BikodeTheme_GetColor(BKCLR_SUCCESS_GREEN);
     case AI_CHAT_ACCESS_API_PROVIDER:
     default:
@@ -3341,6 +3402,11 @@ static void GetHeaderActionLabel(WCHAR* out, int cchOut)
     if (mode == AI_CHAT_ACCESS_API_PROVIDER)
     {
         lstrcpynW(out, L"Settings", cchOut);
+        return;
+    }
+    if (mode == AI_CHAT_ACCESS_LOCAL)
+    {
+        lstrcpynW(out, L"Detect", cchOut);
         return;
     }
 
@@ -3520,9 +3586,36 @@ static void SetComposerPrompt(LPCWSTR wszPrompt)
     SetFocus(s_hwndInput);
 }
 
+static void SetActivePersona(const char* persona, LPCWSTR label)
+{
+    if (persona && persona[0])
+    {
+        StringCchCopyA(s_szActivePersona, ARRAYSIZE(s_szActivePersona), persona);
+        StringCchCopyW(s_wszActivePersonaLabel, ARRAYSIZE(s_wszActivePersonaLabel), label ? label : L"Agent");
+        {
+            WCHAR wszMsg[256];
+            StringCchPrintfW(wszMsg, ARRAYSIZE(wszMsg), L"Persona active: %s. Your next message uses this specialist.", s_wszActivePersonaLabel);
+            ChatPanel_AppendSystem(NULL); /* clear status */
+            {
+                char szMsg[256];
+                WideCharToMultiByte(CP_UTF8, 0, wszMsg, -1, szMsg, ARRAYSIZE(szMsg), NULL, NULL);
+                ChatPanel_AppendSystem(szMsg);
+            }
+        }
+    }
+    else
+    {
+        s_szActivePersona[0] = '\0';
+        s_wszActivePersonaLabel[0] = L'\0';
+        ChatPanel_AppendSystem("Persona cleared. Using automatic role detection.");
+    }
+    if (s_hwndPanel)
+        InvalidateRect(s_hwndPanel, NULL, FALSE);
+}
+
 static void TriggerPromptDeck(void)
 {
-    HMENU hMenu;
+    HMENU hMenu, hEngSub, hAgencyDesignSub, hTestingSub, hProductSub, hOrchSub, hEvalSub, hDesignSub, hCtxSub;
     RECT rcAnchor;
     POINT pt;
     UINT cmd;
@@ -3538,6 +3631,78 @@ static void TriggerPromptDeck(void)
     AppendMenuW(hMenu, MF_STRING, IDM_CHAT_PROMPT_BUG,      L"Find the likeliest bug");
     AppendMenuW(hMenu, MF_STRING, IDM_CHAT_PROMPT_REVIEW,   L"Review for risks");
     AppendMenuW(hMenu, MF_STRING, IDM_CHAT_PROMPT_PLAN,     L"Plan the smallest safe fix");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+
+    /* Agency personas: Engineering */
+    hEngSub = CreatePopupMenu();
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_ARCHITECT,    L"Software Architect");
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_CODE_REVIEW,  L"Code Reviewer");
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_SECURITY,     L"Security Engineer");
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_FRONTEND,     L"Frontend Developer");
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_BACKEND,      L"Backend Architect");
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_DEVOPS,       L"DevOps Automator");
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_DB_OPTIMIZER, L"Database Optimizer");
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_RAPID_PROTO,  L"Rapid Prototyper");
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_TECH_WRITER,  L"Technical Writer");
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_SRE,          L"SRE");
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_GIT_WORKFLOW, L"Git Workflow Master");
+    AppendMenuW(hEngSub, MF_STRING, IDM_CHAT_PERSONA_INCIDENT,     L"Incident Commander");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hEngSub, L"Engineering Personas");
+
+    hAgencyDesignSub = CreatePopupMenu();
+    AppendMenuW(hAgencyDesignSub, MF_STRING, IDM_CHAT_PERSONA_UX_ARCH,     L"UX Architect");
+    AppendMenuW(hAgencyDesignSub, MF_STRING, IDM_CHAT_PERSONA_UI_DESIGNER, L"UI Designer");
+    AppendMenuW(hAgencyDesignSub, MF_STRING, IDM_CHAT_PERSONA_UX_RESEARCH, L"UX Researcher");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hAgencyDesignSub, L"Design Personas");
+
+    hTestingSub = CreatePopupMenu();
+    AppendMenuW(hTestingSub, MF_STRING, IDM_CHAT_PERSONA_PERF_BENCH,    L"Performance Benchmarker");
+    AppendMenuW(hTestingSub, MF_STRING, IDM_CHAT_PERSONA_ACCESSIBILITY, L"Accessibility Auditor");
+    AppendMenuW(hTestingSub, MF_STRING, IDM_CHAT_PERSONA_API_TESTER,    L"API Tester");
+    AppendMenuW(hTestingSub, MF_STRING, IDM_CHAT_PERSONA_REALITY,       L"Reality Checker");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hTestingSub, L"Testing Personas");
+
+    hProductSub = CreatePopupMenu();
+    AppendMenuW(hProductSub, MF_STRING, IDM_CHAT_PERSONA_SPRINT,   L"Sprint Prioritizer");
+    AppendMenuW(hProductSub, MF_STRING, IDM_CHAT_PERSONA_FEEDBACK, L"Feedback Synthesizer");
+    AppendMenuW(hProductSub, MF_STRING, IDM_CHAT_PERSONA_TREND,    L"Trend Researcher");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hProductSub, L"Product Personas");
+
+    hOrchSub = CreatePopupMenu();
+    AppendMenuW(hOrchSub, MF_STRING, IDM_CHAT_PERSONA_ORCHESTRATOR, L"Orchestrator");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hOrchSub, L"Agency Orchestration");
+
+    /* Eval & Red Team personas */
+    hEvalSub = CreatePopupMenu();
+    AppendMenuW(hEvalSub, MF_STRING, IDM_CHAT_PERSONA_EVALUATOR,    L"Prompt Evaluator");
+    AppendMenuW(hEvalSub, MF_STRING, IDM_CHAT_PERSONA_RED_TEAM,     L"Red Teamer");
+    AppendMenuW(hEvalSub, MF_STRING, IDM_CHAT_PERSONA_MODEL_COMPARE, L"Model Comparator");
+    AppendMenuW(hEvalSub, MF_STRING, IDM_CHAT_PERSONA_REGRESSION,   L"Regression Guard");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hEvalSub, L"Eval && Red Team");
+
+    /* Design quality personas */
+    hDesignSub = CreatePopupMenu();
+    AppendMenuW(hDesignSub, MF_STRING, IDM_CHAT_PERSONA_DESIGN_AUDIT, L"Design Auditor");
+    AppendMenuW(hDesignSub, MF_STRING, IDM_CHAT_PERSONA_DESIGN_CRIT,  L"Design Critic");
+    AppendMenuW(hDesignSub, MF_STRING, IDM_CHAT_PERSONA_DESIGN_POLISH, L"Design Polisher");
+    AppendMenuW(hDesignSub, MF_STRING, IDM_CHAT_PERSONA_TYPOGRAPHY,   L"Typography Expert");
+    AppendMenuW(hDesignSub, MF_STRING, IDM_CHAT_PERSONA_COLOR,        L"Color Specialist");
+    AppendMenuW(hDesignSub, MF_STRING, IDM_CHAT_PERSONA_MOTION,       L"Motion Designer");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hDesignSub, L"Frontend Design");
+
+    /* Context & Memory personas */
+    hCtxSub = CreatePopupMenu();
+    AppendMenuW(hCtxSub, MF_STRING, IDM_CHAT_PERSONA_CONTEXT_ARCH, L"Context Architect");
+    AppendMenuW(hCtxSub, MF_STRING, IDM_CHAT_PERSONA_MEMORY,       L"Memory Curator");
+    AppendMenuW(hCtxSub, MF_STRING, IDM_CHAT_PERSONA_RETRIEVAL,    L"Retrieval Optimizer");
+    AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hCtxSub, L"Context && Memory");
+
+    if (s_szActivePersona[0])
+    {
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hMenu, MF_STRING, IDM_CHAT_PERSONA_CLEAR, L"Clear active persona");
+    }
+
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hMenu, MF_STRING, IDM_CHAT_PROMPT_COMMANDS, L"Open Command Palette...");
 
@@ -3571,6 +3736,269 @@ static void TriggerPromptDeck(void)
             PostMessageW(hwndMain, WM_COMMAND, MAKEWPARAM(IDM_BIKO_COMMAND_PALETTE, 0), 0);
         break;
     }
+    /* --- Engineering personas --- */
+    case IDM_CHAT_PERSONA_ARCHITECT:
+        SetActivePersona(
+            "You are Software Architect. Design maintainable, scalable systems aligned with business domains. "
+            "Think in bounded contexts and trade-off matrices. No architecture astronautics. "
+            "Domain first, technology second. Present at least two options with trade-offs. "
+            "Use context_store to persist architectural decisions and eval_prompt to validate prompt quality.",
+            L"Software Architect");
+        break;
+    case IDM_CHAT_PERSONA_CODE_REVIEW:
+        SetActivePersona(
+            "You are Code Reviewer. Provide thorough, constructive reviews focused on correctness, security, "
+            "maintainability, and performance. Prioritize as blockers, suggestions, nits. "
+            "Be specific with line references. Praise good patterns.",
+            L"Code Reviewer");
+        break;
+    case IDM_CHAT_PERSONA_SECURITY:
+        SetActivePersona(
+            "You are Security Engineer. Conduct threat modeling, vulnerability assessment, and secure code review. "
+            "Apply STRIDE analysis. Review for OWASP Top 10 and CWE Top 25. "
+            "Assume all input is malicious. Pair findings with actionable remediation. "
+            "Use red_team_prompt and eval_prompt tools to systematically analyze prompts and code for vulnerabilities.",
+            L"Security Engineer");
+        break;
+    case IDM_CHAT_PERSONA_FRONTEND:
+        SetActivePersona(
+            "You are Frontend Developer. Build responsive, accessible, performant web applications. "
+            "Focus on Core Web Vitals, component architecture, and mobile-first responsive design. "
+            "Use distinctive design choices, not generic templates. "
+            "Use design_audit tool to check CSS/HTML files for typography, color contrast, and accessibility issues.",
+            L"Frontend Dev");
+        break;
+    case IDM_CHAT_PERSONA_BACKEND:
+        SetActivePersona(
+            "You are Backend Architect. Design and implement scalable APIs, data models, and service boundaries. "
+            "Think in failure modes, contracts, migrations, and observability. "
+            "Choose boring, reliable patterns before cleverness. "
+            "Include security, validation, monitoring, and rollback in the design.",
+            L"Backend Architect");
+        break;
+    case IDM_CHAT_PERSONA_DEVOPS:
+        SetActivePersona(
+            "You are DevOps Automator. Design Infrastructure as Code, CI/CD pipelines, and cloud operations. "
+            "Implement zero-downtime deployment strategies. Include monitoring, alerting, and automated rollback.",
+            L"DevOps");
+        break;
+    case IDM_CHAT_PERSONA_DB_OPTIMIZER:
+        SetActivePersona(
+            "You are Database Optimizer. Think in query plans, indexes, and connection pools. "
+            "Design schemas that scale. Debug slow queries with EXPLAIN ANALYZE. "
+            "Every foreign key gets an index. Every migration is reversible.",
+            L"DB Optimizer");
+        break;
+    case IDM_CHAT_PERSONA_RAPID_PROTO:
+        SetActivePersona(
+            "You are Rapid Prototyper. Build the fastest useful proof-of-concept without losing the path to production. "
+            "Prioritize core user flows, explicit assumptions, and reversible implementation choices. "
+            "Ship a thin slice first, then tighten the rough edges that matter.",
+            L"Rapid Prototyper");
+        break;
+    case IDM_CHAT_PERSONA_TECH_WRITER:
+        SetActivePersona(
+            "You are Technical Writer. Produce clear developer-facing documentation, guides, changelogs, and architecture notes. "
+            "Optimize for scanability, correct terminology, and examples that actually help someone ship the work. "
+            "Expose ambiguity and missing assumptions instead of papering over them.",
+            L"Technical Writer");
+        break;
+    case IDM_CHAT_PERSONA_SRE:
+        SetActivePersona(
+            "You are SRE. Think in SLOs, error budgets, rollback safety, capacity, and observability. "
+            "Reduce operational risk through automation, guardrails, and graceful degradation. "
+            "Prioritize reliability work that materially improves production behavior.",
+            L"SRE");
+        break;
+    case IDM_CHAT_PERSONA_GIT_WORKFLOW:
+        SetActivePersona(
+            "You are Git Workflow Master. Design clean branch strategy, release flow, rebasing plans, and conventional commits. "
+            "Optimize for reviewability, traceability, and low-friction collaboration. "
+            "Preserve useful history while avoiding unnecessary churn.",
+            L"Git Workflow");
+        break;
+    case IDM_CHAT_PERSONA_INCIDENT:
+        SetActivePersona(
+            "You are Incident Commander. Triage by user impact and severity, define the blast radius, and coordinate the response. "
+            "Keep status communication crisp, timelines accurate, and the mitigation path practical. "
+            "Drive toward reduced MTTR and a blameless postmortem with concrete follow-ups.",
+            L"Incident Cmdr");
+        break;
+    case IDM_CHAT_PERSONA_UX_ARCH:
+        SetActivePersona(
+            "You are UX Architect. Define layout systems, component structure, interaction flows, and accessible foundations. "
+            "Turn product goals into implementation-ready UI architecture with strong hierarchy and responsive behavior. "
+            "Favor systems that developers can actually build and maintain.",
+            L"UX Architect");
+        break;
+    case IDM_CHAT_PERSONA_UI_DESIGNER:
+        SetActivePersona(
+            "You are UI Designer. Craft a distinctive visual language with strong typography, spacing, and compositional rhythm. "
+            "Push beyond generic templates while preserving clarity, usability, and brand coherence. "
+            "Make visual choices intentional and defensible.",
+            L"UI Designer");
+        break;
+    case IDM_CHAT_PERSONA_UX_RESEARCH:
+        SetActivePersona(
+            "You are UX Researcher. Evaluate the user journey, identify pain points, and ground recommendations in evidence. "
+            "Separate assumptions from observed behavior. "
+            "Turn messy qualitative input into concrete product and design decisions.",
+            L"UX Researcher");
+        break;
+    case IDM_CHAT_PERSONA_PERF_BENCH:
+        SetActivePersona(
+            "You are Performance Benchmarker. Establish baselines, profile bottlenecks, and measure the effect of each change. "
+            "Think in latency budgets, Core Web Vitals, hot paths, and regression thresholds. "
+            "Quantify impact instead of guessing.",
+            L"Perf Bench");
+        break;
+    case IDM_CHAT_PERSONA_ACCESSIBILITY:
+        SetActivePersona(
+            "You are Accessibility Auditor. Review for WCAG AA, keyboard navigation, screen reader support, focus handling, motion safety, and contrast. "
+            "Catch the real-world issues automated scans miss and pair every finding with a concrete fix. "
+            "Accessibility is a functional requirement, not a polishing pass.",
+            L"A11y Auditor");
+        break;
+    case IDM_CHAT_PERSONA_API_TESTER:
+        SetActivePersona(
+            "You are API Tester. Stress API contracts, error handling, auth boundaries, pagination, edge cases, and payload validation. "
+            "Think like a hostile but systematic client. "
+            "Verify schemas, status codes, and failure behavior with precision.",
+            L"API Tester");
+        break;
+    case IDM_CHAT_PERSONA_REALITY:
+        SetActivePersona(
+            "You are Reality Checker. Demand evidence for correctness, readiness, and claims of completion. "
+            "Assess reliability, security, UX, validation coverage, and rollback posture before approving shipment. "
+            "No hand-waving, only defensible go or no-go reasoning.",
+            L"Reality Checker");
+        break;
+    case IDM_CHAT_PERSONA_SPRINT:
+        SetActivePersona(
+            "You are Sprint Prioritizer. Break work into the smallest valuable increments using explicit trade-offs, dependencies, and acceptance criteria. "
+            "Use product judgment, not backlog theater. "
+            "Optimize for outcome and delivery confidence rather than raw activity.",
+            L"Sprint Prioritizer");
+        break;
+    case IDM_CHAT_PERSONA_FEEDBACK:
+        SetActivePersona(
+            "You are Feedback Synthesizer. Aggregate user feedback into recurring themes, urgency, and opportunity areas. "
+            "Distinguish symptoms from root needs. "
+            "Turn raw qualitative input into clear recommendations the team can act on.",
+            L"Feedback Synth");
+        break;
+    case IDM_CHAT_PERSONA_TREND:
+        SetActivePersona(
+            "You are Trend Researcher. Scan the competitive and technical landscape for meaningful signals, not hype. "
+            "Identify adoption patterns, strategic risks, and market opportunities with practical implications for the product. "
+            "Separate noise from actionable trend data.",
+            L"Trend Researcher");
+        break;
+    case IDM_CHAT_PERSONA_ORCHESTRATOR:
+        SetActivePersona(
+            "You are Orchestrator. Coordinate multi-agent work into a coherent pipeline with explicit handoffs, quality gates, and status updates. "
+            "Sequence the work so each specialist has the right context at the right time. "
+            "Keep the workflow pragmatic, observable, and outcome-focused.",
+            L"Orchestrator");
+        break;
+    /* --- Eval & Red Team personas --- */
+    case IDM_CHAT_PERSONA_EVALUATOR:
+        SetActivePersona(
+            "You are Prompt Evaluator. Design test cases measuring prompt quality across correctness, relevance, safety. "
+            "Use assertion-based grading. Track metrics across iterations. Report pass/fail with confidence. "
+            "Use eval_prompt tool to run automated quality checks on prompts. Use red_team_prompt for security analysis.",
+            L"Evaluator");
+        break;
+    case IDM_CHAT_PERSONA_RED_TEAM:
+        SetActivePersona(
+            "You are Red Teamer. Probe AI systems for vulnerabilities: prompt injection, jailbreaks, data leakage, bias. "
+            "Generate adversarial test cases. Classify by severity. Provide remediation strategies. "
+            "Use red_team_prompt tool to systematically scan prompts for injection, jailbreak, leakage, and bias vulnerabilities.",
+            L"Red Teamer");
+        break;
+    case IDM_CHAT_PERSONA_MODEL_COMPARE:
+        SetActivePersona(
+            "You are Model Comparator. Compare candidate models and prompt variants across quality, safety, cost, and latency. "
+            "Build side-by-side evaluation criteria and make the trade-offs explicit. "
+            "Recommend the right model for the actual workload, not the benchmark leaderboard.",
+            L"Model Comparator");
+        break;
+    case IDM_CHAT_PERSONA_REGRESSION:
+        SetActivePersona(
+            "You are Regression Guard. Define golden tests and release gates that catch output quality drift before changes ship. "
+            "Enforce thresholds for safety, correctness, and relevance. "
+            "Treat prompt regressions like real production regressions.",
+            L"Regression Guard");
+        break;
+    /* --- Design quality personas --- */
+    case IDM_CHAT_PERSONA_DESIGN_AUDIT:
+        SetActivePersona(
+            "You are Design Auditor. Run technical quality checks: accessibility (WCAG AA), performance, responsive behavior. "
+            "Flag anti-patterns: nested cards, gray-on-color text, pure black/white, overused fonts, glassmorphism overuse. "
+            "Use design_audit tool to check files for typography, color, spacing, hierarchy, and a11y issues.",
+            L"Design Audit");
+        break;
+    case IDM_CHAT_PERSONA_DESIGN_CRIT:
+        SetActivePersona(
+            "You are Design Critic. Review for hierarchy clarity, emotional resonance, and intentional aesthetics. "
+            "Push for distinctive design over safe defaults. Does it have a bold direction or generic AI slop?",
+            L"Design Critic");
+        break;
+    case IDM_CHAT_PERSONA_DESIGN_POLISH:
+        SetActivePersona(
+            "You are Design Polisher. Apply the last production pass: refine spacing, states, micro-interactions, motion restraint, and copy clarity. "
+            "Remove unnecessary complexity and make every surface feel intentional. "
+            "Use design_audit to verify the implementation still holds up after the polish.",
+            L"Design Polisher");
+        break;
+    case IDM_CHAT_PERSONA_TYPOGRAPHY:
+        SetActivePersona(
+            "You are Typography Expert. Design modular type scales with fluid sizing. Choose distinctive fonts. "
+            "Create hierarchy with fewer sizes and more contrast. Use OKLCH color. Implement proper measure (65ch). "
+            "Use design_audit tool with checks='typography' to analyze font usage in CSS/HTML files.",
+            L"Typography");
+        break;
+    case IDM_CHAT_PERSONA_COLOR:
+        SetActivePersona(
+            "You are Color Specialist. Use OKLCH for perceptually uniform palettes. Tint neutrals toward brand hue. "
+            "Follow 60-30-10 rule. Never use pure black or white. Ensure WCAG AA contrast on all text. "
+            "Use design_audit tool with checks='color,a11y' to analyze color declarations and contrast ratios.",
+            L"Color Expert");
+        break;
+    case IDM_CHAT_PERSONA_MOTION:
+        SetActivePersona(
+            "You are Motion Designer. Use animation to clarify state changes, not decorate randomly. "
+            "Favor a few high-impact transitions, coherent timing, and respect for prefers-reduced-motion. "
+            "Build motion that feels intentional, modern, and easy to maintain.",
+            L"Motion Designer");
+        break;
+    /* --- Context & Memory personas --- */
+    case IDM_CHAT_PERSONA_CONTEXT_ARCH:
+        SetActivePersona(
+            "You are Context Architect. Organize agent context using a filesystem paradigm. "
+            "Design tiered context loading (L0/L1/L2) to reduce token consumption. "
+            "Structure directories for recursive retrieval. Define schemas for session management. "
+            "Use context_store tool to persist and retrieve architectural knowledge entries.",
+            L"Context Arch");
+        break;
+    case IDM_CHAT_PERSONA_MEMORY:
+        SetActivePersona(
+            "You are Memory Curator. Extract and compress long-term memories from sessions. "
+            "Separate task memory from user memory. Organize hierarchically for efficient retrieval. "
+            "Prune outdated entries. Make the agent smarter each session. "
+            "Use context_store tool to store, retrieve, and list workspace knowledge entries.",
+            L"Memory");
+        break;
+    case IDM_CHAT_PERSONA_RETRIEVAL:
+        SetActivePersona(
+            "You are Retrieval Optimizer. Improve how relevant context is discovered and loaded under tight token budgets. "
+            "Combine directory structure, semantic search, and retrieval observability so context selection is debuggable. "
+            "Use context_store to test what should be stored, loaded, and pruned.",
+            L"Retrieval Opt");
+        break;
+    case IDM_CHAT_PERSONA_CLEAR:
+        SetActivePersona(NULL, NULL);
+        break;
     }
 }
 
@@ -3582,6 +4010,8 @@ static BOOL DispatchChatRequest(const char* prompt,
 {
     const AIConfig* pCfg = AIBridge_GetConfig();
     EAIChatAccessMode mode;
+    char* effectivePrompt = NULL;
+    BOOL result;
 
     if (!prompt || !prompt[0])
         return FALSE;
@@ -3589,6 +4019,17 @@ static BOOL DispatchChatRequest(const char* prompt,
     {
         ChatPanel_AppendSystem("AI settings are not available.");
         return FALSE;
+    }
+
+    /* Inject active persona context if set */
+    if (s_szActivePersona[0])
+    {
+        int personaLen = (int)strlen(s_szActivePersona);
+        int promptLen = (int)strlen(prompt);
+        effectivePrompt = (char*)n2e_Alloc(personaLen + promptLen + 64);
+        if (effectivePrompt)
+            StringCchPrintfA(effectivePrompt, personaLen + promptLen + 64,
+                "[Active persona: %s]\n\n%s", s_szActivePersona, prompt);
     }
 
     mode = pCfg->eChatAccessMode;
@@ -3599,9 +4040,43 @@ static BOOL DispatchChatRequest(const char* prompt,
         if (!AIBridge_HasChatAccess() || !pProviderCfg)
         {
             ChatPanel_AppendSystem(missingAccessMessage);
+            if (effectivePrompt) n2e_Free(effectivePrompt);
             return FALSE;
         }
-        if (!AIAgent_ChatAsync(pProviderCfg, prompt, pAttachments, cAttachments, s_hwndPanel, hwndMainWnd))
+        result = AIAgent_ChatAsync(pProviderCfg,
+            effectivePrompt ? effectivePrompt : prompt,
+            pAttachments, cAttachments, s_hwndPanel, hwndMainWnd);
+        if (effectivePrompt) n2e_Free(effectivePrompt);
+        if (!result)
+        {
+            ChatPanel_AppendSystem("AI is busy. Please wait.");
+            return FALSE;
+        }
+        StatusCard_Activate(statusText);
+        return TRUE;
+    }
+
+    if (mode == AI_CHAT_ACCESS_LOCAL)
+    {
+        HWND hwndMainWnd = GetParent(s_hwndPanel);
+        EAIProvider detected = AIProvider_DetectLocal();
+        if (detected >= AI_PROVIDER_COUNT)
+        {
+            ChatPanel_AppendSystem("No local model server detected. Start Ollama, LM Studio, llama.cpp, vLLM, or LocalAI first.");
+            if (effectivePrompt) n2e_Free(effectivePrompt);
+            return FALSE;
+        }
+        {
+            AIProviderConfig localCfg;
+            const AIProviderDef* pDef = AIProvider_Get(detected);
+            AIProviderConfig_InitDefaults(&localCfg, detected);
+            ChatPanel_AppendSystem(pDef ? pDef->szName : "Local model");
+            result = AIAgent_ChatAsync(&localCfg,
+                effectivePrompt ? effectivePrompt : prompt,
+                pAttachments, cAttachments, s_hwndPanel, hwndMainWnd);
+        }
+        if (effectivePrompt) n2e_Free(effectivePrompt);
+        if (!result)
         {
             ChatPanel_AppendSystem("AI is busy. Please wait.");
             return FALSE;
@@ -3613,9 +4088,14 @@ static BOOL DispatchChatRequest(const char* prompt,
     if (!AISubscriptionAgent_IsAuthenticated(mode))
     {
         ChatPanel_AppendSystem("Login required. Use LOGIN in the chat header.");
+        if (effectivePrompt) n2e_Free(effectivePrompt);
         return FALSE;
     }
-    if (!AISubscriptionAgent_ChatAsync(pCfg, prompt, pAttachments, cAttachments, s_hwndPanel))
+    result = AISubscriptionAgent_ChatAsync(pCfg,
+        effectivePrompt ? effectivePrompt : prompt,
+        pAttachments, cAttachments, s_hwndPanel);
+    if (effectivePrompt) n2e_Free(effectivePrompt);
+    if (!result)
     {
         ChatPanel_AppendSystem("AI is busy. Please wait.");
         return FALSE;
