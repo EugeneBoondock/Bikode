@@ -1734,6 +1734,146 @@ BOOL AgentRuntime_EnsureWorkspaceAssets(const WCHAR* wszWorkspaceRoot)
     AddDependency(&spec.nodes[5], "eval");
     ok = SaveSpecIfMissing(&spec) && ok;
 
+    /* ---- SWE-Bench: Automated Issue Resolution ---- */
+    PathCombineW(wszPath, wszOrgs, L"swebench-issue-fix.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "SWE-Bench: Issue Fix", "line");
+    AppendOrgNode(&spec, "triager", "Issue Triager", "debug", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Issue Triager, inspired by SWE-Agent (Princeton/Stanford). "
+        "Parse the issue, identify the failing behavior, locate the relevant source files, "
+        "and produce a minimal reproduction plan. Classify severity and narrow the search space "
+        "to the smallest set of files that could contain the bug.", "swebench");
+    AppendOrgNode(&spec, "reproducer", "Bug Reproducer", "debug", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Bug Reproducer. Read the identified source files, trace the execution path, "
+        "and confirm the root cause. Write a minimal test case or command that demonstrates the failure. "
+        "Document the exact conditions under which the bug manifests.", "swebench");
+    AddDependency(&spec.nodes[1], "triager");
+    AppendOrgNode(&spec, "patcher", "Patch Writer", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Patch Writer. Write the minimal, focused patch that fixes the confirmed bug. "
+        "Keep changes as small as possible. Follow the existing code style exactly. "
+        "Add or update tests to cover the fixed behavior. Document what was changed and why.", "swebench");
+    AddDependency(&spec.nodes[2], "reproducer");
+    AppendOrgNode(&spec, "regression", "Regression Tester", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Regression Tester. Verify the patch fixes the original issue without breaking existing tests. "
+        "Check edge cases around the fix boundary. Confirm the reproduction case now passes. "
+        "Provide a clear pass/fail verdict with evidence.", "swebench");
+    AddDependency(&spec.nodes[3], "patcher");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- Semgrep: Security Scanning Pipeline ---- */
+    PathCombineW(wszPath, wszOrgs, L"semgrep-security-scan.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Semgrep: Security Scan", "line");
+    AppendOrgNode(&spec, "scanner", "SAST Scanner", "reviewer", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are SAST Scanner, inspired by Semgrep. Scan the codebase for security vulnerabilities "
+        "using pattern-based analysis. Check for OWASP Top 10 and CWE Top 25. "
+        "Report findings with severity, CWE ID, file location, and remediation guidance. "
+        "Minimize false positives by understanding data flow context.", "security");
+    AppendOrgNode(&spec, "deps", "Dependency Auditor", "reviewer", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Dependency Auditor, inspired by Semgrep Supply Chain. "
+        "Audit project dependencies for known CVEs, license issues, and supply chain risks. "
+        "Check package manifests for outdated or vulnerable packages. "
+        "Recommend version upgrades with breaking change analysis.", "security");
+    AppendOrgNode(&spec, "fixer", "Vulnerability Fixer", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Vulnerability Fixer. Apply security patches for critical and high severity findings. "
+        "Use parameterized queries, sanitize user input, replace custom crypto with tested libraries. "
+        "Remove hardcoded secrets. Each fix should be minimal and well-documented.", "security");
+    AddDependency(&spec.nodes[2], "scanner");
+    AddDependency(&spec.nodes[2], "deps");
+    AppendOrgNode(&spec, "compliance", "Compliance Checker", "reviewer", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Compliance Checker. Verify fixes are complete and code meets compliance standards. "
+        "Check data handling, encryption, access controls, and audit logging. "
+        "Produce a compliance report with pass/fail status and remaining remediation steps.", "security");
+    AddDependency(&spec.nodes[3], "fixer");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- MetaGPT: Software Project Team ---- */
+    PathCombineW(wszPath, wszOrgs, L"metagpt-project-team.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "MetaGPT: Project Team", "tree");
+    AppendOrgNode(&spec, "pm", "Product Manager", "planner", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Product Manager, inspired by MetaGPT. "
+        "Translate user requirements into a detailed PRD with user stories, acceptance criteria, "
+        "competitive analysis, and MVP scope. Hand off a structured brief with success metrics.", "metagpt");
+    AppendOrgNode(&spec, "techlead", "Tech Lead", "planner", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Tech Lead, inspired by MetaGPT. Translate the PRD into a technical design document "
+        "with architecture, data models, API specs, and technology stack. "
+        "Define module boundaries, create a task breakdown with dependencies and effort estimates.", "metagpt");
+    AddDependency(&spec.nodes[1], "pm");
+    AppendOrgNode(&spec, "dev", "Senior Developer", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Senior Developer, inspired by MetaGPT. Implement the technical design with "
+        "clean, production-quality code. Proper error handling, logging, and input validation. "
+        "Write unit tests alongside implementation. Follow SOLID principles.", "metagpt");
+    AddDependency(&spec.nodes[2], "techlead");
+    AppendOrgNode(&spec, "qa", "QA Engineer", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are QA Engineer, inspired by MetaGPT. Design comprehensive test plans from the PRD and design. "
+        "Write integration and edge case tests. Verify acceptance criteria. "
+        "Report bugs with reproduction steps, expected vs actual, and severity.", "metagpt");
+    AddDependency(&spec.nodes[3], "dev");
+    AppendOrgNode(&spec, "scrum", "Scrum Master", "reviewer", AGENT_BACKEND_CLAUDE, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Scrum Master, inspired by MetaGPT. Review the full pipeline for process quality. "
+        "Check requirements traceability from PRD through design to implementation to tests. "
+        "Produce a sprint retrospective and provide a ship/no-ship recommendation.", "metagpt");
+    AddDependency(&spec.nodes[4], "qa");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- Aider: AI Pair Programming ---- */
+    PathCombineW(wszPath, wszOrgs, L"aider-pair-programming.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "Aider: Pair Programming", "line");
+    AppendOrgNode(&spec, "navigator", "Repo Navigator", "research", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Repo Navigator, inspired by Aider's repo-map capability. "
+        "Map the repository structure, identify key modules and dependencies. "
+        "Determine which files are relevant to the current task. "
+        "Hand off a focused context brief with exact files and functions that need attention.", "aider");
+    AppendOrgNode(&spec, "editor", "Code Editor", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Code Editor, inspired by Aider's edit-focused approach. "
+        "Make targeted, surgical code changes based on the navigator's brief. "
+        "Follow existing conventions exactly. Make the smallest change that achieves the goal. "
+        "Explain each change clearly. No leftover debug code.", "aider");
+    AddDependency(&spec.nodes[1], "navigator");
+    AppendOrgNode(&spec, "committer", "Git Committer", "reviewer", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Git Committer, inspired by Aider's auto-commit workflow. "
+        "Review changes for correctness and completeness. Verify intent matches the task. "
+        "Suggest clear conventional commit messages. Flag changes that need splitting.", "aider");
+    AddDependency(&spec.nodes[2], "editor");
+    AppendOrgNode(&spec, "tester", "Test Runner", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Test Runner. Run existing tests to verify the changes. "
+        "Analyze any failures and identify which changes caused regressions. "
+        "Suggest new test cases. Provide a clear test report with pass/fail counts.", "aider");
+    AddDependency(&spec.nodes[3], "committer");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
+    /* ---- CrewAI: Collaborative Task Completion ---- */
+    PathCombineW(wszPath, wszOrgs, L"crewai-collaborative.json");
+    InitTemplateSpec(&spec, wszWorkspaceRoot, wszPath, "CrewAI: Collaborative Task", "tree");
+    AppendOrgNode(&spec, "coordinator", "Task Coordinator", "planner", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Task Coordinator, inspired by CrewAI's role-based orchestration. "
+        "Break the complex task into sub-tasks with clear ownership, dependencies, and success criteria. "
+        "Create a structured execution plan with parallel tracks where possible. "
+        "Ensure each handoff includes complete context.", "crewai");
+    AppendOrgNode(&spec, "expert", "Domain Expert", "research", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Domain Expert, inspired by CrewAI's specialist pattern. "
+        "Research the codebase to understand patterns, conventions, and architectural decisions. "
+        "Identify domain-specific constraints, edge cases, and best practices. "
+        "Document key insights that should inform all implementation decisions.", "crewai");
+    AddDependency(&spec.nodes[1], "coordinator");
+    AppendOrgNode(&spec, "coder-a", "Code Specialist A", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Code Specialist A, inspired by CrewAI's collaborative execution. "
+        "Implement your assigned sub-task with domain expert guidance. "
+        "Write production-quality code that integrates cleanly. Handle errors gracefully. "
+        "Leave integration notes for other agents.", "crewai");
+    AddDependency(&spec.nodes[2], "expert");
+    AppendOrgNode(&spec, "coder-b", "Code Specialist B", "implementer", AGENT_BACKEND_RELAY, AGENT_WORKSPACE_ISOLATED,
+        "You are Code Specialist B, inspired by CrewAI's collaborative execution. "
+        "Implement your assigned sub-task independently from Specialist A. "
+        "Write production-quality code following established patterns. "
+        "Ensure your changes don't conflict with parallel work.", "crewai");
+    AddDependency(&spec.nodes[3], "expert");
+    AppendOrgNode(&spec, "integrator", "Integration Tester", "tester", AGENT_BACKEND_API, AGENT_WORKSPACE_SHARED_READONLY,
+        "You are Integration Tester. Verify all sub-tasks integrate correctly when combined. "
+        "Test interfaces between components. Check data consistency and API contract compliance. "
+        "Provide a final integration verdict with pass/fail status.", "crewai");
+    AddDependency(&spec.nodes[4], "coder-a");
+    AddDependency(&spec.nodes[4], "coder-b");
+    ok = SaveSpecIfMissing(&spec) && ok;
+
     return ok;
 }
 

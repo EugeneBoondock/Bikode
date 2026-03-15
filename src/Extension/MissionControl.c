@@ -102,6 +102,37 @@
 #define IDM_MC_ADD_CONTEXT_ARCHITECT  0xFD70
 #define IDM_MC_ADD_MEMORY_CURATOR     0xFD71
 #define IDM_MC_ADD_RETRIEVAL_OPTIMIZER 0xFD72
+
+/* SWE-Bench: Automated Issue Resolution (inspired by SWE-Agent, Princeton/Stanford) */
+#define IDM_MC_ADD_ISSUE_TRIAGER      0xFD78
+#define IDM_MC_ADD_BUG_REPRODUCER     0xFD79
+#define IDM_MC_ADD_PATCH_WRITER       0xFD7A
+#define IDM_MC_ADD_REGRESSION_TESTER  0xFD7B
+
+/* Semgrep: Static Analysis & Security Scanning */
+#define IDM_MC_ADD_SAST_SCANNER       0xFD80
+#define IDM_MC_ADD_VULN_FIXER         0xFD81
+#define IDM_MC_ADD_DEPENDENCY_AUDITOR 0xFD82
+#define IDM_MC_ADD_COMPLIANCE_CHECKER 0xFD83
+
+/* MetaGPT: Software Project Team Simulation */
+#define IDM_MC_ADD_PRODUCT_MANAGER    0xFD88
+#define IDM_MC_ADD_TECH_LEAD          0xFD89
+#define IDM_MC_ADD_SENIOR_DEV         0xFD8A
+#define IDM_MC_ADD_QA_ENGINEER        0xFD8B
+#define IDM_MC_ADD_SCRUM_MASTER       0xFD8C
+
+/* Aider: AI Pair Programming */
+#define IDM_MC_ADD_REPO_NAVIGATOR     0xFD90
+#define IDM_MC_ADD_CODE_EDITOR        0xFD91
+#define IDM_MC_ADD_GIT_COMMITTER      0xFD92
+#define IDM_MC_ADD_TEST_RUNNER        0xFD93
+
+/* CrewAI: Collaborative Multi-Agent Tasks */
+#define IDM_MC_ADD_TASK_COORDINATOR   0xFD98
+#define IDM_MC_ADD_DOMAIN_EXPERT      0xFD99
+#define IDM_MC_ADD_CODE_SPECIALIST    0xFD9A
+#define IDM_MC_ADD_INTEGRATION_TESTER 0xFD9B
 /* --- Backend toggle --- */
 #define IDM_MC_TOGGLE_LOCAL_BACKEND   0xFD80
 
@@ -1994,6 +2025,57 @@ static UINT ShowAddAgentMenu(HWND hwndAnchor)
         AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hViking, L"Context && Memory (OpenViking)");
     }
 
+    /* SWE-Bench: Automated Issue Resolution */
+    {
+        HMENU hSWEBench = CreatePopupMenu();
+        AppendMenuW(hSWEBench, MF_STRING, IDM_MC_ADD_ISSUE_TRIAGER,     L"Issue Triager");
+        AppendMenuW(hSWEBench, MF_STRING, IDM_MC_ADD_BUG_REPRODUCER,    L"Bug Reproducer");
+        AppendMenuW(hSWEBench, MF_STRING, IDM_MC_ADD_PATCH_WRITER,      L"Patch Writer");
+        AppendMenuW(hSWEBench, MF_STRING, IDM_MC_ADD_REGRESSION_TESTER, L"Regression Tester");
+        AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hSWEBench, L"Issue Resolution (SWE-Bench)");
+    }
+
+    /* Semgrep: Static Analysis & Security */
+    {
+        HMENU hSemgrep = CreatePopupMenu();
+        AppendMenuW(hSemgrep, MF_STRING, IDM_MC_ADD_SAST_SCANNER,       L"SAST Scanner");
+        AppendMenuW(hSemgrep, MF_STRING, IDM_MC_ADD_VULN_FIXER,         L"Vulnerability Fixer");
+        AppendMenuW(hSemgrep, MF_STRING, IDM_MC_ADD_DEPENDENCY_AUDITOR, L"Dependency Auditor");
+        AppendMenuW(hSemgrep, MF_STRING, IDM_MC_ADD_COMPLIANCE_CHECKER, L"Compliance Checker");
+        AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hSemgrep, L"Security Scanning (Semgrep)");
+    }
+
+    /* MetaGPT: Software Project Team */
+    {
+        HMENU hMetaGPT = CreatePopupMenu();
+        AppendMenuW(hMetaGPT, MF_STRING, IDM_MC_ADD_PRODUCT_MANAGER, L"Product Manager");
+        AppendMenuW(hMetaGPT, MF_STRING, IDM_MC_ADD_TECH_LEAD,       L"Tech Lead");
+        AppendMenuW(hMetaGPT, MF_STRING, IDM_MC_ADD_SENIOR_DEV,      L"Senior Developer");
+        AppendMenuW(hMetaGPT, MF_STRING, IDM_MC_ADD_QA_ENGINEER,     L"QA Engineer");
+        AppendMenuW(hMetaGPT, MF_STRING, IDM_MC_ADD_SCRUM_MASTER,    L"Scrum Master");
+        AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hMetaGPT, L"Project Team (MetaGPT)");
+    }
+
+    /* Aider: AI Pair Programming */
+    {
+        HMENU hAider = CreatePopupMenu();
+        AppendMenuW(hAider, MF_STRING, IDM_MC_ADD_REPO_NAVIGATOR, L"Repo Navigator");
+        AppendMenuW(hAider, MF_STRING, IDM_MC_ADD_CODE_EDITOR,    L"Code Editor");
+        AppendMenuW(hAider, MF_STRING, IDM_MC_ADD_GIT_COMMITTER,  L"Git Committer");
+        AppendMenuW(hAider, MF_STRING, IDM_MC_ADD_TEST_RUNNER,    L"Test Runner");
+        AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hAider, L"Pair Programming (Aider)");
+    }
+
+    /* CrewAI: Collaborative Multi-Agent */
+    {
+        HMENU hCrewAI = CreatePopupMenu();
+        AppendMenuW(hCrewAI, MF_STRING, IDM_MC_ADD_TASK_COORDINATOR,   L"Task Coordinator");
+        AppendMenuW(hCrewAI, MF_STRING, IDM_MC_ADD_DOMAIN_EXPERT,      L"Domain Expert");
+        AppendMenuW(hCrewAI, MF_STRING, IDM_MC_ADD_CODE_SPECIALIST,    L"Code Specialist");
+        AppendMenuW(hCrewAI, MF_STRING, IDM_MC_ADD_INTEGRATION_TESTER, L"Integration Tester");
+        AppendMenuW(hMenu, MF_STRING | MF_POPUP, (UINT_PTR)hCrewAI, L"Collaborative (CrewAI)");
+    }
+
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hMenu, MF_STRING, IDM_MC_ADD_ORCHESTRATOR, L"Orchestrator (The Agency)");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
@@ -2436,6 +2518,258 @@ static BOOL AddTemplatedNode(OrgSpec* pSpec, UINT commandId, WCHAR* wszAddedTitl
             "Visualize retrieval paths to identify and fix retrieval failures. "
             "Ensure retrieved context is relevant, minimal, and sufficient for the agent's task. "
             "You have access to the context_store tool -- use it to test retrieval patterns and optimize what context gets stored vs retrieved.");
+        break;
+
+    /* ---- SWE-Bench: Automated Issue Resolution ---- */
+    case IDM_MC_ADD_ISSUE_TRIAGER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Issue Triager");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "debug");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "swebench");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Issue Triager, inspired by SWE-Agent (Princeton/Stanford). "
+            "Parse the issue description, identify the failing behavior, locate the relevant source files, "
+            "and produce a minimal reproduction plan. Classify severity and estimate blast radius. "
+            "Narrow the search space to the smallest set of files that could contain the bug. "
+            "Hand off a focused brief with file paths, suspected root cause, and reproduction steps.");
+        break;
+    case IDM_MC_ADD_BUG_REPRODUCER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Bug Reproducer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "debug");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "swebench");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Bug Reproducer, inspired by SWE-Agent. "
+            "Read the identified source files, trace the execution path, and confirm the root cause. "
+            "Write a minimal test case or command that demonstrates the failure. "
+            "Document the exact conditions under which the bug manifests. "
+            "If the bug cannot be reproduced, explain why and suggest alternative investigation paths.");
+        break;
+    case IDM_MC_ADD_PATCH_WRITER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Patch Writer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "swebench");
+        node->backend = s_bUseLocalBackend ? AGENT_BACKEND_LOCAL : AGENT_BACKEND_RELAY;
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Patch Writer, inspired by SWE-Agent. "
+            "Write the minimal, focused patch that fixes the confirmed bug without introducing regressions. "
+            "Keep changes as small as possible. Follow the existing code style exactly. "
+            "Add or update tests to cover the fixed behavior. "
+            "Document what was changed and why in a clear commit-message-style summary.");
+        break;
+    case IDM_MC_ADD_REGRESSION_TESTER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Regression Tester");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "swebench");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Regression Tester, inspired by SWE-Agent. "
+            "Verify the patch fixes the original issue without breaking existing functionality. "
+            "Run related tests and analyze results. Check edge cases around the fix boundary. "
+            "Confirm the reproduction case now passes. Report any regressions or incomplete fixes. "
+            "Provide a clear pass/fail verdict with evidence.");
+        break;
+
+    /* ---- Semgrep: Static Analysis & Security Scanning ---- */
+    case IDM_MC_ADD_SAST_SCANNER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "SAST Scanner");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "reviewer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "security");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are SAST Scanner, a static application security testing specialist inspired by Semgrep. "
+            "Scan source code for security vulnerabilities using pattern-based analysis. "
+            "Check for OWASP Top 10: injection, broken auth, sensitive data exposure, XXE, broken access control, "
+            "misconfiguration, XSS, insecure deserialization, known vulnerable components, insufficient logging. "
+            "Also check CWE Top 25. Report findings with severity, CWE ID, file location, and remediation guidance. "
+            "Minimize false positives by understanding data flow context.");
+        break;
+    case IDM_MC_ADD_VULN_FIXER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Vulnerability Fixer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "security");
+        node->backend = s_bUseLocalBackend ? AGENT_BACKEND_LOCAL : AGENT_BACKEND_RELAY;
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Vulnerability Fixer, inspired by Semgrep auto-fix capabilities. "
+            "Apply security patches for findings from the SAST scan. Fix critical and high severity first. "
+            "Use parameterized queries instead of string concatenation. Sanitize all user input. "
+            "Replace custom crypto with well-tested libraries. Remove hardcoded secrets. "
+            "Ensure fixes don't break functionality. Each fix should be minimal and well-documented.");
+        break;
+    case IDM_MC_ADD_DEPENDENCY_AUDITOR:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Dependency Auditor");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "reviewer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "security");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Dependency Auditor, inspired by Semgrep Supply Chain and Snyk. "
+            "Audit project dependencies for known vulnerabilities, license compliance, and supply chain risks. "
+            "Check package manifests (package.json, requirements.txt, go.mod, Cargo.toml, etc.). "
+            "Identify outdated dependencies with known CVEs. Flag transitive dependency risks. "
+            "Recommend version upgrades with breaking change analysis. Check for typosquatting and malicious packages.");
+        break;
+    case IDM_MC_ADD_COMPLIANCE_CHECKER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Compliance Checker");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "reviewer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "security");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Compliance Checker, inspired by Semgrep and Checkov policy engines. "
+            "Verify code and infrastructure against compliance frameworks: SOC2, HIPAA, PCI-DSS, GDPR as applicable. "
+            "Check for proper data handling, encryption at rest and in transit, access controls, and audit logging. "
+            "Verify infrastructure-as-code templates follow security best practices. "
+            "Produce a compliance report with pass/fail status per control and remediation steps for failures.");
+        break;
+
+    /* ---- MetaGPT: Software Project Team Simulation ---- */
+    case IDM_MC_ADD_PRODUCT_MANAGER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Product Manager");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "planner");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "metagpt");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Product Manager, inspired by MetaGPT's role-based project simulation. "
+            "Translate user requirements into detailed product requirements documents (PRDs). "
+            "Define user stories with clear acceptance criteria. Prioritize features by business value. "
+            "Create competitive analysis. Define the MVP scope. "
+            "Hand off a structured PRD with user stories, wireframe descriptions, and success metrics.");
+        break;
+    case IDM_MC_ADD_TECH_LEAD:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Tech Lead");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "planner");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "metagpt");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Tech Lead, inspired by MetaGPT. "
+            "Translate the PRD into a technical design document with system architecture, data models, "
+            "API specifications, and technology stack decisions. Define module boundaries and interfaces. "
+            "Create a development plan with task breakdown and dependencies. "
+            "Identify technical risks and mitigation strategies. Estimate effort for each component.");
+        break;
+    case IDM_MC_ADD_SENIOR_DEV:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Senior Developer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "metagpt");
+        node->backend = s_bUseLocalBackend ? AGENT_BACKEND_LOCAL : AGENT_BACKEND_RELAY;
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Senior Developer, inspired by MetaGPT. "
+            "Implement the technical design from the Tech Lead's specification. "
+            "Write clean, well-structured, production-quality code following the architecture. "
+            "Implement proper error handling, logging, and input validation. "
+            "Write unit tests alongside implementation. Follow SOLID principles. "
+            "Leave clear documentation for complex logic. Commit code in logical, reviewable chunks.");
+        break;
+    case IDM_MC_ADD_QA_ENGINEER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "QA Engineer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "metagpt");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are QA Engineer, inspired by MetaGPT. "
+            "Design comprehensive test plans from the PRD and technical design. "
+            "Write integration tests, end-to-end tests, and edge case tests. "
+            "Verify all acceptance criteria from user stories are met. "
+            "Test error handling, boundary conditions, and concurrent scenarios. "
+            "Report bugs with clear reproduction steps, expected vs actual behavior, and severity.");
+        break;
+    case IDM_MC_ADD_SCRUM_MASTER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Scrum Master");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "reviewer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "metagpt");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Scrum Master, inspired by MetaGPT. "
+            "Review the full delivery pipeline output for process quality. "
+            "Check that requirements trace from PRD through design to implementation to tests. "
+            "Identify gaps in test coverage, missing error handling, or incomplete features. "
+            "Produce a sprint retrospective: what went well, what needs improvement, action items. "
+            "Provide a clear ship/no-ship recommendation with evidence.");
+        break;
+
+    /* ---- Aider: AI Pair Programming ---- */
+    case IDM_MC_ADD_REPO_NAVIGATOR:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Repo Navigator");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "research");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "aider");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Repo Navigator, inspired by Aider's repo-map capability. "
+            "Map the repository structure, identify key modules, entry points, and dependency relationships. "
+            "Build a mental model of the codebase architecture. Identify which files are relevant to the current task. "
+            "Summarize the codebase layout, tech stack, build system, and testing infrastructure. "
+            "Hand off a focused context brief with the exact files and functions that need attention.");
+        break;
+    case IDM_MC_ADD_CODE_EDITOR:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Code Editor");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "aider");
+        node->backend = s_bUseLocalBackend ? AGENT_BACKEND_LOCAL : AGENT_BACKEND_RELAY;
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Code Editor, inspired by Aider's edit-focused pair programming approach. "
+            "Make targeted, surgical code changes based on the navigator's context brief. "
+            "Edit files directly using write_file and replace_in_file tools. "
+            "Follow existing code conventions exactly. Make the smallest change that achieves the goal. "
+            "Explain each change clearly. Keep the codebase clean -- no leftover debug code or commented-out blocks.");
+        break;
+    case IDM_MC_ADD_GIT_COMMITTER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Git Committer");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "reviewer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "aider");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Git Committer, inspired by Aider's auto-commit workflow. "
+            "Review the changes made by the Code Editor for correctness and completeness. "
+            "Verify changes match the original task intent. Check for accidentally modified files. "
+            "Suggest clear, conventional commit messages that describe why, not just what. "
+            "Flag any changes that should be split into separate commits for cleaner history.");
+        break;
+    case IDM_MC_ADD_TEST_RUNNER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Test Runner");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "aider");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Test Runner, inspired by Aider's test-driven workflow. "
+            "Run existing tests to verify the code changes don't break anything. "
+            "If tests fail, analyze the failure and report which changes caused the regression. "
+            "Suggest new test cases for the changed code. Verify edge cases and error paths. "
+            "Produce a clear test report with pass/fail counts and any failures requiring attention.");
+        break;
+
+    /* ---- CrewAI: Collaborative Multi-Agent Tasks ---- */
+    case IDM_MC_ADD_TASK_COORDINATOR:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Task Coordinator");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "planner");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "crewai");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Task Coordinator, inspired by CrewAI's role-based orchestration. "
+            "Break down the complex task into sub-tasks with clear ownership and dependencies. "
+            "Define success criteria for each sub-task. Identify which specialist agent should handle each part. "
+            "Create a structured execution plan with parallel tracks where possible. "
+            "Ensure each handoff includes complete context so downstream agents can work independently.");
+        break;
+    case IDM_MC_ADD_DOMAIN_EXPERT:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Domain Expert");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "research");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "crewai");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Domain Expert, inspired by CrewAI's specialist agent pattern. "
+            "Provide deep domain knowledge for the current task. Research the codebase to understand "
+            "existing patterns, conventions, and architectural decisions. "
+            "Identify domain-specific constraints, edge cases, and best practices. "
+            "Advise the implementation agents on the right approach based on domain expertise. "
+            "Document key domain insights that should inform all downstream decisions.");
+        break;
+    case IDM_MC_ADD_CODE_SPECIALIST:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Code Specialist");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "crewai");
+        node->backend = s_bUseLocalBackend ? AGENT_BACKEND_LOCAL : AGENT_BACKEND_RELAY;
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Code Specialist, inspired by CrewAI's collaborative execution model. "
+            "Implement your assigned sub-task from the coordinator's plan with domain expert guidance. "
+            "Write production-quality code that integrates cleanly with the existing codebase. "
+            "Follow established patterns and conventions. Handle errors gracefully. "
+            "Leave integration notes for other agents working on related sub-tasks.");
+        break;
+    case IDM_MC_ADD_INTEGRATION_TESTER:
+        StringCchCopyA(node->title, ARRAYSIZE(node->title), "Integration Tester");
+        StringCchCopyA(node->role, ARRAYSIZE(node->role), "tester");
+        StringCchCopyA(node->group, ARRAYSIZE(node->group), "crewai");
+        StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt),
+            "You are Integration Tester, inspired by CrewAI's collaborative quality assurance. "
+            "Verify that all sub-tasks integrate correctly when combined. "
+            "Test the interfaces between components built by different agents. "
+            "Check for data consistency, API contract compliance, and end-to-end workflow correctness. "
+            "Report integration issues with clear identification of which components conflict. "
+            "Provide a final integration verdict with pass/fail status.");
         break;
 
     /* ---- The Agency: Orchestration ---- */
