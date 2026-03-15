@@ -61,6 +61,23 @@ char* AIDirectCall_ChatMulti(const AIProviderConfig* pCfg,
                              const AIChatMessage* messages,
                              int messageCount);
 
+//=============================================================================
+// Extended multi-message call with token usage output
+//=============================================================================
+
+typedef struct {
+    int inputTokens;
+    int outputTokens;
+} AITokenUsage;
+
+// Synchronous multi-message call that also extracts token usage from the
+// provider response.  Returns heap-allocated response (caller frees).
+// pUsage may be NULL if the caller doesn't need token counts.
+char* AIDirectCall_ChatMultiEx(const AIProviderConfig* pCfg,
+                               const AIChatMessage* messages,
+                               int messageCount,
+                               AITokenUsage* pUsage);
+
 #ifdef __cplusplus
 }
 #endif

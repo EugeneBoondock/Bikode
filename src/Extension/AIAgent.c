@@ -3642,9 +3642,11 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
             {
                 char* respCopy = _strdup(response);
                 char* correction = _strdup(
-                    "This is Bikode. Use native Bikode tools to modify the workspace or editor directly. "
+                    "This is Bikode. You MUST use native Bikode tools to modify the workspace or editor directly. "
                     "When the user asks you to write code, do not paste source into chat. "
-                    "Read the relevant file or active document, edit or create it, and then reply with a short summary."
+                    "Use <tool_call>{\"name\": \"write_file\", \"path\": \"...\", \"content\": \"...\"}</tool_call> "
+                    "to create files, or <tool_call>{\"name\": \"replace_in_file\", \"path\": \"...\", \"old_text\": \"...\", \"new_text\": \"...\"}</tool_call> "
+                    "to edit existing files. Read files first with read_file if needed, then make the changes, and reply with a short summary."
                 );
 
                 if (respCopy && correction)
@@ -3963,4 +3965,246 @@ void AIAgent_ClearHistory(void)
     }
     s_historyCount = 0;
     LeaveCriticalSection(&s_csHistory);
+}
+
+//=============================================================================
+// Synchronous tool loop for AgentRuntime / Mission Control nodes
+//=============================================================================
+
+#define TOOLLOOP_MAX_ITER       12
+#define TOOLLOOP_MAX_TOOLS      30
+#define TOOLLOOP_MAX_MSGS       64
+#define TOOLLOOP_MAX_RESULT     4096
+#define TOOLLOOP_MAX_FEEDBACK   (12 * 1024)
+
+void AIAgent_RunToolLoop(const AIProviderConfig* pCfg,
+                         const char* systemPrompt,
+                         const char* userPrompt,
+                         int maxIter,
+                         int maxTools,
+                         AIAgentLoopCallback callback,
+                         int cbNodeIndex,
+                         AIAgentLoopResult* pResult)
+{
+    AIChatMessage* msgs;
+    char** owned;
+    int msgCount = 0;
+    int iteration = 0;
+    int totalToolCalls = 0;
+    int filesChanged = 0;
+    int totalInput = 0;
+    int totalOutput = 0;
+    char* finalResponse = NULL;
+    BOOL forcedNativeRetry = FALSE;
+    int effectiveMaxIter = maxIter > 0 ? maxIter : TOOLLOOP_MAX_ITER;
+    int effectiveMaxTools = maxTools > 0 ? maxTools : TOOLLOOP_MAX_TOOLS;
+
+    if (!pResult) return;
+    memset(pResult, 0, sizeof(*pResult));
+
+    msgs = (AIChatMessage*)calloc(TOOLLOOP_MAX_MSGS, sizeof(AIChatMessage));
+    owned = (char**)calloc(TOOLLOOP_MAX_MSGS, sizeof(char*));
+    if (!msgs || !owned)
+    {
+        pResult->pszResult = _strdup("Error: Out of memory for agent loop");
+        if (msgs) free(msgs);
+        if (owned) free(owned);
+        return;
+    }
+
+    // System prompt
+    msgs[msgCount].role = "system";
+    msgs[msgCount].content = systemPrompt;
+    msgCount++;
+
+    // User prompt
+    msgs[msgCount].role = "user";
+    msgs[msgCount].content = userPrompt;
+    msgCount++;
+
+    while (iteration < effectiveMaxIter)
+    {
+        AITokenUsage usage = { 0, 0 };
+        char* response;
+        ToolCall* toolCalls = NULL;
+        int toolCount;
+
+        iteration++;
+
+        if (callback && iteration > 1)
+        {
+            char buf[128];
+            _snprintf_s(buf, sizeof(buf), _TRUNCATE, "Thinking... (step %d/%d)", iteration, effectiveMaxIter);
+            callback(cbNodeIndex, 0, buf);
+        }
+
+        response = AIDirectCall_ChatMultiEx(pCfg, msgs, msgCount, &usage);
+        totalInput += usage.inputTokens;
+        totalOutput += usage.outputTokens;
+
+        if (!response)
+        {
+            finalResponse = _strdup("Error: No response from AI provider");
+            break;
+        }
+
+        if (strncmp(response, "Error:", 6) == 0 ||
+            strncmp(response, "API Error", 9) == 0)
+        {
+            finalResponse = response;
+            break;
+        }
+
+        toolCount = ParseToolCalls(response, &toolCalls);
+
+        if ((totalToolCalls + toolCount) > effectiveMaxTools)
+        {
+            free(response);
+            FreeToolCalls(toolCalls, toolCount);
+            finalResponse = _strdup("Stopped: tool-call budget exhausted.");
+            break;
+        }
+
+        if (toolCount == 0)
+        {
+            // Model didn't use tools - nudge it to use them on first occurrence
+            if (!forcedNativeRetry && filesChanged == 0 &&
+                msgCount < TOOLLOOP_MAX_MSGS - 2)
+            {
+                char* respCopy = _strdup(response);
+                char* correction = _strdup(
+                    "You MUST use the provided tools (write_file, replace_in_file, read_file, etc.) "
+                    "to make changes to files in the workspace. Do not paste code into the chat. "
+                    "Use <tool_call>{\"name\": \"write_file\", \"path\": \"...\", \"content\": \"...\"}</tool_call> "
+                    "or <tool_call>{\"name\": \"replace_in_file\", \"path\": \"...\", \"old_text\": \"...\", \"new_text\": \"...\"}</tool_call> "
+                    "to actually create or modify files. Read files first with read_file if needed."
+                );
+                if (respCopy && correction)
+                {
+                    msgs[msgCount].role = "assistant";
+                    msgs[msgCount].content = respCopy;
+                    owned[msgCount] = respCopy;
+                    msgCount++;
+
+                    msgs[msgCount].role = "user";
+                    msgs[msgCount].content = correction;
+                    owned[msgCount] = correction;
+                    msgCount++;
+
+                    forcedNativeRetry = TRUE;
+                    free(response);
+                    continue;
+                }
+                if (respCopy) free(respCopy);
+                if (correction) free(correction);
+            }
+
+            // No tool calls -- this is the final answer
+            finalResponse = response;
+            break;
+        }
+
+        // Add assistant response to history
+        if (msgCount < TOOLLOOP_MAX_MSGS - 2)
+        {
+            char* respCopy = _strdup(response);
+            msgs[msgCount].role = "assistant";
+            msgs[msgCount].content = respCopy;
+            owned[msgCount] = respCopy;
+            msgCount++;
+        }
+        free(response);
+
+        // Execute tool calls and build results
+        {
+            StrBuf toolResults;
+            int i;
+            sb_init(&toolResults, 4096);
+
+            for (i = 0; i < toolCount; i++)
+            {
+                char* result;
+                char* safeResult;
+
+                if (callback)
+                {
+                    char buf[512];
+                    const char* detail = toolCalls[i].path ? toolCalls[i].path :
+                                         toolCalls[i].command ? toolCalls[i].command : "";
+                    _snprintf_s(buf, sizeof(buf), _TRUNCATE, "[%s: %s]", toolCalls[i].name, detail);
+                    callback(cbNodeIndex, 1, buf);
+                }
+
+                result = ExecuteTool(&toolCalls[i]);
+                totalToolCalls++;
+
+                if (IsWorkspaceMutationTool(toolCalls[i].name) &&
+                    result && strncmp(result, "Error:", 6) != 0)
+                {
+                    filesChanged++;
+                }
+
+                sb_appendf(&toolResults, "[Tool result: %s", toolCalls[i].name);
+                if (toolCalls[i].path)
+                    sb_appendf(&toolResults, " - %s", toolCalls[i].path);
+                sb_append(&toolResults, "]\n", -1);
+
+                safeResult = PrepareToolResultForModel(toolCalls[i].name,
+                    result ? result : "(no output)", TOOLLOOP_MAX_RESULT);
+                if (safeResult && safeResult[0])
+                    sb_append(&toolResults, safeResult, -1);
+                else
+                    sb_append(&toolResults, "(no output)", -1);
+                sb_append(&toolResults, "\n", 1);
+
+                if (safeResult) free(safeResult);
+                if (result) free(result);
+
+                if (toolResults.len >= TOOLLOOP_MAX_FEEDBACK)
+                {
+                    sb_append(&toolResults,
+                        "\n[Additional tool output omitted to keep the request compact.]\n", -1);
+                    break;
+                }
+            }
+
+            FreeToolCalls(toolCalls, toolCount);
+
+            // Add tool results as user message
+            if (msgCount < TOOLLOOP_MAX_MSGS)
+            {
+                msgs[msgCount].role = "user";
+                msgs[msgCount].content = toolResults.data;
+                owned[msgCount] = toolResults.data;
+                msgCount++;
+            }
+            else
+            {
+                sb_free(&toolResults);
+            }
+        }
+    }
+
+    if (!finalResponse)
+    {
+        finalResponse = _strdup(
+            "Stopped at the iteration limit before getting a final answer.");
+    }
+
+    pResult->pszResult = finalResponse;
+    pResult->inputTokens = totalInput;
+    pResult->outputTokens = totalOutput;
+    pResult->toolCalls = totalToolCalls;
+    pResult->filesChanged = filesChanged;
+
+    // Cleanup owned strings (skip index 0 and 1 which are systemPrompt/userPrompt not owned)
+    {
+        int i;
+        for (i = 0; i < msgCount; i++)
+        {
+            if (owned[i]) free(owned[i]);
+        }
+    }
+    free(owned);
+    free(msgs);
 }

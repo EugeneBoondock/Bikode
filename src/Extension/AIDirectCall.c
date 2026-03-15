@@ -1010,11 +1010,69 @@ static char* ParseLLMResponse(const char* respJson, EAIRequestFormat fmt)
 
 #define MAX_RESPONSE_SIZE (4 * 1024 * 1024)
 
-static char* SendHTTPRequest(const AIProviderConfig* pCfg, const char* body, int bodyLen)
+// Extract an integer from a JSON object at the given key.
+// Returns defaultValue if key not found or not a number.
+static int json_extract_int(const char* json, const char* key, int defaultValue)
+{
+    const char* val = json_find_value(json, key);
+    if (!val) return defaultValue;
+    char* endPtr = NULL;
+    long parsed = strtol(val, &endPtr, 10);
+    if (endPtr == val) return defaultValue;
+    return (int)parsed;
+}
+
+// Extract token usage from a provider JSON response.
+// Supports OpenAI ("usage.prompt_tokens"/"completion_tokens"),
+// Anthropic ("usage.input_tokens"/"output_tokens"),
+// and Google ("usageMetadata.promptTokenCount"/"candidatesTokenCount").
+static void ExtractTokenUsage(const char* respJson, AITokenUsage* pUsage)
+{
+    const char* usage;
+    if (!pUsage) return;
+    pUsage->inputTokens = 0;
+    pUsage->outputTokens = 0;
+    if (!respJson) return;
+
+    // OpenAI / most providers: "usage": { "prompt_tokens": N, "completion_tokens": N }
+    usage = json_find_value(respJson, "usage");
+    if (usage)
+    {
+        int pt = json_extract_int(usage, "prompt_tokens", 0);
+        int ct = json_extract_int(usage, "completion_tokens", 0);
+        if (pt > 0 || ct > 0)
+        {
+            pUsage->inputTokens = pt;
+            pUsage->outputTokens = ct;
+            return;
+        }
+        // Anthropic: "usage": { "input_tokens": N, "output_tokens": N }
+        pt = json_extract_int(usage, "input_tokens", 0);
+        ct = json_extract_int(usage, "output_tokens", 0);
+        if (pt > 0 || ct > 0)
+        {
+            pUsage->inputTokens = pt;
+            pUsage->outputTokens = ct;
+            return;
+        }
+    }
+
+    // Google: "usageMetadata": { "promptTokenCount": N, "candidatesTokenCount": N }
+    usage = json_find_value(respJson, "usageMetadata");
+    if (usage)
+    {
+        pUsage->inputTokens = json_extract_int(usage, "promptTokenCount", 0);
+        pUsage->outputTokens = json_extract_int(usage, "candidatesTokenCount", 0);
+    }
+}
+
+static char* SendHTTPRequestRaw(const AIProviderConfig* pCfg, const char* body, int bodyLen, char** ppRawJson)
 {
     const AIProviderDef* pDef = AIProvider_Get(pCfg->eProvider);
     if (!pDef)
         return _strdup("Error: Unknown provider");
+
+    if (ppRawJson) *ppRawJson = NULL;
 
     if (pDef->bRequiresKey && !pCfg->szApiKey[0])
     {
@@ -1149,10 +1207,19 @@ static char* SendHTTPRequest(const AIProviderConfig* pCfg, const char* body, int
         return _strdup("Error: Non-2xx HTTP status");
     }
 
+    // Optionally return the raw JSON for the caller to extract additional info
+    if (ppRawJson && resp.data)
+        *ppRawJson = _strdup(resp.data);
+
     char* content = ParseLLMResponse(resp.data, pDef->eFormat);
     sb_free(&resp);
 
     return content ? content : _strdup("Error: Empty response from API");
+}
+
+static char* SendHTTPRequest(const AIProviderConfig* pCfg, const char* body, int bodyLen)
+{
+    return SendHTTPRequestRaw(pCfg, body, bodyLen, NULL);
 }
 
 //=============================================================================
@@ -1376,6 +1443,41 @@ char* AIDirectCall_ChatMulti(const AIProviderConfig* pCfg,
 
     char* result = SendHTTPRequest(pCfg, body.data, body.len);
     sb_free(&body);
+    return result;
+}
+
+char* AIDirectCall_ChatMultiEx(const AIProviderConfig* pCfg,
+                               const AIChatMessage* messages,
+                               int messageCount,
+                               AITokenUsage* pUsage)
+{
+    const AIProviderDef* pDef = AIProvider_Get(pCfg->eProvider);
+    char* rawJson = NULL;
+    char* result;
+
+    if (pUsage)
+    {
+        pUsage->inputTokens = 0;
+        pUsage->outputTokens = 0;
+    }
+    if (!pDef)
+        return _strdup("Error: Unknown provider");
+
+    {
+        StrBuf body;
+        sb_init(&body, 4096);
+        BuildRequestBodyMulti(&body, pCfg, pDef, messages, messageCount);
+        result = SendHTTPRequestRaw(pCfg, body.data, body.len, &rawJson);
+        sb_free(&body);
+    }
+
+    if (rawJson)
+    {
+        if (pUsage)
+            ExtractTokenUsage(rawJson, pUsage);
+        free(rawJson);
+    }
+
     return result;
 }
 

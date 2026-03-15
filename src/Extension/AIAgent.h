@@ -70,6 +70,46 @@ BOOL AIAgent_ChatAsync(const AIProviderConfig* pCfg,
 // Clear conversation history (start fresh context).
 void AIAgent_ClearHistory(void);
 
+//=============================================================================
+// Synchronous agentic tool loop (for use by AgentRuntime / Mission Control)
+//=============================================================================
+
+// Result structure returned by AIAgent_RunToolLoop.
+typedef struct {
+    char*   pszResult;          // Final response text (heap-allocated, caller frees)
+    int     inputTokens;        // Cumulative input tokens across all iterations
+    int     outputTokens;       // Cumulative output tokens across all iterations
+    int     toolCalls;          // Total tool calls executed
+    int     filesChanged;       // Number of file-mutation tool calls
+} AIAgentLoopResult;
+
+// Callback for runtime event reporting during the tool loop.
+// nodeIndex: the caller's node index (opaque, passed through)
+// eventType: 0=status, 1=tool
+// message: event description (do NOT free; it's stack-allocated)
+typedef void (*AIAgentLoopCallback)(int nodeIndex, int eventType, const char* message);
+
+// Run a synchronous multi-turn agentic loop on the calling thread.
+// The model is called repeatedly until it produces a final answer (no tool
+// calls) or the iteration/tool budget is exhausted.
+//
+// pCfg:        Provider configuration (model, API key, etc.)
+// systemPrompt: System prompt including tool documentation
+// userPrompt:  The task/instruction for the model
+// maxIter:     Maximum LLM round-trips (0 = default 12)
+// maxTools:    Maximum total tool calls (0 = default 30)
+// callback:    Optional callback for status/tool events (may be NULL)
+// cbNodeIndex: Opaque node index passed to callback
+// pResult:     Output structure (caller must free pszResult)
+void AIAgent_RunToolLoop(const AIProviderConfig* pCfg,
+                         const char* systemPrompt,
+                         const char* userPrompt,
+                         int maxIter,
+                         int maxTools,
+                         AIAgentLoopCallback callback,
+                         int cbNodeIndex,
+                         AIAgentLoopResult* pResult);
+
 #ifdef __cplusplus
 }
 #endif

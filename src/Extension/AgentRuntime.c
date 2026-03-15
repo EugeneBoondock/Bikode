@@ -2233,6 +2233,31 @@ static char* JsonExtractAfter(const char* json, const char* marker, const char* 
     return JsonExtractString(scope, key);
 }
 
+// Extract an integer value from a JSON object.  Returns defaultValue on miss.
+static int JsonExtractInt(const char* json, const char* key, int defaultValue)
+{
+    char needle[128];
+    const char* p;
+    char* endPtr;
+    long val;
+    if (!json || !key)
+        return defaultValue;
+    _snprintf_s(needle, sizeof(needle), _TRUNCATE, "\"%s\"", key);
+    p = strstr(json, needle);
+    if (!p)
+        return defaultValue;
+    p = strchr(p + (int)strlen(needle), ':');
+    if (!p)
+        return defaultValue;
+    p = SkipWhitespace(p + 1);
+    if (!p)
+        return defaultValue;
+    val = strtol(p, &endPtr, 10);
+    if (endPtr == p)
+        return defaultValue;
+    return (int)val;
+}
+
 static void HandleCodexLine(int nodeIndex, const char* line, char** ppszFinal)
 {
     char* value;
@@ -2260,6 +2285,20 @@ static void HandleCodexLine(int nodeIndex, const char* line, char** ppszFinal)
             free(value);
         }
         return;
+    }
+    // Extract token usage from Codex JSON output ({"type":"usage", "input_tokens":N, "output_tokens":N})
+    if (strstr(line, "\"type\":\"usage\"") || strstr(line, "\"input_tokens\""))
+    {
+        int inTok = JsonExtractInt(line, "input_tokens", 0);
+        int outTok = JsonExtractInt(line, "output_tokens", 0);
+        if (inTok > 0 || outTok > 0)
+        {
+            EnterCriticalSection(&s_runtime.cs);
+            s_runtime.nodes[nodeIndex].inputTokens += inTok;
+            s_runtime.nodes[nodeIndex].outputTokens += outTok;
+            LeaveCriticalSection(&s_runtime.cs);
+        }
+        // Don't return — could carry other fields too
     }
     if (strstr(line, "\"type\":\"agent_message\""))
     {
@@ -2311,6 +2350,19 @@ static void HandleClaudeLine(int nodeIndex, const char* line, char** ppszFinal)
             *ppszFinal = value;
         }
         return;
+    }
+    // Extract token usage from Claude JSON output
+    if (strstr(line, "\"type\":\"usage\"") || strstr(line, "\"input_tokens\""))
+    {
+        int inTok = JsonExtractInt(line, "input_tokens", 0);
+        int outTok = JsonExtractInt(line, "output_tokens", 0);
+        if (inTok > 0 || outTok > 0)
+        {
+            EnterCriticalSection(&s_runtime.cs);
+            s_runtime.nodes[nodeIndex].inputTokens += inTok;
+            s_runtime.nodes[nodeIndex].outputTokens += outTok;
+            LeaveCriticalSection(&s_runtime.cs);
+        }
     }
     if (strstr(line, "\"type\":\"result\""))
     {
@@ -2454,13 +2506,8 @@ static char* BuildNodePrompt(int nodeIndex)
         "- Keep the work grounded in the current workspace.\n"
         "- End with what changed, what you checked, and remaining risk.\n"
         "- Prefer concise, technical language over fluff.\n\n", -1);
-    if (spec->backend == AGENT_BACKEND_API)
+    if (spec->backend == AGENT_BACKEND_API || spec->backend == AGENT_BACKEND_LOCAL)
     {
-        sb_append(&sb,
-            "Provider-backed node note:\n"
-            "- This node cannot call live workspace tools.\n"
-            "- Reason from the workspace snapshot and dependency summaries below instead of asking the user to paste files.\n"
-            "- If the snapshot is insufficient, say exactly what evidence is still missing.\n\n", -1);
         AppendWorkspacePromptSnapshot(&sb, s_runtime.nodes[nodeIndex].workspacePath);
         sb_append(&sb, "\n", 1);
     }
@@ -2620,13 +2667,92 @@ cleanup:
     return final ? final : DupString("Error: Failed to execute the subscription agent.");
 }
 
+// Callback adapter: forwards AIAgent_RunToolLoop events into the runtime event log
+static void RuntimeToolLoopCallback(int nodeIndex, int eventType, const char* message)
+{
+    if (eventType == 1)
+        RuntimeAddEvent(nodeIndex, AGENT_EVENT_TOOL, message ? message : "tool call");
+    else
+        RuntimeAddEvent(nodeIndex, AGENT_EVENT_STATUS, message ? message : "");
+}
+
+static char* BuildApiNodeSystemPrompt(const OrgNodeSpec* spec, const char* workspaceUtf8)
+{
+    StrBuf sb;
+    sb_init(&sb, 8192);
+
+    sb_append(&sb,
+        "You are a Bikode Mission Control node. Stay concise, repository-aware, and reality-based.\n\n"
+        "You have access to tools that let you operate the workspace natively: "
+        "read and write files, execute commands, and explore the filesystem.\n\n"
+        "## Available Tools\n\n"
+        "To use a tool, include a tool call block in your response:\n\n"
+        "<tool_call>\n"
+        "{\"name\": \"tool_name\", \"param1\": \"value1\"}\n"
+        "</tool_call>\n\n"
+        "You can include multiple tool calls in a single response. After tools execute, you will receive their results and can continue.\n\n"
+
+        "### read_file\n"
+        "Read the contents of a file from disk.\n"
+        "Parameters: name, path, optional start_line, optional line_count\n"
+        "Example: {\"name\": \"read_file\", \"path\": \"src/main.c\"}\n\n"
+
+        "### write_file\n"
+        "Create or overwrite a file with the given content.\n"
+        "Parameters: name, path, content\n"
+        "Example: {\"name\": \"write_file\", \"path\": \"hello.c\", \"content\": \"#include <stdio.h>\\nint main() { return 0; }\"}\n\n"
+
+        "### replace_in_file\n"
+        "Find and replace text in an existing file. Replaces the first occurrence.\n"
+        "Parameters: name, path, old_text, new_text\n"
+        "Example: {\"name\": \"replace_in_file\", \"path\": \"main.c\", \"old_text\": \"return 0;\", \"new_text\": \"return EXIT_SUCCESS;\"}\n\n"
+
+        "### run_command\n"
+        "Execute a shell command and return its output.\n"
+        "Parameters: name, command, optional cwd\n"
+        "Example: {\"name\": \"run_command\", \"command\": \"npm test\", \"cwd\": \"webapp\"}\n\n"
+
+        "### list_dir\n"
+        "List the contents of a directory.\n"
+        "Parameters: name, path\n"
+        "Example: {\"name\": \"list_dir\", \"path\": \"src\"}\n\n"
+
+        "### make_dir\n"
+        "Create a directory recursively.\n"
+        "Parameters: name, path\n"
+        "Example: {\"name\": \"make_dir\", \"path\": \"scripts/deploy\"}\n\n"
+
+        "### semantic_search\n"
+        "Search the workspace using local code embeddings.\n"
+        "Parameters: name, query, optional path, optional max_results\n"
+        "Example: {\"name\": \"semantic_search\", \"query\": \"database connection\", \"max_results\": 4}\n\n"
+
+        "## Guidelines\n"
+        "- Read files before modifying them.\n"
+        "- Use replace_in_file for targeted edits; write_file for new files.\n"
+        "- Relative paths resolve from the workspace root.\n"
+        "- All JSON strings must use proper escaping (\\n for newlines, \\\" for quotes).\n"
+        "- When your answer is complete (no more tools needed), respond with plain text and summarize the changes.\n", -1);
+
+    if (spec->workspacePolicy == AGENT_WORKSPACE_SHARED_READONLY)
+        sb_append(&sb, "- IMPORTANT: This node is READ-ONLY. Do NOT write or modify any files.\n", -1);
+
+    sb_appendf(&sb, "- Workspace root: %s\n",
+        workspaceUtf8 && workspaceUtf8[0] ? workspaceUtf8 : ".");
+    sb_appendf(&sb, "- Runtime platform: Windows Win32. Commands use cmd.exe.\n");
+
+    return sb.data;
+}
+
 static char* RunApiNode(int nodeIndex, const OrgNodeSpec* spec, StrBuf* pTranscript)
 {
     AIProviderConfig cfg;
     const AIConfig* pBridgeCfg = AIBridge_GetConfig();
-    const char* systemPrompt = "You are a Bikode Mission Control node. Stay concise, repository-aware, and reality-based.";
     char* prompt;
-    char* response;
+    char* systemPrompt;
+    char* workspaceUtf8;
+    AIAgentLoopResult loopResult;
+
     if (!pBridgeCfg)
         return DupString("Error: No AI provider configuration is available.");
 
@@ -2644,15 +2770,47 @@ static char* RunApiNode(int nodeIndex, const OrgNodeSpec* spec, StrBuf* pTranscr
     }
     if (spec->model[0])
         CopyStringSafe(cfg.szModel, COUNTOF(cfg.szModel), spec->model);
+
+    workspaceUtf8 = WideToUtf8Dup(s_runtime.nodes[nodeIndex].workspacePath);
+    systemPrompt = BuildApiNodeSystemPrompt(spec, workspaceUtf8);
     prompt = BuildNodePrompt(nodeIndex);
+
+    sb_append(pTranscript, "System:\n", -1);
+    sb_append(pTranscript, systemPrompt, -1);
+    sb_append(pTranscript, "\n\n---\n\nUser:\n", -1);
     sb_append(pTranscript, prompt, -1);
     sb_append(pTranscript, "\n\n---\n\n", -1);
-    RuntimeAddEvent(nodeIndex, AGENT_EVENT_STATUS, "Provider-backed node is generating its brief.");
-    response = AIDirectCall_Chat(&cfg, systemPrompt, prompt);
-    if (response)
-        sb_append(pTranscript, response, -1);
+
+    RuntimeAddEvent(nodeIndex, AGENT_EVENT_STATUS, "Running agentic tool loop.");
+
+    memset(&loopResult, 0, sizeof(loopResult));
+    AIAgent_RunToolLoop(&cfg, systemPrompt, prompt, 12, 30,
+                        RuntimeToolLoopCallback, nodeIndex, &loopResult);
+
+    // Record token counts and tool/file metrics
+    EnterCriticalSection(&s_runtime.cs);
+    s_runtime.nodes[nodeIndex].inputTokens += loopResult.inputTokens;
+    s_runtime.nodes[nodeIndex].outputTokens += loopResult.outputTokens;
+    s_runtime.nodes[nodeIndex].toolCount += loopResult.toolCalls;
+    LeaveCriticalSection(&s_runtime.cs);
+
+    if (loopResult.pszResult)
+        sb_append(pTranscript, loopResult.pszResult, -1);
+
+    {
+        char metricMsg[256];
+        _snprintf_s(metricMsg, sizeof(metricMsg), _TRUNCATE,
+            "Tokens: %d in / %d out, tools: %d, file mutations: %d",
+            loopResult.inputTokens, loopResult.outputTokens,
+            loopResult.toolCalls, loopResult.filesChanged);
+        RuntimeAddEvent(nodeIndex, AGENT_EVENT_METRIC, metricMsg);
+    }
+
+    free(systemPrompt);
     free(prompt);
-    return response ? response : DupString("Error: The provider did not return a response.");
+    if (workspaceUtf8) free(workspaceUtf8);
+
+    return loopResult.pszResult ? loopResult.pszResult : DupString("Error: The provider did not return a response.");
 }
 
 static char* BuildRelayFallbackResult(const char* codexSummary, const char* claudeIssue)
