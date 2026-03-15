@@ -14,6 +14,7 @@
 #include "AIContext.h"
 #include "AIDirectCall.h"
 #include "AIBridge.h"
+#include "AgentRuntime.h"
 #include "CodeEmbeddingIndex.h"
 #include "CommonUtils.h"
 #include "Externals.h"
@@ -1103,6 +1104,27 @@ static char* BuildSystemPrompt(const BudgetContract* contract, AgentIntent inten
         "Example: {\"name\": \"context_store\", \"operation\": \"store\", \"key\": \"architecture\", \"value\": \"MVC pattern with service layer\"}\n"
         "Example: {\"name\": \"context_store\", \"operation\": \"retrieve\", \"query\": \"how does auth work\"}\n\n"
 
+        "### run_workflow\n"
+        "Trigger an agent command centre workflow (multi-agent orchestration run).\n"
+        "Actions: list (show available workflows), status (check current run), cancel, pause, resume.\n"
+        "Parameters: name, optional path (workflow name or number), optional command (action: list|status|cancel|pause|resume)\n"
+        "Example: {\"name\": \"run_workflow\", \"command\": \"list\"}\n"
+        "Example: {\"name\": \"run_workflow\", \"path\": \"Full Stack Sprint\"}\n"
+        "Example: {\"name\": \"run_workflow\", \"command\": \"status\"}\n\n"
+
+        "### lint\n"
+        "Auto-detect and run linters for the current project. Supports Ruff, Biome, ESLint, Clippy, golangci-lint, ast-grep, mypy, flake8.\n"
+        "Detects linter config files in the workspace and runs the appropriate tool.\n"
+        "Parameters: name, optional path (target path), optional command (specific tool name to override auto-detection)\n"
+        "Example: {\"name\": \"lint\"}\n"
+        "Example: {\"name\": \"lint\", \"path\": \"src/\", \"command\": \"ruff\"}\n\n"
+
+        "### format\n"
+        "Auto-detect and run code formatters. Supports Ruff, Biome, Prettier, Black, rustfmt, gofmt.\n"
+        "Parameters: name, optional path (target path), optional command (specific formatter to use)\n"
+        "Example: {\"name\": \"format\"}\n"
+        "Example: {\"name\": \"format\", \"command\": \"prettier\"}\n\n"
+
         "## Guidelines\n"
         "- Read files before modifying them to understand their current content.\n"
         "- Use get_active_document when the current editor buffer may have unsaved changes.\n"
@@ -1217,7 +1239,10 @@ static const char* FindRawJsonToolCall(const char* p)
                 strcmp(name, "eval_prompt") == 0 ||
                 strcmp(name, "red_team_prompt") == 0 ||
                 strcmp(name, "design_audit") == 0 ||
-                strcmp(name, "context_store") == 0)
+                strcmp(name, "context_store") == 0 ||
+                strcmp(name, "run_workflow") == 0 ||
+                strcmp(name, "lint") == 0 ||
+                strcmp(name, "format") == 0)
             {
                 free(name);
                 return s;
@@ -2881,6 +2906,429 @@ static char* Tool_ContextStore(const char* operation, const char* key,
     return _strdup("Error: operation must be 'store', 'retrieve', or 'list'.");
 }
 
+//=============================================================================
+// Tool: run_workflow — trigger an AgentRuntime workflow from chat
+//=============================================================================
+
+static char* Tool_RunWorkflow(const char* workflowName, const char* action)
+{
+    // Handle cancel/pause/resume actions on a running workflow
+    if (action && action[0])
+    {
+        if (_stricmp(action, "cancel") == 0 || _stricmp(action, "stop") == 0)
+        {
+            if (!AgentRuntime_IsRunning())
+                return _strdup("No workflow is currently running.");
+            AgentRuntime_Cancel();
+            return _strdup("Workflow canceled.");
+        }
+        if (_stricmp(action, "pause") == 0)
+        {
+            if (!AgentRuntime_IsRunning())
+                return _strdup("No workflow is currently running.");
+            AgentRuntime_SetPaused(TRUE);
+            return _strdup("Workflow paused.");
+        }
+        if (_stricmp(action, "resume") == 0 || _stricmp(action, "unpause") == 0)
+        {
+            AgentRuntime_SetPaused(FALSE);
+            return _strdup("Workflow resumed.");
+        }
+        if (_stricmp(action, "status") == 0)
+        {
+            AgentRuntimeSnapshot snapshot;
+            if (!AgentRuntime_GetSnapshot(&snapshot))
+                return _strdup("No workflow has been run yet.");
+            StrBuf sb;
+            sb_init(&sb, 1024);
+            sb_appendf(&sb, "Workflow: %s\nRunning: %s\nPaused: %s\nNodes: %d\n",
+                snapshot.org.name,
+                snapshot.isRunning ? "yes" : "no",
+                snapshot.isPaused ? "yes" : "no",
+                snapshot.nodeCount);
+            for (int i = 0; i < snapshot.nodeCount; i++)
+            {
+                sb_appendf(&sb, "  [%s] %s — %s (tools: %d, files: %d)\n",
+                    AgentRuntime_StateLabel(snapshot.nodes[i].state),
+                    snapshot.nodes[i].title,
+                    snapshot.nodes[i].lastAction[0] ? snapshot.nodes[i].lastAction : "idle",
+                    snapshot.nodes[i].toolCount,
+                    snapshot.nodes[i].fileCount);
+            }
+            return sb.data;
+        }
+        if (_stricmp(action, "list") == 0)
+        {
+            goto list_workflows;
+        }
+    }
+
+    // If no workflow name given, list available workflows
+    if (!workflowName || !workflowName[0])
+    {
+list_workflows:;
+        OrgSpec orgs[32];
+        int orgCount = 0;
+        const WCHAR* wsRoot = AgentRuntime_GetWorkspaceRoot();
+        if (!wsRoot || !wsRoot[0])
+        {
+            WCHAR cwd[MAX_PATH];
+            GetCurrentDirectoryW(MAX_PATH, cwd);
+            wsRoot = cwd;
+        }
+        if (!AgentRuntime_LoadOrgSpecs(wsRoot, orgs, 32, &orgCount) || orgCount == 0)
+            return _strdup("No workflows found. Create one in .bikode/orgs/ or use Mission Control.");
+
+        StrBuf sb;
+        sb_init(&sb, 512);
+        sb_appendf(&sb, "Available workflows (%d):\n", orgCount);
+        for (int i = 0; i < orgCount; i++)
+            sb_appendf(&sb, "  %d. %s (%d agents)\n", i + 1, orgs[i].name, orgs[i].nodeCount);
+        sb_append(&sb, "\nUse run_workflow with the workflow name to start one.", -1);
+        return sb.data;
+    }
+
+    // Check if a workflow is already running
+    if (AgentRuntime_IsRunning())
+        return _strdup("Error: A workflow is already running. Cancel it first with action='cancel'.");
+
+    // Find and start the named workflow
+    {
+        OrgSpec orgs[32];
+        int orgCount = 0;
+        const WCHAR* wsRoot = AgentRuntime_GetWorkspaceRoot();
+        if (!wsRoot || !wsRoot[0])
+        {
+            WCHAR cwd[MAX_PATH];
+            GetCurrentDirectoryW(MAX_PATH, cwd);
+            wsRoot = cwd;
+        }
+        if (!AgentRuntime_LoadOrgSpecs(wsRoot, orgs, 32, &orgCount) || orgCount == 0)
+            return _strdup("Error: No workflows found in this workspace.");
+
+        // Match by name (case-insensitive, partial match)
+        int matchIdx = -1;
+        for (int i = 0; i < orgCount; i++)
+        {
+            if (_stricmp(orgs[i].name, workflowName) == 0)
+            {
+                matchIdx = i;
+                break;
+            }
+        }
+        // Fallback: partial match
+        if (matchIdx < 0)
+        {
+            for (int i = 0; i < orgCount; i++)
+            {
+                if (ContainsSubstringCI(orgs[i].name, workflowName))
+                {
+                    matchIdx = i;
+                    break;
+                }
+            }
+        }
+        // Fallback: numeric index (1-based)
+        if (matchIdx < 0)
+        {
+            int idx = atoi(workflowName);
+            if (idx >= 1 && idx <= orgCount)
+                matchIdx = idx - 1;
+        }
+
+        if (matchIdx < 0)
+        {
+            StrBuf sb;
+            sb_init(&sb, 512);
+            sb_appendf(&sb, "Error: No workflow matching '%s'. Available:\n", workflowName);
+            for (int i = 0; i < orgCount; i++)
+                sb_appendf(&sb, "  %d. %s\n", i + 1, orgs[i].name);
+            return sb.data;
+        }
+
+        if (AgentRuntime_Start(&orgs[matchIdx]))
+        {
+            StrBuf sb;
+            sb_init(&sb, 256);
+            sb_appendf(&sb, "Started workflow '%s' with %d agent nodes.\n",
+                orgs[matchIdx].name, orgs[matchIdx].nodeCount);
+            for (int i = 0; i < orgs[matchIdx].nodeCount; i++)
+                sb_appendf(&sb, "  - %s (%s)\n", orgs[matchIdx].nodes[i].title,
+                    orgs[matchIdx].nodes[i].role);
+            return sb.data;
+        }
+        return _strdup("Error: Failed to start workflow. Check Mission Control for details.");
+    }
+}
+
+//=============================================================================
+// Tool: lint — auto-detect and run available linters/formatters
+//=============================================================================
+
+// Check if a command is available on the system PATH
+static BOOL IsCommandAvailable(const char* cmd)
+{
+    char check[512];
+    _snprintf_s(check, sizeof(check), _TRUNCATE, "where %s >nul 2>nul", cmd);
+    return (system(check) == 0);
+}
+
+static char* Tool_Lint(const char* path, const char* tool)
+{
+    char cwd[MAX_PATH];
+    GetCurrentDirectoryA(MAX_PATH, cwd);
+
+    // If a specific tool is requested, run it directly
+    if (tool && tool[0])
+    {
+        char cmd[1024];
+        if (_stricmp(tool, "ruff") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "ruff check %s --output-format=concise",
+                path && path[0] ? path : ".");
+        }
+        else if (_stricmp(tool, "biome") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "npx @biomejs/biome check %s",
+                path && path[0] ? path : ".");
+        }
+        else if (_stricmp(tool, "eslint") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "npx eslint %s --format=compact",
+                path && path[0] ? path : ".");
+        }
+        else if (_stricmp(tool, "ast-grep") == 0 || _stricmp(tool, "sg") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "sg scan %s",
+                path && path[0] ? path : ".");
+        }
+        else if (_stricmp(tool, "clippy") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "cargo clippy --message-format=short 2>&1");
+        }
+        else if (_stricmp(tool, "golangci-lint") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "golangci-lint run %s",
+                path && path[0] ? path : "./...");
+        }
+        else if (_stricmp(tool, "mypy") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "mypy %s --no-color-output",
+                path && path[0] ? path : ".");
+        }
+        else if (_stricmp(tool, "flake8") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "flake8 %s",
+                path && path[0] ? path : ".");
+        }
+        else
+        {
+            // Unknown tool — run as custom command
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "%s %s",
+                tool, path && path[0] ? path : ".");
+        }
+        return Tool_RunCommand(cmd, NULL);
+    }
+
+    // Auto-detect: check for config files and available tools
+    StrBuf sb;
+    sb_init(&sb, 2048);
+    int toolsRun = 0;
+
+    // Python: check for pyproject.toml or ruff.toml
+    {
+        BOOL hasRuff = PathFileExistsA("ruff.toml") || PathFileExistsA(".ruff.toml") ||
+                       PathFileExistsA("pyproject.toml");
+        if (hasRuff && IsCommandAvailable("ruff"))
+        {
+            char* result = Tool_RunCommand(
+                path && path[0] ? "ruff check --output-format=concise" :
+                "ruff check . --output-format=concise", NULL);
+            if (result)
+            {
+                sb_append(&sb, "[Ruff]\n", -1);
+                sb_append(&sb, result, -1);
+                sb_append(&sb, "\n", 1);
+                free(result);
+            }
+            toolsRun++;
+        }
+    }
+
+    // JavaScript/TypeScript: check for biome.json or biome.jsonc
+    {
+        BOOL hasBiome = PathFileExistsA("biome.json") || PathFileExistsA("biome.jsonc");
+        if (hasBiome)
+        {
+            char* result = Tool_RunCommand("npx @biomejs/biome check .", NULL);
+            if (result)
+            {
+                sb_append(&sb, "[Biome]\n", -1);
+                sb_append(&sb, result, -1);
+                sb_append(&sb, "\n", 1);
+                free(result);
+            }
+            toolsRun++;
+        }
+    }
+
+    // JavaScript/TypeScript: check for .eslintrc or eslint.config
+    if (toolsRun == 0)
+    {
+        BOOL hasEslint = PathFileExistsA(".eslintrc.json") || PathFileExistsA(".eslintrc.js") ||
+                         PathFileExistsA(".eslintrc.yml") || PathFileExistsA("eslint.config.js") ||
+                         PathFileExistsA("eslint.config.mjs");
+        if (hasEslint)
+        {
+            char* result = Tool_RunCommand("npx eslint . --format=compact", NULL);
+            if (result)
+            {
+                sb_append(&sb, "[ESLint]\n", -1);
+                sb_append(&sb, result, -1);
+                sb_append(&sb, "\n", 1);
+                free(result);
+            }
+            toolsRun++;
+        }
+    }
+
+    // Rust: check for Cargo.toml
+    {
+        if (PathFileExistsA("Cargo.toml") && IsCommandAvailable("cargo"))
+        {
+            char* result = Tool_RunCommand("cargo clippy --message-format=short 2>&1", NULL);
+            if (result)
+            {
+                sb_append(&sb, "[Clippy]\n", -1);
+                sb_append(&sb, result, -1);
+                sb_append(&sb, "\n", 1);
+                free(result);
+            }
+            toolsRun++;
+        }
+    }
+
+    // Go: check for go.mod
+    {
+        if (PathFileExistsA("go.mod") && IsCommandAvailable("golangci-lint"))
+        {
+            char* result = Tool_RunCommand("golangci-lint run ./...", NULL);
+            if (result)
+            {
+                sb_append(&sb, "[golangci-lint]\n", -1);
+                sb_append(&sb, result, -1);
+                sb_append(&sb, "\n", 1);
+                free(result);
+            }
+            toolsRun++;
+        }
+    }
+
+    // ast-grep: check for sgconfig.yml
+    {
+        if (PathFileExistsA("sgconfig.yml") && IsCommandAvailable("sg"))
+        {
+            char* result = Tool_RunCommand("sg scan .", NULL);
+            if (result)
+            {
+                sb_append(&sb, "[ast-grep]\n", -1);
+                sb_append(&sb, result, -1);
+                sb_append(&sb, "\n", 1);
+                free(result);
+            }
+            toolsRun++;
+        }
+    }
+
+    if (toolsRun == 0)
+    {
+        sb_free(&sb);
+        return _strdup(
+            "No linter config files detected in the workspace.\n"
+            "Supported tools (auto-detected by config):\n"
+            "  - Ruff: ruff.toml, .ruff.toml, pyproject.toml\n"
+            "  - Biome: biome.json, biome.jsonc\n"
+            "  - ESLint: .eslintrc.*, eslint.config.*\n"
+            "  - Clippy: Cargo.toml (Rust)\n"
+            "  - golangci-lint: go.mod (Go)\n"
+            "  - ast-grep: sgconfig.yml\n\n"
+            "You can also run a specific tool: {\"name\": \"lint\", \"tool\": \"ruff\"}");
+    }
+
+    return sb.data;
+}
+
+//=============================================================================
+// Tool: format — run code formatters
+//=============================================================================
+
+static char* Tool_Format(const char* path, const char* tool)
+{
+    // If a specific formatter is requested
+    if (tool && tool[0])
+    {
+        char cmd[1024];
+        if (_stricmp(tool, "ruff") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "ruff format %s",
+                path && path[0] ? path : ".");
+        }
+        else if (_stricmp(tool, "biome") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "npx @biomejs/biome format --write %s",
+                path && path[0] ? path : ".");
+        }
+        else if (_stricmp(tool, "prettier") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "npx prettier --write %s",
+                path && path[0] ? path : ".");
+        }
+        else if (_stricmp(tool, "black") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "black %s",
+                path && path[0] ? path : ".");
+        }
+        else if (_stricmp(tool, "rustfmt") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "cargo fmt");
+        }
+        else if (_stricmp(tool, "gofmt") == 0)
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "gofmt -w %s",
+                path && path[0] ? path : ".");
+        }
+        else
+        {
+            _snprintf_s(cmd, sizeof(cmd), _TRUNCATE, "%s %s",
+                tool, path && path[0] ? path : ".");
+        }
+        return Tool_RunCommand(cmd, NULL);
+    }
+
+    // Auto-detect formatter
+    if (PathFileExistsA("pyproject.toml") || PathFileExistsA("ruff.toml"))
+    {
+        if (IsCommandAvailable("ruff"))
+            return Tool_RunCommand(path && path[0] ? "ruff format" : "ruff format .", NULL);
+        if (IsCommandAvailable("black"))
+            return Tool_RunCommand(path && path[0] ? "black" : "black .", NULL);
+    }
+    if (PathFileExistsA("biome.json") || PathFileExistsA("biome.jsonc"))
+        return Tool_RunCommand("npx @biomejs/biome format --write .", NULL);
+    if (PathFileExistsA(".prettierrc") || PathFileExistsA(".prettierrc.json") ||
+        PathFileExistsA("prettier.config.js"))
+        return Tool_RunCommand("npx prettier --write .", NULL);
+    if (PathFileExistsA("Cargo.toml") && IsCommandAvailable("cargo"))
+        return Tool_RunCommand("cargo fmt", NULL);
+    if (PathFileExistsA("go.mod") && IsCommandAvailable("gofmt"))
+        return Tool_RunCommand("gofmt -w .", NULL);
+
+    return _strdup(
+        "No formatter config detected.\n"
+        "Supported: ruff, biome, prettier, black, rustfmt, gofmt.\n"
+        "Specify one with: {\"name\": \"format\", \"tool\": \"prettier\"}");
+}
+
 // Dispatch a single tool call
 static char* ExecuteTool(const ToolCall* tc)
 {
@@ -2922,6 +3370,12 @@ static char* ExecuteTool(const ToolCall* tc)
         return Tool_DesignAudit(tc->path, tc->cwd);
     if (strcmp(tc->name, "context_store") == 0)
         return Tool_ContextStore(tc->command, tc->path, tc->newText, tc->content);
+    if (strcmp(tc->name, "run_workflow") == 0)
+        return Tool_RunWorkflow(tc->path, tc->command);
+    if (strcmp(tc->name, "lint") == 0)
+        return Tool_Lint(tc->path, tc->command);
+    if (strcmp(tc->name, "format") == 0)
+        return Tool_Format(tc->path, tc->command);
 
     char err[128];
     snprintf(err, sizeof(err), "Error: Unknown tool '%s'", tc->name);

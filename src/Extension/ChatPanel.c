@@ -18,6 +18,7 @@
 #include "AICommands.h"
 #include "AISubscriptionAgent.h"
 #include "AIProvider.h"
+#include "AgentRuntime.h"
 #include "Externals.h"
 #include "CommonUtils.h"
 #include "FileManager.h"

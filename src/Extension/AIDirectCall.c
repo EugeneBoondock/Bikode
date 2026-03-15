@@ -1601,10 +1601,34 @@ static const NativeToolDef s_nativeTools[] = {
             "\"query\":{\"type\":\"string\",\"description\":\"Descriptive search query for the GIF\"}"
         "},\"required\":[\"query\"]}"
     },
+    {
+        "run_workflow",
+        "Trigger an agent command centre workflow (multi-agent orchestration). Use action 'list' to see available workflows, 'status' to check progress, 'cancel'/'pause'/'resume' to control a running workflow.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"path\":{\"type\":\"string\",\"description\":\"Workflow name or number to start\"},"
+            "\"command\":{\"type\":\"string\",\"description\":\"Action: list, status, cancel, pause, resume\"}"
+        "},\"required\":[]}"
+    },
+    {
+        "lint",
+        "Auto-detect and run linters for the project. Supports Ruff, Biome, ESLint, Clippy, golangci-lint, ast-grep, mypy, flake8. Auto-detects config files or specify a tool.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"path\":{\"type\":\"string\",\"description\":\"Target path to lint\"},"
+            "\"command\":{\"type\":\"string\",\"description\":\"Specific linter tool name (ruff, biome, eslint, clippy, etc.)\"}"
+        "},\"required\":[]}"
+    },
+    {
+        "format",
+        "Auto-detect and run code formatters. Supports Ruff, Biome, Prettier, Black, rustfmt, gofmt. Auto-detects config or specify a formatter.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"path\":{\"type\":\"string\",\"description\":\"Target path to format\"},"
+            "\"command\":{\"type\":\"string\",\"description\":\"Specific formatter name (ruff, biome, prettier, black, rustfmt, gofmt)\"}"
+        "},\"required\":[]}"
+    },
     { NULL, NULL, NULL }  // sentinel
 };
 
-#define NATIVE_TOOL_COUNT 15
+#define NATIVE_TOOL_COUNT 18
 
 // Append OpenAI-format tools array: "tools":[{"type":"function","function":{...}}]
 static void AppendNativeTools_OpenAI(StrBuf* body)

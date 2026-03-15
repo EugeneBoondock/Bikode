@@ -2867,6 +2867,18 @@ static char* BuildApiNodeSystemPrompt(const OrgNodeSpec* spec, const char* works
         "Parameters: name, query, optional path, optional max_results\n"
         "Example: {\"name\": \"semantic_search\", \"query\": \"database connection\", \"max_results\": 4}\n\n"
 
+        "### lint\n"
+        "Auto-detect and run linters (Ruff, Biome, ESLint, Clippy, golangci-lint, ast-grep). "
+        "Detects config files in workspace or specify a tool.\n"
+        "Parameters: name, optional path, optional command (tool name)\n"
+        "Example: {\"name\": \"lint\"}\n"
+        "Example: {\"name\": \"lint\", \"command\": \"ruff\"}\n\n"
+
+        "### format\n"
+        "Auto-detect and run code formatters (Ruff, Biome, Prettier, Black, rustfmt, gofmt).\n"
+        "Parameters: name, optional path, optional command (formatter name)\n"
+        "Example: {\"name\": \"format\"}\n\n"
+
         "## Guidelines\n"
         "- Read files before modifying them.\n"
         "- Use replace_in_file for targeted edits; write_file for new files.\n"
