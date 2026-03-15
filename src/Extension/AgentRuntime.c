@@ -2695,6 +2695,18 @@ static char* BuildNodePrompt(int nodeIndex)
     }
     AppendRepoIndexHitsToPrompt(nodeIndex, &sb);
     sb_append(&sb, "\n", 1);
+    if (s_runtime.org.userPrompt[0])
+    {
+        sb_append(&sb, "## Project Brief (from user)\n", -1);
+        sb_append(&sb, s_runtime.org.userPrompt, -1);
+        sb_append(&sb, "\n\n", 2);
+        sb_append(&sb,
+            "IMPORTANT: The user wants actual working code, not documentation.\n"
+            "- Write real source files (.html, .css, .js, .py, .c, etc.) that implement the project.\n"
+            "- Do NOT write markdown reports, specifications, or documentation files.\n"
+            "- The handoff summary you return is sufficient for the next agent \xe2\x80\x94 no .md files needed.\n"
+            "- Focus your tool calls on creating and editing code files in the workspace.\n\n", -1);
+    }
     sb_append(&sb, "Task:\n", -1);
     sb_append(&sb, spec->prompt, -1);
     sb_append(&sb, "\n", 1);
@@ -2929,7 +2941,10 @@ static char* BuildApiNodeSystemPrompt(const OrgNodeSpec* spec, const char* works
         "- When your work is complete, stop calling tools and return a final summary.\n"
         "- Your final message becomes the handoff to the next agent. Keep it under 3000 chars.\n"
         "  Structure it as: what you did, key files created/changed, decisions made,\n"
-        "  and anything the next agent needs to know.\n", -1);
+        "  and anything the next agent needs to know.\n"
+        "- Do NOT write markdown reports, specification docs, or .md files as deliverables.\n"
+        "  Your handoff summary IS the report. Write actual source code files instead.\n"
+        "- Prioritize creating working code files over documentation.\n", -1);
 
     if (spec->workspacePolicy == AGENT_WORKSPACE_SHARED_READONLY)
         sb_append(&sb, "- IMPORTANT: This node is READ-ONLY. Do NOT write or modify any files.\n", -1);

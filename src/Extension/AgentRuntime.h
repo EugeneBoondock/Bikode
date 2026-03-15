@@ -86,6 +86,7 @@ typedef struct OrgSpec {
     AgentWorkspacePolicy defaultWorkspacePolicy;
     OrgNodeSpec nodes[AGENT_RUNTIME_MAX_NODES];
     int nodeCount;
+    char userPrompt[AGENT_RUNTIME_TEXT_HUGE];
 } OrgSpec;
 
 typedef struct AgentEvent {

@@ -50,6 +50,8 @@
 #define IDC_MC_OPEN_TRANSCRIPT 0xFC11
 #define IDC_MC_OPEN_PROOF      0xFC12
 #define IDC_MC_FALLBACK        0xFC13
+#define IDC_MC_PROJECT_PROMPT  0xFC14
+#define IDC_MC_PROMPT_LABEL    0xFC15
 #define WM_MC_DEFER_INIT       (WM_APP + 0x3A0)
 #define WM_MC_REFRESH          (WM_APP + 0x3A1)
 #define IDT_MC_GRAPH_READY     0xFC40
@@ -158,6 +160,8 @@ typedef struct MissionControlUi {
     HWND hwndOpenTranscript;
     HWND hwndOpenProof;
     HWND hwndActivity;
+    HWND hwndProjectPrompt;
+    HWND hwndPromptLabel;
     BOOL visible;
     BOOL graphMode;
     BOOL hideIdle;
@@ -535,6 +539,8 @@ static void ResetHandles(void)
     s_mc.hwndOpenTranscript = NULL;
     s_mc.hwndOpenProof = NULL;
     s_mc.hwndActivity = NULL;
+    s_mc.hwndProjectPrompt = NULL;
+    s_mc.hwndPromptLabel = NULL;
     s_mc.webViewInitRequested = FALSE;
     s_mc.webViewFaulted = FALSE;
     s_mc.isPopulating = FALSE;
@@ -1502,7 +1508,7 @@ static void PaintPanel(HWND hwnd, HDC hdc)
     if (!s_mc.hasProjectContext)
     {
         StringCchCopyW(wszStep, ARRAYSIZE(wszStep),
-            L"1. Open a project folder. 2. Pick a workflow. 3. Click Run Workflow.");
+            L"1. Open a project folder. 2. Describe what to build. 3. Pick a workflow. 4. Run.");
     }
     else if (s_mc.orgLoadFailed)
     {
@@ -1527,7 +1533,7 @@ static void PaintPanel(HWND hwnd, HDC hdc)
     else
     {
         StringCchCopyW(wszStep, ARRAYSIZE(wszStep),
-            L"Choose a workflow, click Run Workflow to start agents, and use Add Agent only to edit the saved workflow.");
+            L"Describe what you want to build, pick a workflow, and click Run Workflow.");
     }
 
     rcEyebrow.left = s_mc.rcHero.left + 24;
@@ -1692,7 +1698,7 @@ static void LayoutChildren(HWND hwnd)
     height = rc.bottom - rc.top;
     compactHero = width < 1320;
     quickChatOwnRow = width < 1160;
-    heroH = compactHero ? (quickChatOwnRow ? 228 : 208) : 188;
+    heroH = compactHero ? (quickChatOwnRow ? 268 : 248) : 228;
     inspectorW = min(380, max(320, width / 3));
     stackInspector = width < 1240;
     SetRect(&s_mc.rcHero, outerPad, outerPad, width - outerPad, outerPad + heroH);
@@ -1738,10 +1744,18 @@ static void LayoutChildren(HWND hwnd)
     heroRight = s_mc.rcHero.right - 22;
     heroInnerW = max(heroRight - heroLeft, 320);
     quickChatW = min(112, max(96, heroInnerW / 7));
-    controlsTop = s_mc.rcHero.top + 102;
+    controlsTop = s_mc.rcHero.top + 142;
     controlsTop2 = controlsTop + 36;
     controlsTop3 = controlsTop2 + 36;
-    hdwp = BeginDeferWindowPos(13);
+    hdwp = BeginDeferWindowPos(15);
+
+    {
+        int promptLabelW = 180;
+        int promptEditW = max(heroInnerW - promptLabelW - row1Gap, 240);
+        int promptTop = s_mc.rcHero.top + 100;
+        DEFER_CHILD(s_mc.hwndPromptLabel, heroLeft, promptTop + 3, promptLabelW, 20);
+        DEFER_CHILD(s_mc.hwndProjectPrompt, heroLeft + promptLabelW + row1Gap, promptTop, promptEditW, 24);
+    }
 
     x = heroLeft;
     row1Right = heroRight - (quickChatOwnRow ? 0 : (quickChatW + row1Gap));
@@ -1930,6 +1944,20 @@ static void RunSelectedOrg(void)
             RefreshUi();
         }
         return;
+    }
+    /* Copy user's project prompt into the org spec before starting */
+    {
+        WCHAR wszPrompt[2048] = {0};
+        GetWindowTextW(s_mc.hwndProjectPrompt, wszPrompt, ARRAYSIZE(wszPrompt));
+        if (wszPrompt[0])
+        {
+            int cb = WideCharToMultiByte(CP_UTF8, 0, wszPrompt, -1, org->userPrompt, sizeof(org->userPrompt), NULL, NULL);
+            if (cb <= 0) org->userPrompt[0] = '\0';
+        }
+        else
+        {
+            org->userPrompt[0] = '\0';
+        }
     }
     if (AgentRuntime_Start(org))
     {
@@ -2959,6 +2987,13 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         s_mc.hwndOpenProof = CreateWindowExW(0, L"BUTTON", L"Review", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_OPEN_PROOF, NULL, NULL);
         s_mc.hwndActivity = CreateWindowExW(WS_EX_CLIENTEDGE, L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOINTEGRALHEIGHT,
             0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_ACTIVITY, NULL, NULL);
+        s_mc.hwndPromptLabel = CreateWindowExW(0, L"STATIC", L"What do you want to build?",
+            WS_CHILD | WS_VISIBLE | SS_LEFT,
+            0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_PROMPT_LABEL, NULL, NULL);
+        s_mc.hwndProjectPrompt = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+            0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_PROJECT_PROMPT, NULL, NULL);
+        SendMessageW(s_mc.hwndProjectPrompt, EM_SETCUEBANNER, TRUE, (LPARAM)L"e.g. Build a task management app with drag-and-drop kanban board...");
 
         if (!s_mc.hwndOrgCombo || !s_mc.hwndRun || !s_mc.hwndPause || !s_mc.hwndCancel ||
             !s_mc.hwndDuplicate || !s_mc.hwndAddNode || !s_mc.hwndToggleView || !s_mc.hwndHideIdle ||
