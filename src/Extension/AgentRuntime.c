@@ -2936,7 +2936,7 @@ static char* RunApiNode(int nodeIndex, const OrgNodeSpec* spec, StrBuf* pTranscr
     RuntimeAddEvent(nodeIndex, AGENT_EVENT_STATUS, "Running agentic tool loop.");
 
     memset(&loopResult, 0, sizeof(loopResult));
-    AIAgent_RunToolLoop(&cfg, systemPrompt, prompt, 12, 30,
+    AIAgent_RunToolLoop(&cfg, systemPrompt, prompt, 0, 0,
                         RuntimeToolLoopCallback, nodeIndex, &loopResult);
 
     // Record token counts and tool/file metrics

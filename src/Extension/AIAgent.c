@@ -4554,11 +4554,11 @@ void AIAgent_ClearHistory(void)
 // Synchronous tool loop for AgentRuntime / Mission Control nodes
 //=============================================================================
 
-#define TOOLLOOP_MAX_ITER       12
-#define TOOLLOOP_MAX_TOOLS      30
-#define TOOLLOOP_MAX_MSGS       64
-#define TOOLLOOP_MAX_RESULT     4096
-#define TOOLLOOP_MAX_FEEDBACK   (12 * 1024)
+#define TOOLLOOP_MAX_ITER       50   // Safety ceiling only; agents stop naturally when done
+#define TOOLLOOP_MAX_TOOLS      200  // Generous tool budget for complex workflows
+#define TOOLLOOP_MAX_MSGS       256
+#define TOOLLOOP_MAX_RESULT     8192
+#define TOOLLOOP_MAX_FEEDBACK   (32 * 1024)
 
 void AIAgent_RunToolLoop(const AIProviderConfig* pCfg,
                          const char* systemPrompt,
@@ -4617,7 +4617,7 @@ void AIAgent_RunToolLoop(const AIProviderConfig* pCfg,
         if (callback && iteration > 1)
         {
             char buf[128];
-            _snprintf_s(buf, sizeof(buf), _TRUNCATE, "Thinking... (step %d/%d)", iteration, effectiveMaxIter);
+            _snprintf_s(buf, sizeof(buf), _TRUNCATE, "Thinking... (step %d)", iteration);
             callback(cbNodeIndex, 0, buf);
         }
 
