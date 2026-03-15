@@ -24,6 +24,7 @@
 #include "ui/theme/BikodeTheme.h"
 #include "DarkMode.h"
 #include "CommonUtils.h"
+#include "FileManager.h"
 #include <uxtheme.h>
 #include <shlwapi.h>
 #include <string.h>
@@ -86,11 +87,18 @@ static BOOL g_havePTY = FALSE;
 #define C_LTDROP   RGB(255,255,255)
 
 /* ANSI 16-colour palette (dark theme) */
-static COLORREF g_ansi[16] = {
+static COLORREF g_ansiDark[16] = {
     RGB(12,12,12),    RGB(197,15,31),   RGB(19,161,14),  RGB(193,156,0),
     RGB(0,55,218),    RGB(136,23,152),  RGB(58,150,221), RGB(204,204,204),
     RGB(118,118,118), RGB(231,72,86),   RGB(22,198,12),  RGB(249,241,165),
     RGB(59,120,255),  RGB(180,0,158),   RGB(97,214,214), RGB(242,242,242)
+};
+/* ANSI 16-colour palette (light theme — darker tones for white backgrounds) */
+static COLORREF g_ansiLight[16] = {
+    RGB(0,0,0),       RGB(175,0,0),     RGB(0,135,0),    RGB(135,100,0),
+    RGB(0,40,180),    RGB(120,0,140),   RGB(0,120,180),  RGB(80,80,80),
+    RGB(100,100,100), RGB(200,30,30),   RGB(0,155,0),    RGB(160,120,0),
+    RGB(40,80,220),   RGB(160,0,140),   RGB(0,140,160),  RGB(30,30,30)
 };
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -710,7 +718,13 @@ static BOOL ShellCreate(Term *t, COORD sz, ShellKind sh) {
     }
 
     WCHAR cwd[MAX_PATH] = {0};
-    GetCurrentDirectoryW(MAX_PATH, cwd);
+    {
+        const WCHAR* projRoot = FileManager_GetRootPath();
+        if (projRoot && projRoot[0])
+            lstrcpynW(cwd, projRoot, MAX_PATH);
+        else
+            GetCurrentDirectoryW(MAX_PATH, cwd);
+    }
 
     STARTUPINFOEXW si; ZeroMemory(&si, sizeof(si));
     si.StartupInfo.cb = sizeof(STARTUPINFOEXW);
@@ -1050,13 +1064,13 @@ void Terminal_AppendTranscript(HWND hwndP, const char *text) {
  * ═══════════════════════════════════════════════════════════════════ */
 static COLORREF GetFG(BYTE idx) {
     BOOL dk = DarkMode_IsEnabled();
-    if (idx < 16) return g_ansi[idx];
+    if (idx < 16) return dk ? g_ansiDark[idx] : g_ansiLight[idx];
     return dk ? C_DKFG : C_LTFG;
 }
 static COLORREF GetBG(BYTE idx) {
     BOOL dk = DarkMode_IsEnabled();
     if (idx == 0) return dk ? C_DKBG : C_LTBG;
-    if (idx < 16) return g_ansi[idx];
+    if (idx < 16) return dk ? g_ansiDark[idx] : g_ansiLight[idx];
     return dk ? C_DKBG : C_LTBG;
 }
 

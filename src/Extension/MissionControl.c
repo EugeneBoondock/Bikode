@@ -1882,13 +1882,42 @@ static void ApplyTheme(void)
         QueueRefresh();
 }
 
+static BOOL CreateEmptyProject(void)
+{
+    WCHAR szFolder[MAX_PATH] = {0};
+    BROWSEINFOW bi = {0};
+    LPITEMIDLIST pidl;
+    bi.hwndOwner = s_mc.hwndPanel;
+    bi.pszDisplayName = szFolder;
+    bi.lpszTitle = L"Select or create a folder for your new project";
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    pidl = SHBrowseForFolderW(&bi);
+    if (!pidl)
+        return FALSE;
+    SHGetPathFromIDListW(pidl, szFolder);
+    CoTaskMemFree(pidl);
+    if (!szFolder[0])
+        return FALSE;
+    /* Ensure folder exists */
+    if (!PathIsDirectoryW(szFolder))
+        CreateDirectoryW(szFolder, NULL);
+    /* Open in file manager and set as workspace */
+    FileManager_OpenFolder(szFolder);
+    return TRUE;
+}
+
 static void RunSelectedOrg(void)
 {
     OrgSpec* org = GetSelectedOrg();
     WCHAR wszDetails[640];
     if (!s_mc.hasProjectContext)
     {
-        SendMessageW(s_mc.hwndMain, WM_COMMAND, IDM_FILEMGR_OPENFOLDER, 0);
+        /* Let user pick an existing folder or create a new empty one */
+        if (!CreateEmptyProject())
+        {
+            /* Fallback: standard open-folder dialog */
+            SendMessageW(s_mc.hwndMain, WM_COMMAND, IDM_FILEMGR_OPENFOLDER, 0);
+        }
         LoadOrgs();
         RefreshUi();
         return;
