@@ -605,53 +605,71 @@ static char* BuildToolCallTagFromArgs(const char* toolName, const char* argsJson
 {
     if (!toolName || !toolName[0]) return NULL;
 
-    char* path = NULL;
-    char* content = NULL;
-    char* oldText = NULL;
-    char* newText = NULL;
-    char* command = NULL;
+    StrBuf sb;
+    sb_init(&sb, 512);
 
     if (argsJsonOrText && argsJsonOrText[0] == '{')
     {
-        path = json_extract_string(argsJsonOrText, "path");
-        if (!path) path = json_extract_string(argsJsonOrText, "file_path");
+        // Pass through the raw JSON with the name field injected.
+        // This preserves ALL fields (cwd, start_line, line_count, max_results, etc.)
+        // without needing to know about each one individually.
+        sb_append(&sb, "<tool_call>{\"name\":", -1);
+        json_escape_append(&sb, toolName);
 
-        content = json_extract_string(argsJsonOrText, "content");
-        if (!content) content = json_extract_string(argsJsonOrText, "text");
-
-        oldText = json_extract_string(argsJsonOrText, "old_text");
-        newText = json_extract_string(argsJsonOrText, "new_text");
-
-        command = json_extract_string(argsJsonOrText, "command");
-        if (!command) command = json_extract_string(argsJsonOrText, "query");
+        // Append all fields from the args JSON (skip the opening '{')
+        const char* argsBody = argsJsonOrText + 1;
+        // Skip whitespace
+        while (*argsBody == ' ' || *argsBody == '\t' || *argsBody == '\n' || *argsBody == '\r')
+            argsBody++;
+        if (*argsBody == '}')
+        {
+            // Empty args object
+            sb_append(&sb, "}</tool_call>\n", -1);
+        }
+        else
+        {
+            // Append comma + rest of the args object (without the leading '{')
+            sb_append(&sb, ",", 1);
+            // Find the end of the args object to get its contents
+            const char* argsEnd = FindJsonObjectEnd(argsJsonOrText);
+            if (argsEnd)
+            {
+                // Append everything between { and } of the args
+                int bodyLen = (int)(argsEnd - 1 - argsBody);
+                if (bodyLen > 0)
+                    sb_append(&sb, argsBody, bodyLen);
+            }
+            else
+            {
+                // Fallback: append as-is without the leading {
+                sb_append(&sb, argsBody, -1);
+            }
+            sb_append(&sb, "}</tool_call>\n", -1);
+        }
     }
     else if (argsJsonOrText && argsJsonOrText[0])
     {
         // If arguments are not JSON, map best-effort based on tool name.
+        sb_append(&sb, "<tool_call>{\"name\":", -1);
+        json_escape_append(&sb, toolName);
         if (strcmp(toolName, "run_command") == 0 || strcmp(toolName, "web_search") == 0)
-            command = _strdup(argsJsonOrText);
-        else if (strcmp(toolName, "insert_in_editor") == 0)
-            content = _strdup(argsJsonOrText);
+        {
+            sb_append(&sb, ",\"command\":", -1);
+            json_escape_append(&sb, argsJsonOrText);
+        }
         else
-            content = _strdup(argsJsonOrText);
+        {
+            sb_append(&sb, ",\"content\":", -1);
+            json_escape_append(&sb, argsJsonOrText);
+        }
+        sb_append(&sb, "}</tool_call>\n", -1);
     }
-
-    StrBuf sb;
-    sb_init(&sb, 512);
-    sb_append(&sb, "<tool_call>{\"name\":", -1);
-    json_escape_append(&sb, toolName);
-    if (path)    { sb_append(&sb, ",\"path\":", -1);    json_escape_append(&sb, path); }
-    if (content) { sb_append(&sb, ",\"content\":", -1); json_escape_append(&sb, content); }
-    if (oldText) { sb_append(&sb, ",\"old_text\":", -1); json_escape_append(&sb, oldText); }
-    if (newText) { sb_append(&sb, ",\"new_text\":", -1); json_escape_append(&sb, newText); }
-    if (command) { sb_append(&sb, ",\"command\":", -1); json_escape_append(&sb, command); }
-    sb_append(&sb, "}</tool_call>\n", -1);
-
-    if (path) free(path);
-    if (content) free(content);
-    if (oldText) free(oldText);
-    if (newText) free(newText);
-    if (command) free(command);
+    else
+    {
+        sb_append(&sb, "<tool_call>{\"name\":", -1);
+        json_escape_append(&sb, toolName);
+        sb_append(&sb, "}</tool_call>\n", -1);
+    }
 
     return sb.data;
 }
@@ -747,45 +765,66 @@ static char* ExtractOpenAIToolCallsAsTags(const char* messageScope)
 
 static char* ParseResponse_OpenAI(const char* respJson)
 {
-    // Try: choices[0].message.content
-    char* content = json_extract_nested_content(respJson, "choices", "content");
-    if (content && content[0]) return content;
-    if (content) free(content);
+    // With native function calling, the response may contain:
+    // - text content only (no tool calls)
+    // - tool_calls only (no text content)
+    // - BOTH text content AND tool_calls
+    // We combine them into a single string: text + <tool_call> tags.
 
-    // Try: choices[0].message via nested lookup with explicit path
     const char* choices = json_find_value(respJson, "choices");
     if (choices)
     {
         const char* message = json_find_value(choices, "message");
         if (message)
         {
-            content = ExtractOpenAIContentText(message);
-            if (content && content[0]) return content;
-            if (content) free(content);
-
-            // If content is null, check for "refusal" field
-            content = json_extract_string(message, "refusal");
-            if (content && content[0])
+            // Check for refusal
+            char* refusal = json_extract_string(message, "refusal");
+            if (refusal && refusal[0])
             {
-                char* full = (char*)malloc(strlen(content) + 32);
+                char* full = (char*)malloc(strlen(refusal) + 32);
                 if (full)
                 {
-                    sprintf(full, "Model refused: %s", content);
-                    free(content);
+                    sprintf(full, "Model refused: %s", refusal);
+                    free(refusal);
                     return full;
                 }
-                return content;
+                return refusal;
             }
-            if (content) free(content);
+            if (refusal) free(refusal);
 
-            // Tool-call fallback: some OpenAI-compatible providers return empty content + tool_calls.
-            content = ExtractOpenAIToolCallsAsTags(message);
-            if (content && content[0]) return content;
-            if (content) free(content);
+            // Extract text content (may be empty/null when only tool_calls)
+            char* textContent = ExtractOpenAIContentText(message);
+            // Extract tool calls as <tool_call> tags
+            char* toolTags = ExtractOpenAIToolCallsAsTags(message);
+
+            if (textContent && textContent[0] && toolTags && toolTags[0])
+            {
+                // Combine: text content + tool call tags
+                StrBuf combined;
+                sb_init(&combined, (int)strlen(textContent) + (int)strlen(toolTags) + 4);
+                sb_append(&combined, textContent, -1);
+                sb_append(&combined, "\n", 1);
+                sb_append(&combined, toolTags, -1);
+                free(textContent);
+                free(toolTags);
+                return combined.data;
+            }
+            if (toolTags && toolTags[0])
+            {
+                if (textContent) free(textContent);
+                return toolTags;
+            }
+            if (textContent && textContent[0])
+            {
+                if (toolTags) free(toolTags);
+                return textContent;
+            }
+            if (textContent) free(textContent);
+            if (toolTags) free(toolTags);
         }
 
         // Try direct content from choices array
-        content = ExtractOpenAIContentText(choices);
+        char* content = ExtractOpenAIContentText(choices);
         if (content && content[0]) return content;
         if (content) free(content);
 
@@ -796,43 +835,45 @@ static char* ParseResponse_OpenAI(const char* respJson)
     }
 
     // Fallback: any "content" field at top level
-    content = ExtractOpenAIContentText(respJson);
-    if (content && content[0]) return content;
-    if (content) free(content);
+    {
+        char* content = ExtractOpenAIContentText(respJson);
+        if (content && content[0]) return content;
+        if (content) free(content);
+    }
 
     // Fallback: "result" field (some proxy APIs)
-    content = json_extract_string(respJson, "result");
-    if (content && content[0]) return content;
-    if (content) free(content);
+    {
+        char* content = json_extract_string(respJson, "result");
+        if (content && content[0]) return content;
+        if (content) free(content);
+    }
 
     // Check for finish_reason:"length" with empty content.
-    // Reasoning models (o1/o3/gpt-5.x) can spend the entire token budget on
-    // internal chain-of-thought, leaving nothing for visible output.
-    char* finishReason = json_extract_string(respJson, "finish_reason");
-    if (finishReason)
     {
-        if (strcmp(finishReason, "length") == 0)
+        char* finishReason = json_extract_string(respJson, "finish_reason");
+        if (finishReason)
         {
-            free(finishReason);
-            // Check if reasoning tokens consumed the budget
-            const char* reasoning = json_find_value(respJson, "reasoning_tokens");
-            if (reasoning && *reasoning >= '1' && *reasoning <= '9')
+            if (strcmp(finishReason, "length") == 0)
             {
+                free(finishReason);
+                const char* reasoning = json_find_value(respJson, "reasoning_tokens");
+                if (reasoning && *reasoning >= '1' && *reasoning <= '9')
+                {
+                    return _strdup(
+                        "The model used all available tokens for internal reasoning "
+                        "and could not produce a visible response.\n"
+                        "Please increase **Max Tokens** in AI settings "
+                        "(e.g. 16384 or higher for reasoning models).");
+                }
                 return _strdup(
-                    "The model used all available tokens for internal reasoning "
-                    "and could not produce a visible response.\n"
-                    "Please increase **Max Tokens** in AI settings "
-                    "(e.g. 16384 or higher for reasoning models).");
+                    "The response was cut off because it exceeded the token limit.\n"
+                    "Please increase **Max Tokens** in AI settings.");
             }
-            return _strdup(
-                "The response was cut off because it exceeded the token limit.\n"
-                "Please increase **Max Tokens** in AI settings.");
+            free(finishReason);
         }
-        free(finishReason);
     }
 
     // If we found a valid message object with empty content, accept it
-    // rather than reporting a parse error.
     if (choices)
     {
         const char* msg = json_find_value(choices, "message");
@@ -847,23 +888,113 @@ static char* ParseResponse_OpenAI(const char* respJson)
     return NULL;
 }
 
+// Extract tool_use blocks from Anthropic content array and convert to <tool_call> tags.
+// Anthropic format: {"type":"tool_use","id":"...","name":"read_file","input":{"path":"foo.txt"}}
+static char* ExtractAnthropicToolUseTags(const char* contentArray)
+{
+    if (!contentArray || *contentArray != '[') return NULL;
+
+    const char* endArr = FindJsonArrayEnd(contentArray);
+    if (!endArr) return NULL;
+
+    StrBuf sb;
+    sb_init(&sb, 1024);
+
+    const char* p = contentArray + 1;
+    while (p && p < endArr)
+    {
+        // Skip whitespace and commas
+        while (p < endArr && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == ','))
+            p++;
+        if (p >= endArr) break;
+        if (*p != '{') { p++; continue; }
+
+        const char* objEnd = FindJsonObjectEnd(p);
+        if (!objEnd || objEnd > endArr) break;
+
+        int objLen = (int)(objEnd - p);
+        char* obj = (char*)malloc(objLen + 1);
+        if (!obj) break;
+        memcpy(obj, p, objLen);
+        obj[objLen] = '\0';
+
+        // Check if this is a tool_use block
+        char* type = json_extract_string(obj, "type");
+        if (type && strcmp(type, "tool_use") == 0)
+        {
+            char* name = json_extract_string(obj, "name");
+            if (name && name[0])
+            {
+                // Extract the input object and convert to our tag format
+                const char* inputVal = json_find_value(obj, "input");
+                if (inputVal && *inputVal == '{')
+                {
+                    char* one = BuildToolCallTagFromArgs(name, inputVal);
+                    if (one)
+                    {
+                        sb_append(&sb, one, -1);
+                        free(one);
+                    }
+                }
+                else
+                {
+                    // No input - just emit the tool name
+                    sb_appendf(&sb, "<tool_call>{\"name\":\"%s\"}</tool_call>\n", name);
+                }
+            }
+            if (name) free(name);
+        }
+        if (type) free(type);
+        free(obj);
+
+        p = objEnd;
+    }
+
+    if (sb.len > 0) return sb.data;
+    sb_free(&sb);
+    return NULL;
+}
+
 static char* ParseResponse_Anthropic(const char* respJson)
 {
-    // Anthropic format: {"content":[{"type":"text","text":"response"}], ...}
-    // The content field is an ARRAY of content blocks
+    // Anthropic format: {"content":[{"type":"text","text":"..."}, {"type":"tool_use","name":"...","input":{...}}]}
+    // With native tools, the content array can contain BOTH text and tool_use blocks.
 
     const char* contentVal = json_find_value(respJson, "content");
     if (contentVal)
     {
-        // If content is an array, look inside for text blocks
         if (*contentVal == '[')
         {
-            // Search for "text" key within the array (not "type":"text" value)
-            char* text = json_extract_string(contentVal, "text");
-            if (text && text[0]) return text;
-            if (text) free(text);
+            // Extract text blocks
+            char* textContent = json_extract_string(contentVal, "text");
+            // Extract tool_use blocks as <tool_call> tags
+            char* toolTags = ExtractAnthropicToolUseTags(contentVal);
+
+            if (textContent && textContent[0] && toolTags && toolTags[0])
+            {
+                // Combine text + tool call tags
+                StrBuf combined;
+                sb_init(&combined, (int)strlen(textContent) + (int)strlen(toolTags) + 4);
+                sb_append(&combined, textContent, -1);
+                sb_append(&combined, "\n", 1);
+                sb_append(&combined, toolTags, -1);
+                free(textContent);
+                free(toolTags);
+                return combined.data;
+            }
+            if (toolTags && toolTags[0])
+            {
+                if (textContent) free(textContent);
+                return toolTags;
+            }
+            if (textContent && textContent[0])
+            {
+                if (toolTags) free(toolTags);
+                return textContent;
+            }
+            if (textContent) free(textContent);
+            if (toolTags) free(toolTags);
         }
-        // If content is a string directly (some compatible APIs)
         else if (*contentVal == '"')
         {
             char* text = json_extract_string(respJson, "content");
@@ -873,43 +1004,147 @@ static char* ParseResponse_Anthropic(const char* respJson)
     }
 
     // Fallback: nested lookup
-    char* text = json_extract_nested_content(respJson, "content", "text");
-    if (text && text[0]) return text;
-    if (text) free(text);
+    {
+        char* text = json_extract_nested_content(respJson, "content", "text");
+        if (text && text[0]) return text;
+        if (text) free(text);
+    }
 
     // Fallback: direct "text" field
-    text = json_extract_string(respJson, "text");
-    if (text && text[0]) return text;
-    if (text) free(text);
+    {
+        char* text = json_extract_string(respJson, "text");
+        if (text && text[0]) return text;
+        if (text) free(text);
+    }
 
     // Fallback: "completion" field (older Anthropic API)
-    text = json_extract_string(respJson, "completion");
-    if (text && text[0]) return text;
-    if (text) free(text);
+    {
+        char* text = json_extract_string(respJson, "completion");
+        if (text && text[0]) return text;
+        if (text) free(text);
+    }
 
+    return NULL;
+}
+
+// Extract functionCall parts from Google Gemini response and convert to <tool_call> tags.
+// Google format: {"functionCall":{"name":"read_file","args":{"path":"foo.txt"}}}
+static char* ExtractGoogleFunctionCallTags(const char* partsArray)
+{
+    if (!partsArray || *partsArray != '[') return NULL;
+
+    const char* endArr = FindJsonArrayEnd(partsArray);
+    if (!endArr) return NULL;
+
+    StrBuf sb;
+    sb_init(&sb, 1024);
+
+    const char* p = partsArray + 1;
+    while (p && p < endArr)
+    {
+        while (p < endArr && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == ','))
+            p++;
+        if (p >= endArr) break;
+        if (*p != '{') { p++; continue; }
+
+        const char* objEnd = FindJsonObjectEnd(p);
+        if (!objEnd || objEnd > endArr) break;
+
+        int objLen = (int)(objEnd - p);
+        char* obj = (char*)malloc(objLen + 1);
+        if (!obj) break;
+        memcpy(obj, p, objLen);
+        obj[objLen] = '\0';
+
+        // Check for functionCall
+        const char* fnCall = json_find_value(obj, "functionCall");
+        if (fnCall && *fnCall == '{')
+        {
+            const char* fnEnd = FindJsonObjectEnd(fnCall);
+            if (fnEnd)
+            {
+                int fnLen = (int)(fnEnd - fnCall);
+                char* fnObj = (char*)malloc(fnLen + 1);
+                if (fnObj)
+                {
+                    memcpy(fnObj, fnCall, fnLen);
+                    fnObj[fnLen] = '\0';
+
+                    char* name = json_extract_string(fnObj, "name");
+                    if (name && name[0])
+                    {
+                        const char* args = json_find_value(fnObj, "args");
+                        char* one = BuildToolCallTagFromArgs(name, args);
+                        if (one)
+                        {
+                            sb_append(&sb, one, -1);
+                            free(one);
+                        }
+                    }
+                    if (name) free(name);
+                    free(fnObj);
+                }
+            }
+        }
+        free(obj);
+        p = objEnd;
+    }
+
+    if (sb.len > 0) return sb.data;
+    sb_free(&sb);
     return NULL;
 }
 
 static char* ParseResponse_Google(const char* respJson)
 {
-    const char* p = json_find_value(respJson, "candidates");
-    if (p)
+    // With native tools, Google Gemini returns:
+    // {"candidates":[{"content":{"parts":[{"text":"..."}, {"functionCall":{"name":"...","args":{...}}}]}}]}
+
+    const char* candidates = json_find_value(respJson, "candidates");
+    if (candidates)
     {
-        const char* content = json_find_value(p, "content");
+        const char* content = json_find_value(candidates, "content");
         if (content)
         {
             const char* parts = json_find_value(content, "parts");
-            if (parts)
+            if (parts && *parts == '[')
             {
-                char* text = json_extract_string(parts, "text");
-                if (text && text[0]) return text;
-                if (text) free(text);
+                // Extract text content
+                char* textContent = json_extract_string(parts, "text");
+                // Extract functionCall parts as <tool_call> tags
+                char* toolTags = ExtractGoogleFunctionCallTags(parts);
+
+                if (textContent && textContent[0] && toolTags && toolTags[0])
+                {
+                    StrBuf combined;
+                    sb_init(&combined, (int)strlen(textContent) + (int)strlen(toolTags) + 4);
+                    sb_append(&combined, textContent, -1);
+                    sb_append(&combined, "\n", 1);
+                    sb_append(&combined, toolTags, -1);
+                    free(textContent);
+                    free(toolTags);
+                    return combined.data;
+                }
+                if (toolTags && toolTags[0])
+                {
+                    if (textContent) free(textContent);
+                    return toolTags;
+                }
+                if (textContent && textContent[0])
+                {
+                    if (toolTags) free(toolTags);
+                    return textContent;
+                }
+                if (textContent) free(textContent);
+                if (toolTags) free(toolTags);
             }
         }
     }
-    char* text = json_extract_string(respJson, "text");
-    if (text && text[0]) return text;
-    if (text) free(text);
+    {
+        char* text = json_extract_string(respJson, "text");
+        if (text && text[0]) return text;
+        if (text) free(text);
+    }
     return NULL;
 }
 
@@ -1239,6 +1474,188 @@ char* AIDirectCall_Chat(const AIProviderConfig* pCfg,
 }
 
 //=============================================================================
+// Native API tool definitions
+//=============================================================================
+// Instead of embedding tool descriptions in the system prompt text and hoping
+// the model emits <tool_call> XML tags, we register tools natively with the
+// API. This makes tool calling a structured, guaranteed part of the response.
+
+typedef struct {
+    const char* name;
+    const char* description;
+    const char* paramsJson;   // JSON Schema for parameters
+} NativeToolDef;
+
+static const NativeToolDef s_nativeTools[] = {
+    {
+        "read_file",
+        "Read the contents of a file from disk.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"path\":{\"type\":\"string\",\"description\":\"File path relative to workspace root\"},"
+            "\"start_line\":{\"type\":\"integer\",\"description\":\"Line to start reading from\"},"
+            "\"line_count\":{\"type\":\"integer\",\"description\":\"Number of lines to read\"}"
+        "},\"required\":[\"path\"]}"
+    },
+    {
+        "write_file",
+        "Create or overwrite a file with the given content.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"path\":{\"type\":\"string\",\"description\":\"File path relative to workspace root\"},"
+            "\"content\":{\"type\":\"string\",\"description\":\"The full file content to write\"}"
+        "},\"required\":[\"path\",\"content\"]}"
+    },
+    {
+        "replace_in_file",
+        "Find and replace text in an existing file. Replaces the first occurrence.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"path\":{\"type\":\"string\",\"description\":\"File path relative to workspace root\"},"
+            "\"old_text\":{\"type\":\"string\",\"description\":\"The exact text to find and replace\"},"
+            "\"new_text\":{\"type\":\"string\",\"description\":\"The replacement text\"}"
+        "},\"required\":[\"path\",\"old_text\",\"new_text\"]}"
+    },
+    {
+        "list_dir",
+        "List the contents of a directory.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"path\":{\"type\":\"string\",\"description\":\"Directory path relative to workspace root\"}"
+        "},\"required\":[\"path\"]}"
+    },
+    {
+        "run_command",
+        "Execute a shell command and return its output.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"command\":{\"type\":\"string\",\"description\":\"The shell command to execute\"},"
+            "\"cwd\":{\"type\":\"string\",\"description\":\"Working directory for the command\"}"
+        "},\"required\":[\"command\"]}"
+    },
+    {
+        "make_dir",
+        "Create a directory recursively.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"path\":{\"type\":\"string\",\"description\":\"Directory path to create\"}"
+        "},\"required\":[\"path\"]}"
+    },
+    {
+        "semantic_search",
+        "Search the workspace using local code embeddings.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"query\":{\"type\":\"string\",\"description\":\"Search query\"},"
+            "\"path\":{\"type\":\"string\",\"description\":\"Subdirectory to search in\"},"
+            "\"max_results\":{\"type\":\"integer\",\"description\":\"Maximum results to return\"}"
+        "},\"required\":[\"query\"]}"
+    },
+    {
+        "get_active_document",
+        "Read the current editor buffer, including unsaved changes.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"start_line\":{\"type\":\"integer\",\"description\":\"Line to start reading from\"},"
+            "\"line_count\":{\"type\":\"integer\",\"description\":\"Number of lines to read\"}"
+        "},\"required\":[]}"
+    },
+    {
+        "open_file",
+        "Open an existing file in the editor.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"path\":{\"type\":\"string\",\"description\":\"File path to open\"}"
+        "},\"required\":[\"path\"]}"
+    },
+    {
+        "insert_in_editor",
+        "Insert text into the currently open editor buffer.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"content\":{\"type\":\"string\",\"description\":\"Text content to insert\"}"
+        "},\"required\":[\"content\"]}"
+    },
+    {
+        "replace_editor_content",
+        "Replace the entire active editor buffer with new text.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"content\":{\"type\":\"string\",\"description\":\"The new content for the editor buffer\"}"
+        "},\"required\":[\"content\"]}"
+    },
+    {
+        "new_file_in_editor",
+        "Create a new untitled editor buffer and fill it with text.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"content\":{\"type\":\"string\",\"description\":\"Content for the new editor buffer\"}"
+        "},\"required\":[\"content\"]}"
+    },
+    {
+        "init_repo",
+        "Initialize a git repository in the given directory.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"path\":{\"type\":\"string\",\"description\":\"Directory path for the new repo\"}"
+        "},\"required\":[\"path\"]}"
+    },
+    {
+        "web_search",
+        "Search the web for information.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"query\":{\"type\":\"string\",\"description\":\"Search query\"}"
+        "},\"required\":[\"query\"]}"
+    },
+    {
+        "gif_search",
+        "Find a context-relevant GIF URL.",
+        "{\"type\":\"object\",\"properties\":{"
+            "\"query\":{\"type\":\"string\",\"description\":\"Descriptive search query for the GIF\"}"
+        "},\"required\":[\"query\"]}"
+    },
+    { NULL, NULL, NULL }  // sentinel
+};
+
+#define NATIVE_TOOL_COUNT 15
+
+// Append OpenAI-format tools array: "tools":[{"type":"function","function":{...}}]
+static void AppendNativeTools_OpenAI(StrBuf* body)
+{
+    sb_append(body, "\"tools\":[", -1);
+    for (int i = 0; s_nativeTools[i].name; i++)
+    {
+        if (i > 0) sb_append(body, ",", 1);
+        sb_append(body, "{\"type\":\"function\",\"function\":{", -1);
+        sb_appendf(body, "\"name\":\"%s\",", s_nativeTools[i].name);
+        sb_append(body, "\"description\":", -1);
+        json_escape_append(body, s_nativeTools[i].description);
+        sb_appendf(body, ",\"parameters\":%s", s_nativeTools[i].paramsJson);
+        sb_append(body, "}}", -1);
+    }
+    sb_append(body, "],", -1);
+    // parallel_tool_calls lets the model emit multiple tools in one response
+    sb_append(body, "\"parallel_tool_calls\":true,", -1);
+}
+
+// Append Anthropic-format tools array: "tools":[{"name":"...","description":"...","input_schema":{...}}]
+static void AppendNativeTools_Anthropic(StrBuf* body)
+{
+    sb_append(body, "\"tools\":[", -1);
+    for (int i = 0; s_nativeTools[i].name; i++)
+    {
+        if (i > 0) sb_append(body, ",", 1);
+        sb_appendf(body, "{\"name\":\"%s\",", s_nativeTools[i].name);
+        sb_append(body, "\"description\":", -1);
+        json_escape_append(body, s_nativeTools[i].description);
+        sb_appendf(body, ",\"input_schema\":%s}", s_nativeTools[i].paramsJson);
+    }
+    sb_append(body, "],", -1);
+}
+
+// Append Google-format tools: "tools":[{"functionDeclarations":[{...}]}]
+static void AppendNativeTools_Google(StrBuf* body)
+{
+    sb_append(body, "\"tools\":[{\"functionDeclarations\":[", -1);
+    for (int i = 0; s_nativeTools[i].name; i++)
+    {
+        if (i > 0) sb_append(body, ",", 1);
+        sb_appendf(body, "{\"name\":\"%s\",", s_nativeTools[i].name);
+        sb_append(body, "\"description\":", -1);
+        json_escape_append(body, s_nativeTools[i].description);
+        sb_appendf(body, ",\"parameters\":%s}", s_nativeTools[i].paramsJson);
+    }
+    sb_append(body, "]}],", -1);
+}
+
+//=============================================================================
 // Multi-message body builders
 //=============================================================================
 
@@ -1253,6 +1670,10 @@ static void BuildBodyMulti_OpenAI(StrBuf* body, const AIProviderConfig* cfg,
         sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
     if (maxTokens > 0)
         sb_appendf(body, "\"max_completion_tokens\":%d,", maxTokens);
+    // Register native tools so the model uses structured function calling
+    // instead of text-based <tool_call> tags
+    if (!IsOpenAIReasoningModel(model))
+        AppendNativeTools_OpenAI(body);
     sb_append(body, "\"messages\":[", -1);
     for (int i = 0; i < count; i++)
     {
@@ -1265,7 +1686,7 @@ static void BuildBodyMulti_OpenAI(StrBuf* body, const AIProviderConfig* cfg,
             // Multi-modal content array
             sb_append(body, "[", 1);
             int hasItems = 0;
-            
+
             // 1. Text content (if any)
             if (msgs[i].content && msgs[i].content[0])
             {
@@ -1340,6 +1761,8 @@ static void BuildBodyMulti_Anthropic(StrBuf* body, const AIProviderConfig* cfg,
     else
         sb_append(body, "\"max_tokens\":4096,", -1);
     sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
+    // Register native tools for structured function calling
+    AppendNativeTools_Anthropic(body);
 
     // Extract system prompt (first system message)
     const char* sysPrompt = "";
@@ -1403,6 +1826,9 @@ static void BuildBodyMulti_Google(StrBuf* body, const AIProviderConfig* cfg,
         sb_append(body, "}]}", -1);
     }
     sb_append(body, "],", -1);
+
+    // Register native tools for structured function calling
+    AppendNativeTools_Google(body);
 
     sb_appendf(body, "\"generationConfig\":{\"temperature\":%.2f", cfg->dTemperature);
     if (cfg->iMaxTokens > 0)
