@@ -14,6 +14,8 @@
 #include "ProofTray.h"
 #include "AIAgent.h"
 #include "AICommands.h"
+#include "MarkdownPreview.h"
+#include "Scintilla.h"
 #include "FileManager.h"
 #include "Externals.h"
 #include "ui/theme/BikodeTheme.h"
@@ -966,12 +968,26 @@ static void BuildInspectorText(const AgentRuntimeSnapshot* pSnapshot, int nodeIn
 static void UpdateInspector(const AgentRuntimeSnapshot* pSnapshot)
 {
     WCHAR wszText[16384];
+    char utf8Buf[49152];
     int tabIndex = 0;
+    int len;
     if (!s_mc.hwndInspectText || !s_mc.hwndInspectTabs)
         return;
     tabIndex = TabCtrl_GetCurSel(s_mc.hwndInspectTabs);
     BuildInspectorText(pSnapshot, s_mc.selectedNode, tabIndex, wszText, ARRAYSIZE(wszText));
-    SetWindowTextW(s_mc.hwndInspectText, wszText);
+    /* Convert wide text to UTF-8 for Scintilla */
+    len = WideCharToMultiByte(CP_UTF8, 0, wszText, -1, utf8Buf, sizeof(utf8Buf) - 1, NULL, NULL);
+    if (len <= 0) { utf8Buf[0] = '\0'; len = 1; }
+    utf8Buf[sizeof(utf8Buf) - 1] = '\0';
+    len = lstrlenA(utf8Buf);
+    SendMessage(s_mc.hwndInspectText, SCI_SETREADONLY, FALSE, 0);
+    SendMessage(s_mc.hwndInspectText, SCI_CLEARALL, 0, 0);
+    SendMessage(s_mc.hwndInspectText, SCI_ADDTEXT, (WPARAM)len, (LPARAM)utf8Buf);
+    /* Apply markdown styling for Summary and Transcript tabs */
+    if (tabIndex == 0 || tabIndex == 1 || tabIndex == 3)
+        MarkdownPreview_StyleRange(s_mc.hwndInspectText, 0, len, utf8Buf);
+    SendMessage(s_mc.hwndInspectText, SCI_SETREADONLY, TRUE, 0);
+    SendMessage(s_mc.hwndInspectText, SCI_GOTOPOS, 0, 0);
 }
 
 static void PopulateActivity(const AgentRuntimeSnapshot* pSnapshot)
@@ -1809,7 +1825,7 @@ static void ApplyTheme(void)
     {
         DarkMode_ApplyToDialog(s_mc.hwndPanel);
         SetWindowTheme(s_mc.hwndBoard, L"DarkMode_Explorer", NULL);
-        SetWindowTheme(s_mc.hwndInspectText, L"DarkMode_Explorer", NULL);
+        MarkdownPreview_SetupStyles(s_mc.hwndInspectText);
         SetWindowTheme(s_mc.hwndActivity, L"DarkMode_Explorer", NULL);
         SetWindowTheme(s_mc.hwndOrgCombo, L"DarkMode_Explorer", NULL);
         SetWindowTheme(s_mc.hwndFallback, L"DarkMode_Explorer", NULL);
@@ -1819,7 +1835,7 @@ static void ApplyTheme(void)
     else
     {
         SetWindowTheme(s_mc.hwndBoard, L"", NULL);
-        SetWindowTheme(s_mc.hwndInspectText, L"", NULL);
+        MarkdownPreview_SetupStyles(s_mc.hwndInspectText);
         SetWindowTheme(s_mc.hwndActivity, L"", NULL);
         SetWindowTheme(s_mc.hwndOrgCombo, L"", NULL);
         SetWindowTheme(s_mc.hwndFallback, L"", NULL);
@@ -2562,8 +2578,18 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         s_mc.hwndFallback = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | ES_MULTILINE | ES_READONLY | WS_VSCROLL | ES_AUTOVSCROLL,
             0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_FALLBACK, NULL, NULL);
         s_mc.hwndInspectTabs = CreateWindowExW(0, WC_TABCONTROLW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_INSPECT_TABS, NULL, NULL);
-        s_mc.hwndInspectText = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | WS_VSCROLL | ES_AUTOVSCROLL,
+        s_mc.hwndInspectText = CreateWindowExW(0, L"Scintilla", L"",
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL,
             0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_INSPECT_TEXT, NULL, NULL);
+        if (s_mc.hwndInspectText)
+        {
+            MarkdownPreview_SetupStyles(s_mc.hwndInspectText);
+            SendMessage(s_mc.hwndInspectText, SCI_SETREADONLY, TRUE, 0);
+            SendMessage(s_mc.hwndInspectText, SCI_SETWRAPMODE, SC_WRAP_WORD, 0);
+            SendMessage(s_mc.hwndInspectText, SCI_SETMARGINWIDTHN, 0, 0);
+            SendMessage(s_mc.hwndInspectText, SCI_SETMARGINWIDTHN, 1, 0);
+            SendMessage(s_mc.hwndInspectText, SCI_SETCARETSTYLE, CARETSTYLE_INVISIBLE, 0);
+        }
         s_mc.hwndOpenFile = CreateWindowExW(0, L"BUTTON", L"Open File", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_OPEN_FILE, NULL, NULL);
         s_mc.hwndOpenWorkspace = CreateWindowExW(0, L"BUTTON", L"Workspace", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_OPEN_WORKSPACE, NULL, NULL);
         s_mc.hwndOpenTranscript = CreateWindowExW(0, L"BUTTON", L"Transcript", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_OPEN_TRANSCRIPT, NULL, NULL);
@@ -2590,7 +2616,7 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             int i;
             for (i = 0; i < (int)ARRAYSIZE(controls); i++)
                 SetChildFont(controls[i]);
-            SetThemeFont(s_mc.hwndInspectText, BKFONT_MONO_SMALL);
+            /* Scintilla inspector uses MarkdownPreview styles, not theme font */
             SetThemeFont(s_mc.hwndFallback, BKFONT_UI_SMALL);
         }
 
@@ -2636,7 +2662,7 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         int ctrlId = hwndCtl ? GetDlgCtrlID(hwndCtl) : 0;
         SetTextColor(hdc, BikodeTheme_GetColor(BKCLR_TEXT_PRIMARY));
         SetBkMode(hdc, OPAQUE);
-        if (ctrlId == IDC_MC_INSPECT_TEXT || ctrlId == IDC_MC_ACTIVITY || ctrlId == IDC_MC_ORG_COMBO || ctrlId == IDC_MC_FALLBACK)
+        if (ctrlId == IDC_MC_ACTIVITY || ctrlId == IDC_MC_ORG_COMBO || ctrlId == IDC_MC_FALLBACK)
         {
             SetBkColor(hdc, BikodeTheme_GetColor(BKCLR_SURFACE_RAISED));
             return (LRESULT)(s_mc.hbrSurfaceRaised ? s_mc.hbrSurfaceRaised : (HBRUSH)(COLOR_WINDOW + 1));

@@ -1694,12 +1694,28 @@ static char* Tool_ReadFile(const char* path, int startLine, int lineCount)
 
     {
         StrBuf out;
-        sb_init(&out, (int)readSize + 512);
+        WCHAR wszRoot[MAX_PATH];
+        sb_init(&out, (int)readSize + 2048);
         sb_append(&out, content, (int)readSize);
         sb_appendf(&out,
             "\n\n[... truncated, showing first %lu of %lu bytes]",
             readSize, fileSize);
         sb_append_live_embedding_index(&out, content, (int)readSize, 1024);
+
+        // Use local embedding index to provide relevant context from the truncated portion
+        if (ResolveWorkspaceRootW(wszRoot, ARRAYSIZE(wszRoot)))
+        {
+            char* hits = NULL;
+            // Query the embedding index using the file path as a hint to get relevant sections
+            if (CodeEmbeddingIndex_QueryProject(wszRoot, actualPath, actualPath, 3, &hits) &&
+                hits && hits[0] && strstr(hits, "(no strong repo matches found)") == NULL)
+            {
+                sb_append(&out, "\n\n[Embedding index context for remaining content]:\n", -1);
+                sb_append(&out, hits, -1);
+            }
+            if (hits) free(hits);
+        }
+
         free(content);
         return out.data;
     }
@@ -3131,37 +3147,37 @@ static void BuildBudgetContract(BudgetContract* c, const char* msg, AgentIntent 
 {
     if (!c) return;
     c->mode = AGENT_MODE_BALANCED;
-    c->maxIterations = 10;
-    c->maxToolCalls = 20;
-    c->maxTouchedFiles = 6;
-    c->maxApproxPromptChars = 64000;
+    c->maxIterations = 15;
+    c->maxToolCalls = 40;
+    c->maxTouchedFiles = 16;
+    c->maxApproxPromptChars = 80000;
     c->allowShell = 1;
 
     if (intent == INTENT_ASK || intent == INTENT_EXPLAIN || intent == INTENT_SEARCH)
     {
         c->mode = AGENT_MODE_QUICK;
-        c->maxIterations = 6;
-        c->maxToolCalls = 8;
-        c->maxTouchedFiles = 3;
-        c->maxApproxPromptChars = 36000;
+        c->maxIterations = 8;
+        c->maxToolCalls = 12;
+        c->maxTouchedFiles = 6;
+        c->maxApproxPromptChars = 40000;
     }
 
     if (msg && (ContainsSubstringCI(msg, "economy") || ContainsSubstringCI(msg, "cheap") || ContainsSubstringCI(msg, "token-frugal")))
     {
         c->mode = AGENT_MODE_ECONOMY;
-        c->maxIterations = 5;
-        c->maxToolCalls = 7;
-        c->maxTouchedFiles = 3;
-        c->maxApproxPromptChars = 28000;
+        c->maxIterations = 6;
+        c->maxToolCalls = 10;
+        c->maxTouchedFiles = 4;
+        c->maxApproxPromptChars = 32000;
         c->allowShell = 0;
     }
     else if (msg && (ContainsSubstringCI(msg, "max quality") || ContainsSubstringCI(msg, "best quality") || ContainsSubstringCI(msg, "deep")))
     {
         c->mode = AGENT_MODE_MAX_QUALITY;
-        c->maxIterations = 14;
-        c->maxToolCalls = 30;
-        c->maxTouchedFiles = 12;
-        c->maxApproxPromptChars = 100000;
+        c->maxIterations = 15;
+        c->maxToolCalls = 50;
+        c->maxTouchedFiles = 16;
+        c->maxApproxPromptChars = 120000;
     }
 
     if (msg && (ContainsSubstringCI(msg, "do not run command") || ContainsSubstringCI(msg, "no shell")))
@@ -3211,14 +3227,14 @@ static AgentRole SelectRoleFromIntent(AgentIntent intent)
 static const AgentRoleContract* GetRoleContract(AgentRole role)
 {
     static const AgentRoleContract contracts[] = {
-        { AGENT_ROLE_PLANNER, "Planner Agent", "semantic_search,read_file,get_active_document,list_dir,open_file,context_store,eval_prompt", 6, 1 },
-        { AGENT_ROLE_IMPLEMENTER, "Implementer Agent", "semantic_search,read_file,get_active_document,write_file,replace_in_file,open_file,insert_in_editor,replace_editor_content,new_file_in_editor,list_dir,design_audit,context_store", 12, 0 },
-        { AGENT_ROLE_REVIEWER, "Reviewer Agent", "semantic_search,read_file,get_active_document,list_dir,open_file,run_command,eval_prompt,red_team_prompt,design_audit", 8, 1 },
-        { AGENT_ROLE_DEBUG, "Debug Agent", "semantic_search,read_file,get_active_document,run_command,list_dir,replace_in_file", 10, 0 },
-        { AGENT_ROLE_TEST, "Test Agent", "semantic_search,read_file,get_active_document,run_command,list_dir,eval_prompt,red_team_prompt", 8, 1 },
-        { AGENT_ROLE_REFACTOR, "Refactor Agent", "semantic_search,read_file,get_active_document,replace_in_file,write_file,open_file,list_dir", 12, 0 },
-        { AGENT_ROLE_RESEARCH, "Research Agent", "semantic_search,read_file,get_active_document,list_dir,web_search,context_store", 6, 1 },
-        { AGENT_ROLE_SETUP, "Setup Agent", "semantic_search,read_file,get_active_document,list_dir,make_dir,init_repo,run_command,write_file", 10, 0 }
+        { AGENT_ROLE_PLANNER, "Planner Agent", "semantic_search,read_file,get_active_document,list_dir,open_file,context_store,eval_prompt,write_file,replace_in_file", 10, 0 },
+        { AGENT_ROLE_IMPLEMENTER, "Implementer Agent", "semantic_search,read_file,get_active_document,write_file,replace_in_file,open_file,insert_in_editor,replace_editor_content,new_file_in_editor,list_dir,run_command,make_dir,design_audit,context_store", 15, 0 },
+        { AGENT_ROLE_REVIEWER, "Reviewer Agent", "semantic_search,read_file,get_active_document,list_dir,open_file,run_command,write_file,replace_in_file,eval_prompt,red_team_prompt,design_audit", 10, 0 },
+        { AGENT_ROLE_DEBUG, "Debug Agent", "semantic_search,read_file,get_active_document,run_command,list_dir,replace_in_file,write_file", 12, 0 },
+        { AGENT_ROLE_TEST, "Test Agent", "semantic_search,read_file,get_active_document,run_command,list_dir,write_file,replace_in_file,eval_prompt,red_team_prompt", 10, 0 },
+        { AGENT_ROLE_REFACTOR, "Refactor Agent", "semantic_search,read_file,get_active_document,replace_in_file,write_file,open_file,list_dir,run_command", 15, 0 },
+        { AGENT_ROLE_RESEARCH, "Research Agent", "semantic_search,read_file,get_active_document,list_dir,web_search,context_store,write_file", 8, 0 },
+        { AGENT_ROLE_SETUP, "Setup Agent", "semantic_search,read_file,get_active_document,list_dir,make_dir,init_repo,run_command,write_file,replace_in_file", 12, 0 }
     };
 
     for (int i = 0; i < (int)(sizeof(contracts) / sizeof(contracts[0])); i++)
@@ -3344,7 +3360,7 @@ static BOOL FailureMemory_ShouldBlock(FailureEntry mem[MAX_FAILURE_MEMORY], int 
     if (!tc) return FALSE;
     target = tc->path ? tc->path : (tc->command ? tc->command : "");
     idx = FindFailure(mem, count, tc->name, target);
-    return (idx >= 0 && mem[idx].failures >= 2);
+    return (idx >= 0 && mem[idx].failures >= 4);
 }
 static BOOL IsLikelyCodeWriteTask(const char* userMessage)
 {

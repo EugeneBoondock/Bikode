@@ -424,11 +424,11 @@ void _Style_SetLexer(HWND hwnd, PEDITLEXER pLexNew)
   Style_SetStyles(hwnd, lexDefault.iLexer, MULTI_STYLE_STYLE1(lexDefault.Styles[0 + iIdx].i64Style), lexDefault.Styles[0 + iIdx].szValue); // default
   Style_StrGetSize(lexDefault.Styles[0 + iIdx].szValue, &iBaseFontSize);                  // base size
 
-  // [biko]: Always use dark mode default colors
+  // [biko]: Use theme-aware default colors (dark or light mode)
   if (!Style_StrGetColor(TRUE, lexDefault.Styles[0 + iIdx].szValue, &iValue))
-    SendMessage(hwnd, SCI_STYLESETFORE, STYLE_DEFAULT, (LPARAM)RGB(212, 212, 212));    // dark mode text
+    SendMessage(hwnd, SCI_STYLESETFORE, STYLE_DEFAULT, (LPARAM)(DarkMode_IsEnabled() ? RGB(212, 212, 212) : RGB(54, 46, 36)));
   if (!Style_StrGetColor(FALSE, lexDefault.Styles[0 + iIdx].szValue, &iValue))
-    SendMessage(hwnd, SCI_STYLESETBACK, STYLE_DEFAULT, (LPARAM)RGB(30, 30, 30));      // dark mode background
+    SendMessage(hwnd, SCI_STYLESETBACK, STYLE_DEFAULT, (LPARAM)(DarkMode_IsEnabled() ? RGB(30, 30, 30) : RGB(248, 244, 236)));
 
   if (pLexNew->iLexer != SCLEX_NULL)
     Style_SetStyles(hwnd, pLexNew->iLexer, MULTI_STYLE_STYLE1(pLexNew->Styles[0].i64Style), pLexNew->Styles[0].szValue);    // lexer default
@@ -571,7 +571,7 @@ void _Style_SetLexer(HWND hwnd, PEDITLEXER pLexNew)
   // caret fore
   if (!Style_StrGetColor(TRUE, lexDefault.Styles[DLO_CARET_COLOR + iIdx].szValue, &rgb))
   {
-    rgb = RGB(212, 212, 212);  // [biko]: dark mode caret
+    rgb = DarkMode_IsEnabled() ? RGB(212, 212, 212) : RGB(54, 46, 36);  // [biko]: theme-aware caret
   }
   else
   {
