@@ -127,6 +127,7 @@
 #define CHAT_HEADER_MODE_GAP     2
 #define CHAT_HEADER_ACTION_W    72
 #define CHAT_HEADER_ACTION_H    24
+#define CHAT_SPLITTER_W          5
 #define CHAT_STATUS_DOT_R       4
 #define CHAT_EMPTY_CARD_INSET   16
 #define CHAT_EMPTY_CHIP_H       24
@@ -4529,6 +4530,10 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
             POINT pt;
             GetCursorPos(&pt);
             ScreenToClient(hwnd, &pt);
+            if (pt.x <= CHAT_SPLITTER_W) {
+                SetCursor(LoadCursor(NULL, IDC_SIZEWE));
+                return TRUE;
+            }
             if (PtInRect(&s_rcCloseBtn, pt) || HitTestHeaderMode(pt) >= 0 ||
                 (!IsRectEmpty(&s_rcHeaderAction) && PtInRect(&s_rcHeaderAction, pt)) ||
                 (!IsRectEmpty(&s_rcComposerTag) && PtInRect(&s_rcComposerTag, pt))) {
@@ -4543,6 +4548,10 @@ static LRESULT CALLBACK ChatPanelWndProc(HWND hwnd, UINT msg,
     {
         POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
         int modeIdx;
+        if (pt.x <= CHAT_SPLITTER_W) {
+            SetCapture(hwnd);
+            return 0;
+        }
         if (PtInRect(&s_rcCloseBtn, pt)) {
             ChatPanel_Hide();
             return 0;
