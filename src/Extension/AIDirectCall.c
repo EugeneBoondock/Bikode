@@ -1168,6 +1168,13 @@ static char* ParseResponse_Google(const char* respJson)
 
 static char* ParseResponse_Cohere(const char* respJson)
 {
+    // Cohere v2 chat API returns OpenAI-compatible format with
+    // message.content[].text and message.tool_calls[].
+    // Try the OpenAI parser first which handles both text and tool calls.
+    char* result = ParseResponse_OpenAI(respJson);
+    if (result) return result;
+
+    // Fallback for older Cohere v1 format
     const char* msg = json_find_value(respJson, "message");
     if (msg)
     {
@@ -1713,9 +1720,9 @@ static void BuildBodyMulti_OpenAI(StrBuf* body, const AIProviderConfig* cfg,
     if (maxTokens > 0)
         sb_appendf(body, "\"max_completion_tokens\":%d,", maxTokens);
     // Register native tools so the model uses structured function calling
-    // instead of text-based <tool_call> tags
-    if (!IsOpenAIReasoningModel(model))
-        AppendNativeTools_OpenAI(body);
+    // instead of text-based <tool_call> tags.
+    // Note: Modern reasoning models (o1 Dec 2024+, o3, o4) support tools.
+    AppendNativeTools_OpenAI(body);
     sb_append(body, "\"messages\":[", -1);
     for (int i = 0; i < count; i++)
     {
