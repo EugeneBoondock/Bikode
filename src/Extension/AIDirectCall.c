@@ -139,6 +139,24 @@ static char* ReadFileToBase64(const char* path)
 }
 
 //=============================================================================
+// String helpers
+//=============================================================================
+
+static BOOL ContainsSubstringCI(const char* haystack, const char* needle)
+{
+    if (!haystack || !needle) return FALSE;
+    const char* h = haystack;
+    int nlen = (int)strlen(needle);
+    while (*h)
+    {
+        if (_strnicmp(h, needle, nlen) == 0)
+            return TRUE;
+        h++;
+    }
+    return FALSE;
+}
+
+//=============================================================================
 // JSON helpers
 //=============================================================================
 
@@ -1860,6 +1878,46 @@ static void BuildBodyMulti_Google(StrBuf* body, const AIProviderConfig* cfg,
     sb_append(body, "}}", -1);
 }
 
+// Determine if a provider is likely to support native function calling.
+// Local models and some providers may not support the tools parameter.
+static BOOL ShouldUseNativeTools(const AIProviderConfig* cfg)
+{
+    const AIProviderDef* pDef = AIProvider_Get(cfg->eProvider);
+    if (!pDef) return FALSE;
+
+    // Local model servers may not support native tools depending on the model.
+    // Default to OFF for local providers to avoid breaking older/smaller models.
+    if (pDef->bIsLocal)
+        return FALSE;
+
+    // Perplexity is a search API — tools not supported
+    if (cfg->eProvider == AI_PROVIDER_PERPLEXITY)
+        return FALSE;
+
+    // All major cloud providers support native tools
+    return TRUE;
+}
+
+// Check if an API error response indicates the tools parameter was rejected
+static BOOL IsToolsRejectionError(const char* response)
+{
+    if (!response) return FALSE;
+    if (strncmp(response, "Error:", 6) != 0 &&
+        strncmp(response, "API Error", 9) != 0)
+        return FALSE;
+
+    // Common error messages when tools parameter is not supported
+    return ContainsSubstringCI(response, "tools") ||
+           ContainsSubstringCI(response, "tool_choice") ||
+           ContainsSubstringCI(response, "unknown field") ||
+           ContainsSubstringCI(response, "not supported") ||
+           ContainsSubstringCI(response, "invalid_request") ||
+           ContainsSubstringCI(response, "unrecognized") ||
+           ContainsSubstringCI(response, "unexpected parameter") ||
+           ContainsSubstringCI(response, "parallel_tool_calls") ||
+           ContainsSubstringCI(response, "function") ;
+}
+
 static void BuildRequestBodyMulti(StrBuf* body, const AIProviderConfig* cfg,
                                    const AIProviderDef* pDef,
                                    const AIChatMessage* msgs, int count)
@@ -1875,6 +1933,126 @@ static void BuildRequestBodyMulti(StrBuf* body, const AIProviderConfig* cfg,
     }
 }
 
+// Build request body WITHOUT native tools (fallback for unsupported providers)
+static void BuildRequestBodyMultiNoTools(StrBuf* body, const AIProviderConfig* cfg,
+                                          const AIProviderDef* pDef,
+                                          const AIChatMessage* msgs, int count)
+{
+    // Temporarily use a modified config that skips tool registration.
+    // We do this by building without calling AppendNativeTools_*.
+    // The simplest way: rebuild in a clean path without tools.
+    EAIRequestFormat fmt = pDef ? pDef->eFormat : AI_FORMAT_OPENAI;
+    const char* model;
+
+    switch (fmt)
+    {
+    case AI_FORMAT_ANTHROPIC:
+    {
+        model = cfg->szModel[0] ? cfg->szModel : "claude-sonnet-4-20250514";
+        sb_append(body, "{", 1);
+        sb_appendf(body, "\"model\":\"%s\",", model);
+        if (cfg->iMaxTokens > 0)
+            sb_appendf(body, "\"max_tokens\":%d,", cfg->iMaxTokens);
+        else
+            sb_append(body, "\"max_tokens\":4096,", -1);
+        sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
+        // NO tools registration
+        const char* sysPrompt = "";
+        int firstNonSys = 0;
+        {
+            int i;
+            for (i = 0; i < count; i++)
+            {
+                if (strcmp(msgs[i].role, "system") == 0)
+                { sysPrompt = msgs[i].content; firstNonSys = i + 1; }
+                else break;
+            }
+        }
+        sb_append(body, "\"system\":", -1);
+        json_escape_append(body, sysPrompt);
+        sb_append(body, ",\"messages\":[", -1);
+        {
+            int first = 1, i;
+            for (i = firstNonSys; i < count; i++)
+            {
+                if (strcmp(msgs[i].role, "system") == 0) continue;
+                if (!first) sb_append(body, ",", 1);
+                first = 0;
+                sb_appendf(body, "{\"role\":\"%s\",\"content\":", msgs[i].role);
+                json_escape_append(body, msgs[i].content);
+                sb_append(body, "}", 1);
+            }
+        }
+        sb_append(body, "]}", -1);
+        break;
+    }
+    case AI_FORMAT_GOOGLE:
+    {
+        sb_append(body, "{", 1);
+        const char* gSysPrompt = "";
+        {
+            int i;
+            for (i = 0; i < count; i++)
+            {
+                if (strcmp(msgs[i].role, "system") == 0)
+                    gSysPrompt = msgs[i].content;
+                else break;
+            }
+        }
+        sb_append(body, "\"systemInstruction\":{\"parts\":[{\"text\":", -1);
+        json_escape_append(body, gSysPrompt);
+        sb_append(body, "}]},\"contents\":[", -1);
+        {
+            int first = 1, i;
+            for (i = 0; i < count; i++)
+            {
+                if (strcmp(msgs[i].role, "system") == 0) continue;
+                if (!first) sb_append(body, ",", 1);
+                first = 0;
+                const char* gRole = strcmp(msgs[i].role, "assistant") == 0 ? "model" : "user";
+                sb_appendf(body, "{\"role\":\"%s\",\"parts\":[{\"text\":", gRole);
+                json_escape_append(body, msgs[i].content);
+                sb_append(body, "}]}", -1);
+            }
+        }
+        sb_append(body, "],", -1);
+        // NO tools registration
+        sb_appendf(body, "\"generationConfig\":{\"temperature\":%.2f", cfg->dTemperature);
+        if (cfg->iMaxTokens > 0)
+            sb_appendf(body, ",\"maxOutputTokens\":%d", cfg->iMaxTokens);
+        sb_append(body, "}}", -1);
+        break;
+    }
+    case AI_FORMAT_OPENAI:
+    case AI_FORMAT_COHERE:
+    default:
+    {
+        model = cfg->szModel[0] ? cfg->szModel : "gpt-4o-mini";
+        int maxTokens = ResolveMaxTokens_OpenAI(cfg, model);
+        sb_append(body, "{", 1);
+        sb_appendf(body, "\"model\":\"%s\",", model);
+        if (!IsOpenAIReasoningModel(model))
+            sb_appendf(body, "\"temperature\":%.2f,", cfg->dTemperature);
+        if (maxTokens > 0)
+            sb_appendf(body, "\"max_completion_tokens\":%d,", maxTokens);
+        // NO tools registration
+        sb_append(body, "\"messages\":[", -1);
+        {
+            int i;
+            for (i = 0; i < count; i++)
+            {
+                if (i > 0) sb_append(body, ",", 1);
+                sb_appendf(body, "{\"role\":\"%s\",\"content\":", msgs[i].role);
+                json_escape_append(body, msgs[i].content);
+                sb_append(body, "}", 1);
+            }
+        }
+        sb_append(body, "]}", -1);
+        break;
+    }
+    }
+}
+
 //=============================================================================
 // Multi-message synchronous call
 //=============================================================================
@@ -1887,13 +2065,32 @@ char* AIDirectCall_ChatMulti(const AIProviderConfig* pCfg,
     if (!pDef)
         return _strdup("Error: Unknown provider");
 
-    StrBuf body;
-    sb_init(&body, 4096);
-    BuildRequestBodyMulti(&body, pCfg, pDef, messages, messageCount);
+    BOOL useTools = ShouldUseNativeTools(pCfg);
 
-    char* result = SendHTTPRequest(pCfg, body.data, body.len);
-    sb_free(&body);
-    return result;
+    // First attempt: with native tools if supported
+    {
+        StrBuf body;
+        char* result;
+        sb_init(&body, 4096);
+        if (useTools)
+            BuildRequestBodyMulti(&body, pCfg, pDef, messages, messageCount);
+        else
+            BuildRequestBodyMultiNoTools(&body, pCfg, pDef, messages, messageCount);
+        result = SendHTTPRequest(pCfg, body.data, body.len);
+        sb_free(&body);
+
+        // If tools were used and the error looks like a tools rejection,
+        // retry without tools as a graceful fallback
+        if (useTools && result && IsToolsRejectionError(result))
+        {
+            free(result);
+            sb_init(&body, 4096);
+            BuildRequestBodyMultiNoTools(&body, pCfg, pDef, messages, messageCount);
+            result = SendHTTPRequest(pCfg, body.data, body.len);
+            sb_free(&body);
+        }
+        return result;
+    }
 }
 
 char* AIDirectCall_ChatMultiEx(const AIProviderConfig* pCfg,
@@ -1913,10 +2110,30 @@ char* AIDirectCall_ChatMultiEx(const AIProviderConfig* pCfg,
     if (!pDef)
         return _strdup("Error: Unknown provider");
 
+    BOOL useTools = ShouldUseNativeTools(pCfg);
+
+    // First attempt: with native tools if supported
     {
         StrBuf body;
         sb_init(&body, 4096);
-        BuildRequestBodyMulti(&body, pCfg, pDef, messages, messageCount);
+        if (useTools)
+            BuildRequestBodyMulti(&body, pCfg, pDef, messages, messageCount);
+        else
+            BuildRequestBodyMultiNoTools(&body, pCfg, pDef, messages, messageCount);
+        result = SendHTTPRequestRaw(pCfg, body.data, body.len, &rawJson);
+        sb_free(&body);
+    }
+
+    // If tools were used and the error looks like a tools rejection,
+    // retry without tools as a graceful fallback
+    if (useTools && result && IsToolsRejectionError(result))
+    {
+        free(result);
+        if (rawJson) { free(rawJson); rawJson = NULL; }
+
+        StrBuf body;
+        sb_init(&body, 4096);
+        BuildRequestBodyMultiNoTools(&body, pCfg, pDef, messages, messageCount);
         result = SendHTTPRequestRaw(pCfg, body.data, body.len, &rawJson);
         sb_free(&body);
     }
