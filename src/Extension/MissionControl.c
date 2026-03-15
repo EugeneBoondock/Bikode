@@ -138,6 +138,22 @@
 /* --- Backend toggle --- */
 #define IDM_MC_TOGGLE_LOCAL_BACKEND   0xFD80
 
+/* --- Custom workflow builder dialog --- */
+#define IDC_MC_NEW_WORKFLOW    0xFC16
+#define IDC_WB_NAME            1001
+#define IDC_WB_LAYOUT          1002
+#define IDC_WB_POLICY          1003
+#define IDC_WB_AGENT_LIST      1004
+#define IDC_WB_ADD_AGENT       1005
+#define IDC_WB_REMOVE_AGENT    1006
+#define IDC_WB_AGENT_TITLE     1007
+#define IDC_WB_AGENT_ROLE      1008
+#define IDC_WB_AGENT_BACKEND   1009
+#define IDC_WB_AGENT_WORKSPACE 1010
+#define IDC_WB_AGENT_GROUP     1011
+#define IDC_WB_AGENT_PROMPT    1012
+#define IDC_WB_AGENT_DEPENDS   1013
+
 typedef struct MissionControlUi {
     HWND hwndMain;
     HWND hwndPanel;
@@ -146,6 +162,7 @@ typedef struct MissionControlUi {
     HWND hwndPause;
     HWND hwndCancel;
     HWND hwndDuplicate;
+    HWND hwndNewWorkflow;
     HWND hwndAddNode;
     HWND hwndToggleView;
     HWND hwndHideIdle;
@@ -1785,7 +1802,7 @@ static void LayoutChildren(HWND hwnd)
     controlsTop = s_mc.rcHero.top + 142;
     controlsTop2 = controlsTop + 36;
     controlsTop3 = controlsTop2 + 36;
-    hdwp = BeginDeferWindowPos(15);
+    hdwp = BeginDeferWindowPos(16);
 
     {
         int promptLabelW = 180;
@@ -1809,15 +1826,19 @@ static void LayoutChildren(HWND hwnd)
 
     x = heroLeft;
     row2Right = quickChatOwnRow ? (heroRight - quickChatW - row2Gap) : heroRight;
-    compactRowW = max(row2Right - heroLeft - (row2Gap * 3), 420);
-    duplicateW = min(108, max(88, compactRowW / 4));
-    addW = min(108, max(92, compactRowW / 4));
-    toggleW = min(96, max(88, compactRowW / 4));
-    hideIdleW = max(124, compactRowW - duplicateW - addW - toggleW);
-    DEFER_CHILD(s_mc.hwndDuplicate, x, controlsTop2, duplicateW, 28); x += duplicateW + row2Gap;
-    DEFER_CHILD(s_mc.hwndAddNode, x, controlsTop2, addW, 28); x += addW + row2Gap;
-    DEFER_CHILD(s_mc.hwndToggleView, x, controlsTop2, toggleW, 28); x += toggleW + row2Gap;
-    DEFER_CHILD(s_mc.hwndHideIdle, x, controlsTop2, hideIdleW, 28);
+    compactRowW = max(row2Right - heroLeft - (row2Gap * 4), 520);
+    {
+        int newWfW = min(112, max(88, compactRowW / 5));
+        duplicateW = min(100, max(80, compactRowW / 5));
+        addW = min(100, max(80, compactRowW / 5));
+        toggleW = min(92, max(80, compactRowW / 5));
+        hideIdleW = max(100, compactRowW - newWfW - duplicateW - addW - toggleW);
+        DEFER_CHILD(s_mc.hwndNewWorkflow, x, controlsTop2, newWfW, 28); x += newWfW + row2Gap;
+        DEFER_CHILD(s_mc.hwndDuplicate, x, controlsTop2, duplicateW, 28); x += duplicateW + row2Gap;
+        DEFER_CHILD(s_mc.hwndAddNode, x, controlsTop2, addW, 28); x += addW + row2Gap;
+        DEFER_CHILD(s_mc.hwndToggleView, x, controlsTop2, toggleW, 28); x += toggleW + row2Gap;
+        DEFER_CHILD(s_mc.hwndHideIdle, x, controlsTop2, hideIdleW, 28);
+    }
 
     boardInnerW = max((s_mc.rcBoardCard.right - s_mc.rcBoardCard.left) - (cardPad * 2), 120);
     boardInnerH = max((s_mc.rcBoardCard.bottom - s_mc.rcBoardCard.top) - cardHeaderH - cardPad, 120);
@@ -1932,6 +1953,448 @@ static void ApplyTheme(void)
     InvalidateRect(s_mc.hwndPanel, NULL, TRUE);
     if (s_mc.initComplete)
         QueueRefresh();
+}
+
+/* ========================================================================== */
+/*                      Workflow Builder Dialog                               */
+/* ========================================================================== */
+
+typedef struct WorkflowBuilderState {
+    OrgSpec spec;
+    int selectedAgent;
+    BOOL confirmed;
+} WorkflowBuilderState;
+
+static void WB_PopulateAgentList(HWND hDlg, WorkflowBuilderState* wb)
+{
+    HWND hList = GetDlgItem(hDlg, IDC_WB_AGENT_LIST);
+    int i;
+    SendMessageW(hList, LB_RESETCONTENT, 0, 0);
+    for (i = 0; i < wb->spec.nodeCount; i++)
+    {
+        WCHAR label[256];
+        MultiByteToWideChar(CP_UTF8, 0, wb->spec.nodes[i].title, -1, label, ARRAYSIZE(label));
+        SendMessageW(hList, LB_ADDSTRING, 0, (LPARAM)label);
+    }
+    if (wb->selectedAgent >= 0 && wb->selectedAgent < wb->spec.nodeCount)
+        SendMessageW(hList, LB_SETCURSEL, wb->selectedAgent, 0);
+}
+
+static void WB_LoadAgentToFields(HWND hDlg, WorkflowBuilderState* wb)
+{
+    OrgNodeSpec* node;
+    WCHAR wbuf[4096];
+    if (wb->selectedAgent < 0 || wb->selectedAgent >= wb->spec.nodeCount)
+    {
+        SetDlgItemTextW(hDlg, IDC_WB_AGENT_TITLE, L"");
+        SetDlgItemTextW(hDlg, IDC_WB_AGENT_PROMPT, L"");
+        SetDlgItemTextW(hDlg, IDC_WB_AGENT_GROUP, L"");
+        SetDlgItemTextW(hDlg, IDC_WB_AGENT_DEPENDS, L"");
+        SendDlgItemMessageW(hDlg, IDC_WB_AGENT_ROLE, CB_SETCURSEL, 0, 0);
+        SendDlgItemMessageW(hDlg, IDC_WB_AGENT_BACKEND, CB_SETCURSEL, 0, 0);
+        SendDlgItemMessageW(hDlg, IDC_WB_AGENT_WORKSPACE, CB_SETCURSEL, 0, 0);
+        return;
+    }
+    node = &wb->spec.nodes[wb->selectedAgent];
+    MultiByteToWideChar(CP_UTF8, 0, node->title, -1, wbuf, ARRAYSIZE(wbuf));
+    SetDlgItemTextW(hDlg, IDC_WB_AGENT_TITLE, wbuf);
+    MultiByteToWideChar(CP_UTF8, 0, node->prompt, -1, wbuf, ARRAYSIZE(wbuf));
+    SetDlgItemTextW(hDlg, IDC_WB_AGENT_PROMPT, wbuf);
+    MultiByteToWideChar(CP_UTF8, 0, node->group, -1, wbuf, ARRAYSIZE(wbuf));
+    SetDlgItemTextW(hDlg, IDC_WB_AGENT_GROUP, wbuf);
+
+    /* Role */
+    {
+        int sel = 0;
+        if (lstrcmpA(node->role, "planner") == 0) sel = 1;
+        else if (lstrcmpA(node->role, "reviewer") == 0) sel = 2;
+        else if (lstrcmpA(node->role, "research") == 0) sel = 3;
+        else if (lstrcmpA(node->role, "validate") == 0) sel = 4;
+        else if (lstrcmpA(node->role, "debug") == 0) sel = 5;
+        SendDlgItemMessageW(hDlg, IDC_WB_AGENT_ROLE, CB_SETCURSEL, sel, 0);
+    }
+    /* Backend */
+    SendDlgItemMessageW(hDlg, IDC_WB_AGENT_BACKEND, CB_SETCURSEL, (int)node->backend, 0);
+    /* Workspace */
+    SendDlgItemMessageW(hDlg, IDC_WB_AGENT_WORKSPACE, CB_SETCURSEL, (int)node->workspacePolicy, 0);
+    /* Dependencies as comma-separated */
+    {
+        char depBuf[512] = {0};
+        int d;
+        for (d = 0; d < node->dependsOnCount; d++)
+        {
+            if (d > 0) StringCchCatA(depBuf, ARRAYSIZE(depBuf), ", ");
+            StringCchCatA(depBuf, ARRAYSIZE(depBuf), node->dependsOn[d]);
+        }
+        MultiByteToWideChar(CP_UTF8, 0, depBuf, -1, wbuf, ARRAYSIZE(wbuf));
+        SetDlgItemTextW(hDlg, IDC_WB_AGENT_DEPENDS, wbuf);
+    }
+}
+
+static void WB_SaveAgentFromFields(HWND hDlg, WorkflowBuilderState* wb)
+{
+    OrgNodeSpec* node;
+    WCHAR wbuf[4096];
+    char buf[4096];
+    int sel;
+    if (wb->selectedAgent < 0 || wb->selectedAgent >= wb->spec.nodeCount)
+        return;
+    node = &wb->spec.nodes[wb->selectedAgent];
+
+    GetDlgItemTextW(hDlg, IDC_WB_AGENT_TITLE, wbuf, ARRAYSIZE(wbuf));
+    WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, node->title, sizeof(node->title), NULL, NULL);
+
+    GetDlgItemTextW(hDlg, IDC_WB_AGENT_PROMPT, wbuf, ARRAYSIZE(wbuf));
+    WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, node->prompt, sizeof(node->prompt), NULL, NULL);
+
+    GetDlgItemTextW(hDlg, IDC_WB_AGENT_GROUP, wbuf, ARRAYSIZE(wbuf));
+    WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, node->group, sizeof(node->group), NULL, NULL);
+
+    sel = (int)SendDlgItemMessageW(hDlg, IDC_WB_AGENT_ROLE, CB_GETCURSEL, 0, 0);
+    {
+        const char* roles[] = {"implementer", "planner", "reviewer", "research", "validate", "debug"};
+        if (sel >= 0 && sel < 6)
+            StringCchCopyA(node->role, ARRAYSIZE(node->role), roles[sel]);
+    }
+
+    sel = (int)SendDlgItemMessageW(hDlg, IDC_WB_AGENT_BACKEND, CB_GETCURSEL, 0, 0);
+    if (sel >= 0 && sel <= 4) node->backend = (AgentBackend)sel;
+
+    sel = (int)SendDlgItemMessageW(hDlg, IDC_WB_AGENT_WORKSPACE, CB_GETCURSEL, 0, 0);
+    if (sel >= 0 && sel <= 2) node->workspacePolicy = (AgentWorkspacePolicy)sel;
+
+    /* Parse dependencies */
+    GetDlgItemTextW(hDlg, IDC_WB_AGENT_DEPENDS, wbuf, ARRAYSIZE(wbuf));
+    WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf, sizeof(buf), NULL, NULL);
+    node->dependsOnCount = 0;
+    {
+        char* ctx = NULL;
+        char* tok = strtok_s(buf, ",;", &ctx);
+        while (tok && node->dependsOnCount < AGENT_RUNTIME_MAX_DEPENDS)
+        {
+            while (*tok == ' ') tok++;
+            if (*tok)
+            {
+                char* end = tok + lstrlenA(tok) - 1;
+                while (end > tok && *end == ' ') *end-- = '\0';
+                StringCchCopyA(node->dependsOn[node->dependsOnCount], AGENT_RUNTIME_TEXT_SMALL, tok);
+                node->dependsOnCount++;
+            }
+            tok = strtok_s(NULL, ",;", &ctx);
+        }
+    }
+}
+
+static INT_PTR CALLBACK WorkflowBuilderDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    WorkflowBuilderState* wb = (WorkflowBuilderState*)(LONG_PTR)GetWindowLongPtrW(hDlg, GWLP_USERDATA);
+
+    switch (msg)
+    {
+    case WM_INITDIALOG:
+    {
+        wb = (WorkflowBuilderState*)lParam;
+        SetWindowLongPtrW(hDlg, GWLP_USERDATA, (LONG_PTR)wb);
+
+        /* Populate combo boxes */
+        {
+            const WCHAR* roles[] = {L"Implementer", L"Planner", L"Reviewer", L"Research", L"Validate", L"Debug"};
+            const WCHAR* backends[] = {L"API", L"Codex", L"Claude", L"Relay", L"Local"};
+            const WCHAR* policies[] = {L"Isolated", L"Shared Read-Only", L"Shared Mutating"};
+            const WCHAR* layouts[] = {L"Line (sequential)", L"Graph (parallel)"};
+            int i;
+            for (i = 0; i < 6; i++) SendDlgItemMessageW(hDlg, IDC_WB_AGENT_ROLE, CB_ADDSTRING, 0, (LPARAM)roles[i]);
+            for (i = 0; i < 5; i++) SendDlgItemMessageW(hDlg, IDC_WB_AGENT_BACKEND, CB_ADDSTRING, 0, (LPARAM)backends[i]);
+            for (i = 0; i < 3; i++) SendDlgItemMessageW(hDlg, IDC_WB_AGENT_WORKSPACE, CB_ADDSTRING, 0, (LPARAM)policies[i]);
+            for (i = 0; i < 2; i++) SendDlgItemMessageW(hDlg, IDC_WB_LAYOUT, CB_ADDSTRING, 0, (LPARAM)layouts[i]);
+            for (i = 0; i < 3; i++) SendDlgItemMessageW(hDlg, IDC_WB_POLICY, CB_ADDSTRING, 0, (LPARAM)policies[i]);
+        }
+
+        /* Set initial values */
+        {
+            WCHAR wname[128];
+            MultiByteToWideChar(CP_UTF8, 0, wb->spec.name, -1, wname, ARRAYSIZE(wname));
+            SetDlgItemTextW(hDlg, IDC_WB_NAME, wname);
+        }
+        SendDlgItemMessageW(hDlg, IDC_WB_LAYOUT, CB_SETCURSEL,
+            lstrcmpA(wb->spec.layout, "graph") == 0 ? 1 : 0, 0);
+        SendDlgItemMessageW(hDlg, IDC_WB_POLICY, CB_SETCURSEL,
+            (int)wb->spec.defaultWorkspacePolicy, 0);
+
+        wb->selectedAgent = wb->spec.nodeCount > 0 ? 0 : -1;
+        WB_PopulateAgentList(hDlg, wb);
+        WB_LoadAgentToFields(hDlg, wb);
+        return TRUE;
+    }
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam))
+        {
+        case IDC_WB_AGENT_LIST:
+            if (HIWORD(wParam) == LBN_SELCHANGE)
+            {
+                /* Save current agent before switching */
+                WB_SaveAgentFromFields(hDlg, wb);
+                wb->selectedAgent = (int)SendDlgItemMessageW(hDlg, IDC_WB_AGENT_LIST, LB_GETCURSEL, 0, 0);
+                WB_LoadAgentToFields(hDlg, wb);
+            }
+            return TRUE;
+
+        case IDC_WB_ADD_AGENT:
+            if (wb->spec.nodeCount < AGENT_RUNTIME_MAX_NODES)
+            {
+                OrgNodeSpec* node;
+                WB_SaveAgentFromFields(hDlg, wb);
+                node = &wb->spec.nodes[wb->spec.nodeCount];
+                ZeroMemory(node, sizeof(*node));
+                StringCchPrintfA(node->id, ARRAYSIZE(node->id), "node-%d", wb->spec.nodeCount + 1);
+                StringCchCopyA(node->title, ARRAYSIZE(node->title), "New Agent");
+                StringCchCopyA(node->role, ARRAYSIZE(node->role), "implementer");
+                StringCchCopyA(node->group, ARRAYSIZE(node->group), "custom");
+                StringCchCopyA(node->prompt, ARRAYSIZE(node->prompt), "Describe what this agent should do.");
+                node->backend = AGENT_BACKEND_API;
+                node->workspacePolicy = wb->spec.defaultWorkspacePolicy;
+                wb->spec.nodeCount++;
+                wb->selectedAgent = wb->spec.nodeCount - 1;
+                WB_PopulateAgentList(hDlg, wb);
+                WB_LoadAgentToFields(hDlg, wb);
+            }
+            return TRUE;
+
+        case IDC_WB_REMOVE_AGENT:
+            if (wb->selectedAgent >= 0 && wb->selectedAgent < wb->spec.nodeCount)
+            {
+                int i;
+                for (i = wb->selectedAgent; i < wb->spec.nodeCount - 1; i++)
+                    wb->spec.nodes[i] = wb->spec.nodes[i + 1];
+                wb->spec.nodeCount--;
+                /* Re-number IDs */
+                for (i = 0; i < wb->spec.nodeCount; i++)
+                    StringCchPrintfA(wb->spec.nodes[i].id, ARRAYSIZE(wb->spec.nodes[i].id), "node-%d", i + 1);
+                if (wb->selectedAgent >= wb->spec.nodeCount)
+                    wb->selectedAgent = wb->spec.nodeCount - 1;
+                WB_PopulateAgentList(hDlg, wb);
+                WB_LoadAgentToFields(hDlg, wb);
+            }
+            return TRUE;
+
+        case IDOK:
+        {
+            WCHAR wname[128];
+            int sel;
+            WB_SaveAgentFromFields(hDlg, wb);
+            GetDlgItemTextW(hDlg, IDC_WB_NAME, wname, ARRAYSIZE(wname));
+            WideCharToMultiByte(CP_UTF8, 0, wname, -1, wb->spec.name, sizeof(wb->spec.name), NULL, NULL);
+            sel = (int)SendDlgItemMessageW(hDlg, IDC_WB_LAYOUT, CB_GETCURSEL, 0, 0);
+            StringCchCopyA(wb->spec.layout, ARRAYSIZE(wb->spec.layout), sel == 1 ? "graph" : "line");
+            sel = (int)SendDlgItemMessageW(hDlg, IDC_WB_POLICY, CB_GETCURSEL, 0, 0);
+            if (sel >= 0 && sel <= 2) wb->spec.defaultWorkspacePolicy = (AgentWorkspacePolicy)sel;
+
+            if (wb->spec.name[0] == '\0')
+            {
+                MessageBoxW(hDlg, L"Please enter a workflow name.", L"Workflow Builder", MB_OK | MB_ICONWARNING);
+                return TRUE;
+            }
+            if (wb->spec.nodeCount == 0)
+            {
+                MessageBoxW(hDlg, L"Please add at least one agent.", L"Workflow Builder", MB_OK | MB_ICONWARNING);
+                return TRUE;
+            }
+            wb->confirmed = TRUE;
+            EndDialog(hDlg, IDOK);
+            return TRUE;
+        }
+        case IDCANCEL:
+            EndDialog(hDlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    }
+    return FALSE;
+}
+
+static HWND CreateWorkflowBuilderDialog(HWND hwndOwner, WorkflowBuilderState* wb)
+{
+    /*
+     * Build the dialog template in memory so we don't need a .rc entry.
+     * This creates a resizable dialog with all controls for the workflow builder.
+     */
+    enum { BUF_SIZE = 4096 };
+    BYTE* buf = (BYTE*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, BUF_SIZE);
+    DLGTEMPLATE* dlg;
+    WORD* pw;
+    DLGITEMTEMPLATE* item;
+    INT_PTR result;
+    int controlCount = 0;
+
+    if (!buf) return NULL;
+    dlg = (DLGTEMPLATE*)buf;
+    dlg->style = DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_SETFONT;
+    dlg->cx = 480;
+    dlg->cy = 380;
+    dlg->x = 0;
+    dlg->y = 0;
+
+    /* Skip past DLGTEMPLATE header */
+    pw = (WORD*)(dlg + 1);
+    *pw++ = 0; /* menu */
+    *pw++ = 0; /* class */
+    /* caption */
+    {
+        const WCHAR* cap = L"Workflow Builder";
+        while ((*pw++ = *cap++) != 0);
+    }
+    /* DS_SETFONT: size + name */
+    *pw++ = 9;
+    {
+        const WCHAR* fn = L"Segoe UI";
+        while ((*pw++ = *fn++) != 0);
+    }
+
+#define ALIGN_WORD(p) (BYTE*)(((ULONG_PTR)(p) + 3) & ~3)
+#define ADD_CONTROL(stl, exstl, _x, _y, _w, _h, _id, cls, txt) \
+    do { \
+        const WCHAR* _t; \
+        pw = (WORD*)ALIGN_WORD(pw); \
+        item = (DLGITEMTEMPLATE*)pw; \
+        item->style = (stl); item->dwExtendedStyle = (exstl); \
+        item->x = (_x); item->y = (_y); item->cx = (_w); item->cy = (_h); \
+        item->id = (_id); \
+        pw = (WORD*)(item + 1); \
+        *pw++ = 0xFFFF; *pw++ = (cls); /* class ordinal */ \
+        _t = (txt); while ((*pw++ = *_t++) != 0); \
+        *pw++ = 0; /* no creation data */ \
+        controlCount++; \
+    } while (0)
+
+    /* Row 1: Workflow Name */
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|SS_LEFT, 0, 8, 10, 60, 10, 0xFFFF, 0x0082, L"Name:");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL, 0, 70, 8, 160, 14, IDC_WB_NAME, 0x0081, L"");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|SS_LEFT, 0, 240, 10, 40, 10, 0xFFFF, 0x0082, L"Layout:");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST, 0, 280, 8, 90, 80, IDC_WB_LAYOUT, 0x0085, L"");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|SS_LEFT, 0, 378, 10, 40, 10, 0xFFFF, 0x0082, L"Policy:");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST, 0, 416, 8, 56, 80, IDC_WB_POLICY, 0x0085, L"");
+
+    /* Agent List on the left */
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|SS_LEFT, 0, 8, 30, 60, 10, 0xFFFF, 0x0082, L"Agents:");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|WS_VSCROLL|LBS_NOTIFY, 0, 8, 42, 120, 140, IDC_WB_AGENT_LIST, 0x0083, L"");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON, 0, 8, 186, 56, 14, IDC_WB_ADD_AGENT, 0x0080, L"Add");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON, 0, 68, 186, 60, 14, IDC_WB_REMOVE_AGENT, 0x0080, L"Remove");
+
+    /* Agent detail fields on the right */
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|SS_LEFT, 0, 140, 32, 30, 10, 0xFFFF, 0x0082, L"Title:");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL, 0, 172, 30, 160, 14, IDC_WB_AGENT_TITLE, 0x0081, L"");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|SS_LEFT, 0, 340, 32, 26, 10, 0xFFFF, 0x0082, L"Role:");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST, 0, 368, 30, 104, 100, IDC_WB_AGENT_ROLE, 0x0085, L"");
+
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|SS_LEFT, 0, 140, 52, 40, 10, 0xFFFF, 0x0082, L"Backend:");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST, 0, 182, 50, 90, 100, IDC_WB_AGENT_BACKEND, 0x0085, L"");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|SS_LEFT, 0, 282, 52, 56, 10, 0xFFFF, 0x0082, L"Workspace:");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|CBS_DROPDOWNLIST, 0, 340, 50, 132, 100, IDC_WB_AGENT_WORKSPACE, 0x0085, L"");
+
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|SS_LEFT, 0, 140, 72, 32, 10, 0xFFFF, 0x0082, L"Group:");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL, 0, 172, 70, 100, 14, IDC_WB_AGENT_GROUP, 0x0081, L"");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|SS_LEFT, 0, 282, 72, 50, 10, 0xFFFF, 0x0082, L"Depends:");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|ES_AUTOHSCROLL, 0, 332, 70, 140, 14, IDC_WB_AGENT_DEPENDS, 0x0081, L"");
+
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|SS_LEFT, 0, 140, 92, 40, 10, 0xFFFF, 0x0082, L"Prompt:");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|WS_BORDER|WS_VSCROLL|ES_MULTILINE|ES_AUTOVSCROLL|ES_WANTRETURN,
+        0, 140, 104, 332, 92, IDC_WB_AGENT_PROMPT, 0x0081, L"");
+
+    /* OK / Cancel */
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_DEFPUSHBUTTON, 0, 340, 360, 60, 14, IDOK, 0x0080, L"Create");
+    ADD_CONTROL(WS_CHILD|WS_VISIBLE|WS_TABSTOP|BS_PUSHBUTTON, 0, 408, 360, 60, 14, IDCANCEL, 0x0080, L"Cancel");
+
+#undef ADD_CONTROL
+#undef ALIGN_WORD
+
+    dlg->cdit = (WORD)controlCount;
+
+    result = DialogBoxIndirectParamW(GetModuleHandle(NULL), dlg, hwndOwner, WorkflowBuilderDlgProc, (LPARAM)wb);
+    HeapFree(GetProcessHeap(), 0, buf);
+    return (result == IDOK) ? (HWND)1 : NULL;
+}
+
+static void ShowWorkflowBuilder(void)
+{
+    WorkflowBuilderState wb;
+    WCHAR wszPath[MAX_PATH];
+
+    if (!s_mc.hasProjectContext)
+    {
+        MessageBoxW(s_mc.hwndPanel, L"Open a project folder first.", L"Workflow Builder", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    ZeroMemory(&wb, sizeof(wb));
+    wb.spec.version = 1;
+    wcscpy_s(wb.spec.root, MAX_PATH, s_mc.workspaceRoot);
+    StringCchCopyA(wb.spec.name, ARRAYSIZE(wb.spec.name), "My Workflow");
+    StringCchCopyA(wb.spec.layout, ARRAYSIZE(wb.spec.layout), "line");
+    wb.spec.defaultWorkspacePolicy = AGENT_WORKSPACE_ISOLATED;
+    wb.selectedAgent = -1;
+
+    if (CreateWorkflowBuilderDialog(s_mc.hwndPanel, &wb))
+    {
+        /* Generate a unique filename from the name */
+        {
+            char safeName[128];
+            WCHAR wSafeName[128];
+            int i;
+            StringCchCopyA(safeName, ARRAYSIZE(safeName), wb.spec.name);
+            for (i = 0; safeName[i]; i++)
+            {
+                if (safeName[i] == ' ') safeName[i] = '-';
+                else if (!((safeName[i] >= 'a' && safeName[i] <= 'z') ||
+                           (safeName[i] >= 'A' && safeName[i] <= 'Z') ||
+                           (safeName[i] >= '0' && safeName[i] <= '9') ||
+                           safeName[i] == '-' || safeName[i] == '_'))
+                    safeName[i] = '_';
+            }
+            /* Convert to lowercase */
+            for (i = 0; safeName[i]; i++)
+                if (safeName[i] >= 'A' && safeName[i] <= 'Z')
+                    safeName[i] += 32;
+
+            MultiByteToWideChar(CP_UTF8, 0, safeName, -1, wSafeName, ARRAYSIZE(wSafeName));
+            StringCchPrintfW(wszPath, ARRAYSIZE(wszPath), L"%s\\.bikode\\orgs\\%s.json", s_mc.workspaceRoot, wSafeName);
+
+            /* Ensure .bikode\orgs directory exists */
+            {
+                WCHAR dirPath[MAX_PATH];
+                StringCchPrintfW(dirPath, ARRAYSIZE(dirPath), L"%s\\.bikode\\orgs", s_mc.workspaceRoot);
+                CreateDirectoryW(dirPath, NULL);
+            }
+
+            /* If file already exists, add a numeric suffix */
+            if (PathFileExistsW(wszPath))
+            {
+                int n;
+                for (n = 2; n < 100; n++)
+                {
+                    StringCchPrintfW(wszPath, ARRAYSIZE(wszPath), L"%s\\.bikode\\orgs\\%s-%d.json",
+                        s_mc.workspaceRoot, wSafeName, n);
+                    if (!PathFileExistsW(wszPath))
+                        break;
+                }
+            }
+        }
+        wcscpy_s(wb.spec.path, MAX_PATH, wszPath);
+
+        if (AgentRuntime_SaveOrgSpec(&wb.spec))
+        {
+            AgentRuntime_SetLastSelectedOrg(wszPath);
+            LoadOrgs();
+            RefreshUi();
+            MessageBoxW(s_mc.hwndPanel,
+                L"Workflow created successfully! Select it from the dropdown and click Run Workflow to start.",
+                L"Workflow Builder", MB_OK | MB_ICONINFORMATION);
+        }
+        else
+        {
+            MessageBoxW(s_mc.hwndPanel, L"Failed to save workflow.", L"Workflow Builder", MB_OK | MB_ICONERROR);
+        }
+    }
 }
 
 static BOOL CreateEmptyProject(void)
@@ -3033,6 +3496,7 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         s_mc.hwndPause = CreateWindowExW(0, L"BUTTON", L"Pause Queue", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_PAUSE, NULL, NULL);
         s_mc.hwndCancel = CreateWindowExW(0, L"BUTTON", L"Stop Run", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_CANCEL, NULL, NULL);
         s_mc.hwndDuplicate = CreateWindowExW(0, L"BUTTON", L"Copy Workflow", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_DUPLICATE, NULL, NULL);
+        s_mc.hwndNewWorkflow = CreateWindowExW(0, L"BUTTON", L"New Workflow...", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_NEW_WORKFLOW, NULL, NULL);
         s_mc.hwndAddNode = CreateWindowExW(0, L"BUTTON", L"Add Agent...", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_ADD_NODE, NULL, NULL);
         s_mc.hwndToggleView = CreateWindowExW(0, L"BUTTON", L"Workflow Map", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_TOGGLE_VIEW, NULL, NULL);
         s_mc.hwndHideIdle = CreateWindowExW(0, L"BUTTON", L"Show active only", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP, 0, 0, 0, 0, hwnd, (HMENU)(UINT_PTR)IDC_MC_HIDE_IDLE, NULL, NULL);
@@ -3070,7 +3534,7 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         SendMessageW(s_mc.hwndProjectPrompt, EM_SETCUEBANNER, TRUE, (LPARAM)L"e.g. Build a task management app with drag-and-drop kanban board...");
 
         if (!s_mc.hwndOrgCombo || !s_mc.hwndRun || !s_mc.hwndPause || !s_mc.hwndCancel ||
-            !s_mc.hwndDuplicate || !s_mc.hwndAddNode || !s_mc.hwndToggleView || !s_mc.hwndHideIdle ||
+            !s_mc.hwndDuplicate || !s_mc.hwndNewWorkflow || !s_mc.hwndAddNode || !s_mc.hwndToggleView || !s_mc.hwndHideIdle ||
             !s_mc.hwndQuickChat || !s_mc.hwndBoard || !s_mc.hwndGraphHost || !s_mc.hwndFallback ||
             !s_mc.hwndInspectTabs || !s_mc.hwndInspectText || !s_mc.hwndOpenFile ||
             !s_mc.hwndOpenWorkspace || !s_mc.hwndOpenTranscript || !s_mc.hwndOpenProof || !s_mc.hwndActivity)
@@ -3080,7 +3544,7 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
         {
             HWND controls[] = {
-                s_mc.hwndOrgCombo, s_mc.hwndRun, s_mc.hwndPause, s_mc.hwndCancel, s_mc.hwndDuplicate, s_mc.hwndAddNode,
+                s_mc.hwndOrgCombo, s_mc.hwndRun, s_mc.hwndPause, s_mc.hwndCancel, s_mc.hwndDuplicate, s_mc.hwndNewWorkflow, s_mc.hwndAddNode,
                 s_mc.hwndToggleView, s_mc.hwndHideIdle, s_mc.hwndQuickChat, s_mc.hwndBoard, s_mc.hwndInspectTabs,
                 s_mc.hwndInspectText, s_mc.hwndOpenFile, s_mc.hwndOpenWorkspace, s_mc.hwndOpenTranscript, s_mc.hwndOpenProof,
                 s_mc.hwndActivity, s_mc.hwndFallback
@@ -3275,6 +3739,9 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             return 0;
         case IDC_MC_DUPLICATE:
             DuplicateSelectedOrg();
+            return 0;
+        case IDC_MC_NEW_WORKFLOW:
+            ShowWorkflowBuilder();
             return 0;
         case IDC_MC_ADD_NODE:
             AddNodeToSelectedOrg();
