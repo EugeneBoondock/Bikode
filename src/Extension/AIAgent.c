@@ -3403,6 +3403,119 @@ static BOOL ResponseLooksLikeCodeDump(const char* text)
         ContainsSubstringCI(text, "public static");
 }
 
+// Detect when the model says it will do something but never emits tool calls.
+// Returns TRUE if the response contains planning language without actual action.
+static BOOL ResponseLooksLikePlanningOnly(const char* text)
+{
+    static const char* planPhrases[] = {
+        "I'll read ",   "I will read ",  "I'll check ",  "I will check ",
+        "Let me read ", "Let me check ", "I'll examine ", "I'll look ",
+        "I'll open ",   "I will open ",  "I'll inspect ", "I will inspect ",
+        "I'll create ", "I will create ","I'll write ",  "I will write ",
+        "I'll start ",  "I will start ", "Let me start ", "Let me examine ",
+        "I'll understand ", "I will understand ",
+        "First, I'll ", "First, I will ", "First, let me ",
+        NULL
+    };
+    if (!text || !text[0]) return FALSE;
+    for (int i = 0; planPhrases[i]; i++)
+    {
+        if (ContainsSubstringCI(text, planPhrases[i]))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+// Extract a plausible file path from the model's planning text.
+// Looks for common file extensions. Returns a heap string or NULL.
+static char* ExtractMentionedFilePath(const char* text)
+{
+    static const char* exts[] = {
+        ".txt", ".c", ".h", ".py", ".js", ".ts", ".json", ".html", ".css",
+        ".md", ".yml", ".yaml", ".toml", ".xml", ".java", ".go", ".rs",
+        ".cpp", ".hpp", ".rb", ".php", ".sh", ".bat", ".ps1", ".cfg",
+        ".ini", ".jsx", ".tsx", ".vue", ".svelte", NULL
+    };
+    if (!text) return NULL;
+
+    for (int e = 0; exts[e]; e++)
+    {
+        const char* ext = strstr(text, exts[e]);
+        if (!ext) continue;
+        // Walk backwards from the extension to find the start of the path
+        const char* start = ext;
+        while (start > text && start[-1] != ' ' && start[-1] != '\n' &&
+               start[-1] != '\t' && start[-1] != '"' && start[-1] != '\'' &&
+               start[-1] != '(' && start[-1] != '[' && start[-1] != '`')
+        {
+            start--;
+        }
+        int pathLen = (int)(ext + (int)strlen(exts[e]) - start);
+        if (pathLen > 1 && pathLen < 260)
+        {
+            char* path = (char*)malloc(pathLen + 1);
+            if (path)
+            {
+                memcpy(path, start, pathLen);
+                path[pathLen] = '\0';
+                return path;
+            }
+        }
+    }
+    return NULL;
+}
+
+// Build a targeted tool-nudge correction message.
+// Incorporates a concrete example if a file path was detected.
+static char* BuildToolNudgeMessage(const char* response, int retryNumber)
+{
+    StrBuf sb;
+    sb_init(&sb, 1024);
+
+    sb_append(&sb,
+        "CRITICAL: You are inside the Bikode tool execution engine. You MUST use tool calls to interact with the workspace. "
+        "Do NOT describe what you plan to do. Actually DO it now by emitting tool call blocks.\n\n", -1);
+
+    if (retryNumber > 1)
+    {
+        sb_append(&sb,
+            "WARNING: This is your final retry. You MUST emit <tool_call>...</tool_call> blocks or your task will be marked as incomplete.\n\n", -1);
+    }
+
+    // Try to extract a mentioned file path for a concrete example
+    {
+        char* mentionedPath = ExtractMentionedFilePath(response);
+        if (mentionedPath)
+        {
+            sb_append(&sb, "For example, to read the file you mentioned, emit exactly:\n\n", -1);
+            sb_appendf(&sb,
+                "<tool_call>\n"
+                "{\"name\": \"read_file\", \"path\": \"%s\"}\n"
+                "</tool_call>\n\n", mentionedPath);
+            sb_append(&sb, "To create or write a file:\n\n", -1);
+            sb_append(&sb,
+                "<tool_call>\n"
+                "{\"name\": \"write_file\", \"path\": \"path/to/file\", \"content\": \"file contents here\"}\n"
+                "</tool_call>\n\n", -1);
+            free(mentionedPath);
+        }
+        else
+        {
+            sb_append(&sb,
+                "Start by listing the workspace directory to see what files exist:\n\n"
+                "<tool_call>\n"
+                "{\"name\": \"list_dir\", \"path\": \".\"}\n"
+                "</tool_call>\n\n"
+                "Then read files with read_file and write with write_file or replace_in_file.\n\n", -1);
+        }
+    }
+
+    sb_append(&sb,
+        "Respond ONLY with tool call blocks now. No planning text. Execute the tools.", -1);
+
+    return sb.data;
+}
+
 static BOOL IsWorkspaceMutationTool(const char* toolName)
 {
     return toolName &&
@@ -3573,7 +3686,7 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     // Agent loop
     int iteration = 0;
     char* finalResponse = NULL;
-    BOOL forcedNativeRetry = FALSE;
+    int toolNudgeRetries = 0;         // number of tool-nudge retries attempted (max 3)
     BOOL compactToolRetry = FALSE;
     BOOL workspaceMutated = FALSE;
     const BOOL codeWriteTask = IsLikelyCodeWriteTask(p->szUserMessage);
@@ -3653,17 +3766,17 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
 
         if (toolCount == 0)
         {
-            if (codeWriteTask && !workspaceMutated && !forcedNativeRetry &&
-                msgCount < MAX_MESSAGES_PER_CALL - 2)
+            // Nudge the model to use tools: allow up to 3 retries with increasingly
+            // forceful correction messages that include concrete tool call examples
+            BOOL shouldNudge = (codeWriteTask || ResponseLooksLikePlanningOnly(response)) &&
+                               !workspaceMutated &&
+                               toolNudgeRetries < 3 &&
+                               msgCount < MAX_MESSAGES_PER_CALL - 2;
+
+            if (shouldNudge)
             {
                 char* respCopy = _strdup(response);
-                char* correction = _strdup(
-                    "This is Bikode. You MUST use native Bikode tools to modify the workspace or editor directly. "
-                    "When the user asks you to write code, do not paste source into chat. "
-                    "Use <tool_call>{\"name\": \"write_file\", \"path\": \"...\", \"content\": \"...\"}</tool_call> "
-                    "to create files, or <tool_call>{\"name\": \"replace_in_file\", \"path\": \"...\", \"old_text\": \"...\", \"new_text\": \"...\"}</tool_call> "
-                    "to edit existing files. Read files first with read_file if needed, then make the changes, and reply with a short summary."
-                );
+                char* correction = BuildToolNudgeMessage(response, toolNudgeRetries + 1);
 
                 if (respCopy && correction)
                 {
@@ -3677,7 +3790,7 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
                     ownedStrings[msgCount] = correction;
                     msgCount++;
 
-                    forcedNativeRetry = TRUE;
+                    toolNudgeRetries++;
                     free(response);
                     continue;
                 }
@@ -4011,7 +4124,7 @@ void AIAgent_RunToolLoop(const AIProviderConfig* pCfg,
     int totalInput = 0;
     int totalOutput = 0;
     char* finalResponse = NULL;
-    BOOL forcedNativeRetry = FALSE;
+    int toolNudgeRetries = 0;         // allow up to 3 nudge retries
     int effectiveMaxIter = maxIter > 0 ? maxIter : TOOLLOOP_MAX_ITER;
     int effectiveMaxTools = maxTools > 0 ? maxTools : TOOLLOOP_MAX_TOOLS;
 
@@ -4083,18 +4196,13 @@ void AIAgent_RunToolLoop(const AIProviderConfig* pCfg,
 
         if (toolCount == 0)
         {
-            // Model didn't use tools - nudge it to use them on first occurrence
-            if (!forcedNativeRetry && filesChanged == 0 &&
+            // Model didn't use tools - nudge it with up to 3 increasingly
+            // forceful retries that include concrete tool call examples
+            if (filesChanged == 0 && toolNudgeRetries < 3 &&
                 msgCount < TOOLLOOP_MAX_MSGS - 2)
             {
                 char* respCopy = _strdup(response);
-                char* correction = _strdup(
-                    "You MUST use the provided tools (write_file, replace_in_file, read_file, etc.) "
-                    "to make changes to files in the workspace. Do not paste code into the chat. "
-                    "Use <tool_call>{\"name\": \"write_file\", \"path\": \"...\", \"content\": \"...\"}</tool_call> "
-                    "or <tool_call>{\"name\": \"replace_in_file\", \"path\": \"...\", \"old_text\": \"...\", \"new_text\": \"...\"}</tool_call> "
-                    "to actually create or modify files. Read files first with read_file if needed."
-                );
+                char* correction = BuildToolNudgeMessage(response, toolNudgeRetries + 1);
                 if (respCopy && correction)
                 {
                     msgs[msgCount].role = "assistant";
@@ -4107,7 +4215,7 @@ void AIAgent_RunToolLoop(const AIProviderConfig* pCfg,
                     owned[msgCount] = correction;
                     msgCount++;
 
-                    forcedNativeRetry = TRUE;
+                    toolNudgeRetries++;
                     free(response);
                     continue;
                 }
