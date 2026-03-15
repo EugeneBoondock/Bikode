@@ -1189,13 +1189,15 @@ static char* BuildSystemPrompt(const BudgetContract* contract, AgentIntent inten
 
 // Tag variants that LLMs commonly use for tool calls
 static const char* s_openTags[] = {
-    "<tool_call>", "<tool_code>", "<function_call>", "<tool_use>", NULL
+    "<tool_call>", "<tool_code>", "<function_call>", "<tool_use>",
+    "<invoke", "<function_calls>", "<parameter", NULL
 };
 static const char* s_closeTags[] = {
-    "</tool_call>", "</tool_code>", "</function_call>", "</tool_use>", NULL
+    "</tool_call>", "</tool_code>", "</function_call>", "</tool_use>",
+    "</invoke>", "</function_calls>", "</parameter>", NULL
 };
-static const int s_openTagLens[] = { 11, 11, 15, 10 };
-static const int s_closeTagLens[] = { 12, 12, 16, 11 };
+static const int s_openTagLens[] = { 11, 11, 15, 10, 7, 16, 10 };
+static const int s_closeTagLens[] = { 12, 12, 16, 11, 9, 17, 12 };
 
 // Find the next tool call open tag in the text. Sets *tagIndex and returns pointer.
 static const char* FindNextOpenTag(const char* p, int* tagIndex)
@@ -3470,22 +3472,62 @@ static char* StripToolCallTags(const char* text)
             int openLen = s_openTagLens[i];
             if (strncmp(p, s_openTags[i], openLen) == 0)
             {
+                // For tags with attributes (e.g. <invoke name="...">), skip to '>'
+                const char* tagEnd = p + openLen;
+                if (*tagEnd != '>' && *tagEnd != '\0')
+                {
+                    const char* gt = strchr(tagEnd, '>');
+                    if (gt) tagEnd = gt + 1;
+                }
+                else if (*tagEnd == '>')
+                {
+                    tagEnd++;
+                }
                 // Find matching close tag
-                const char* end = strstr(p + openLen, s_closeTags[i]);
+                const char* end = strstr(tagEnd, s_closeTags[i]);
                 if (end)
                 {
                     p = end + s_closeTagLens[i];
-                    // Skip trailing whitespace/newlines
                     while (*p == '\n' || *p == '\r') p++;
                 }
                 else
                 {
-                    p += openLen; // malformed, skip open tag
+                    // No close tag — skip to end of line (malformed)
+                    const char* nl = strchr(p + openLen, '\n');
+                    p = nl ? nl : (p + strlen(p));
                 }
                 found = TRUE;
                 break;
             }
         }
+
+        // Strip orphaned close tags like </invoke>, </function_calls>, </parameter>
+        if (!found && *p == '<' && *(p + 1) == '/')
+        {
+            for (int i = 0; s_closeTags[i]; i++)
+            {
+                if (strncmp(p, s_closeTags[i], s_closeTagLens[i]) == 0)
+                {
+                    p += s_closeTagLens[i];
+                    while (*p == '\n' || *p == '\r') p++;
+                    found = TRUE;
+                    break;
+                }
+            }
+        }
+
+        // Strip raw JSON tool calls like {"name":"read_file","path":"..."}
+        if (!found && *p == '{' && strncmp(p, "{\"name\"", 7) == 0)
+        {
+            const char* end = FindJsonObjectEnd(p);
+            if (end)
+            {
+                p = end;
+                while (*p == '\n' || *p == '\r') p++;
+                found = TRUE;
+            }
+        }
+
         if (!found)
         {
             sb_append(&sb, p, 1);
@@ -4168,9 +4210,6 @@ static unsigned __stdcall AgentThreadProc(void* pArg)
     {
         iteration++;
 
-        if (iteration > 1)
-            PostStatusToUI(p->hwndTarget, "Thinking... (step %d)", iteration);
-
         // Call LLM
         ContextLedger_RecordPrompt(&ledger, msgs, msgCount);
         char* response = AIDirectCall_ChatMulti(&p->cfg, msgs, msgCount);
@@ -4613,13 +4652,6 @@ void AIAgent_RunToolLoop(const AIProviderConfig* pCfg,
         int toolCount;
 
         iteration++;
-
-        if (callback && iteration > 1)
-        {
-            char buf[128];
-            _snprintf_s(buf, sizeof(buf), _TRUNCATE, "Thinking... (step %d)", iteration);
-            callback(cbNodeIndex, 0, buf);
-        }
 
         response = AIDirectCall_ChatMultiEx(pCfg, msgs, msgCount, &usage);
         totalInput += usage.inputTokens;

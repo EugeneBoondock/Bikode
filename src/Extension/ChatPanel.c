@@ -125,7 +125,7 @@
 #define CHAT_HEADER_MODE_COUNT   5
 #define CHAT_HEADER_MODE_H      24
 #define CHAT_HEADER_MODE_GAP     2
-#define CHAT_HEADER_ACTION_W    92
+#define CHAT_HEADER_ACTION_W    72
 #define CHAT_HEADER_ACTION_H    24
 #define CHAT_STATUS_DOT_R       4
 #define CHAT_EMPTY_CARD_INSET   16
@@ -3136,8 +3136,8 @@ int ChatPanel_Layout(HWND hwndParent, int parentRight, int editorTop,
     SetRect(&s_rcHeaderModeDock, modesLeft - 4, modeTop - 3, actionLeft - 10, modeTop + CHAT_HEADER_MODE_H + 3);
 
     {
-        const int baseWidths[CHAT_HEADER_MODE_COUNT] = { 42, 58, 62, 52, 52 };
-        const int baseWidthSum = 266;
+        const int baseWidths[CHAT_HEADER_MODE_COUNT] = { 46, 64, 68, 58, 58 };
+        const int baseWidthSum = 294;
         int dockLeft = s_rcHeaderModeDock.left + 5;
         int dockRight = s_rcHeaderModeDock.right - 5;
         int widthBudget = max(0, dockRight - dockLeft - (CHAT_HEADER_MODE_GAP * (CHAT_HEADER_MODE_COUNT - 1)));

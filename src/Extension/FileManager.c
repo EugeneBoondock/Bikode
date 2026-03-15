@@ -85,19 +85,40 @@ static BOOL  s_dragging    = FALSE;
 static int   s_dragStartX  = 0;
 static int   s_dragStartW  = 0;
 
+/* File system watcher */
+static HANDLE s_hWatcher     = NULL;
+static HANDLE s_hWatchThread = NULL;
+static volatile BOOL s_watcherStop = FALSE;
+
+/* Context menu IDs */
+#define IDM_FM_NEWFILE      0xFB50
+#define IDM_FM_NEWFOLDER    0xFB51
+#define IDM_FM_RENAME       0xFB52
+#define IDM_FM_DELETE       0xFB53
+#define IDM_FM_REFRESH      0xFB54
+#define IDM_FM_OPENINTERM   0xFB55
+#define IDM_FM_COPYPATH     0xFB56
+
+/* Timer ID for debounced watcher refresh */
+#define IDT_FM_WATCH_REFRESH  0xFB60
+
 /* Forward declarations */
 static LRESULT CALLBACK FilePanelProc(HWND, UINT, WPARAM, LPARAM);
 static void    EnsureClass(HINSTANCE);
 static void    EnsureFonts(void);
 static void    PopulateRoot(void);
-static void    PopulateChildren(HTREEITEM hParent);
 static void    RemoveChildren(HTREEITEM hParent);
 static void    OnItemExpanding(NMTREEVIEWW *pnm);
 static void    OnItemActivate(NMHDR *pnm);
+static void    OnItemSingleClick(LPARAM lParam);
+static void    ShowContextMenu(HWND hwnd, POINT pt);
+static void    OnContextMenuCommand(HWND hwnd, int cmd);
 static void    DrawHeader(HDC hdc, RECT *prc);
 static void    DrawSplitter(HDC hdc, RECT *prc);
 static BOOL    GetItemPath(HTREEITEM hItem, WCHAR *pszPath, int cch);
-static BOOL    HasSubFolders(const WCHAR *pszDir);
+static void    StartFileWatcher(void);
+static void    StopFileWatcher(void);
+static void    RefreshSubtree(HTREEITEM hItem);
 
 /* ── Helpers to store full path in tree item lParam ── */
 static WCHAR* AllocPathStr(const WCHAR *s) {
@@ -143,6 +164,7 @@ BOOL FileManager_Init(HWND hwndMain) {
 }
 
 void FileManager_Shutdown(void) {
+    StopFileWatcher();
     if (s_hwndTree) {
         /* Free all lParam path strings */
         HTREEITEM hRoot = TreeView_GetRoot(s_hwndTree);
@@ -177,7 +199,8 @@ static BOOL CreatePanel(HWND hwndParent) {
     if (!s_hwndTree) {
         DWORD style = WS_CHILD | WS_VISIBLE | WS_TABSTOP |
                       TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT |
-                      TVS_SHOWSELALWAYS | TVS_DISABLEDRAGDROP | TVS_TRACKSELECT;
+                      TVS_SHOWSELALWAYS | TVS_DISABLEDRAGDROP | TVS_TRACKSELECT |
+                      TVS_EDITLABELS;
         s_hwndTree = CreateWindowExW(0, WC_TREEVIEWW, L"",
             style,
             0, HEADER_H, 0, 0, s_hwndPanel,
@@ -252,6 +275,7 @@ void FileManager_Show(HWND hwndP) {
     }
 
     PopulateRoot();
+    StartFileWatcher();
 
     ShowWindow(s_hwndPanel, SW_SHOW);
     s_visible = TRUE;
@@ -309,6 +333,7 @@ void FileManager_OpenFolder(LPCWSTR pszPath) {
     if (s_hwndTree) {
         PopulateRoot();
     }
+    StartFileWatcher();
     if (!s_visible && s_hwndMain) {
         FileManager_Show(s_hwndMain);
     }
@@ -727,10 +752,36 @@ static LRESULT CALLBACK FilePanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             case NM_RETURN:
                 OnItemActivate(hdr);
                 return 0;
+            case NM_CLICK:
+                OnItemSingleClick(lParam);
+                return 0;
+            case NM_RCLICK: {
+                POINT pt;
+                GetCursorPos(&pt);
+                ShowContextMenu(hwnd, pt);
+                return 0;
+            }
+            case TVN_BEGINLABELEDITW:
+                return 0;  /* Allow editing */
+            case TVN_ENDLABELEDITW:
+                OnEndLabelEdit((NMTVDISPINFOW*)lParam);
+                return TRUE;
             }
         }
         break;
     }
+
+    case WM_COMMAND:
+        OnContextMenuCommand(hwnd, LOWORD(wParam));
+        return 0;
+
+    case WM_TIMER:
+        if (wParam == IDT_FM_WATCH_REFRESH) {
+            KillTimer(hwnd, IDT_FM_WATCH_REFRESH);
+            FileManager_Refresh();
+            return 0;
+        }
+        break;
 
     case WM_CTLCOLOREDIT:
     case WM_CTLCOLORSTATIC: {
@@ -746,12 +797,345 @@ static LRESULT CALLBACK FilePanelProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     }
 
     case WM_DESTROY:
+        StopFileWatcher();
         s_hwndTree  = NULL;
         s_hwndPanel = NULL;
         break;
     }
 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Single-click expand/collapse for folders
+ * ═══════════════════════════════════════════════════════════════════ */
+static void OnItemSingleClick(LPARAM lParam) {
+    (void)lParam;
+    TVHITTESTINFO ht = {0};
+    DWORD pos = GetMessagePos();
+    ht.pt.x = (short)LOWORD(pos);
+    ht.pt.y = (short)HIWORD(pos);
+    ScreenToClient(s_hwndTree, &ht.pt);
+    HTREEITEM hHit = TreeView_HitTest(s_hwndTree, &ht);
+    if (!hHit) return;
+
+    /* Only toggle on label/icon click, not on the +/- button (tree handles that) */
+    if (ht.flags & (TVHT_ONITEMLABEL | TVHT_ONITEMICON)) {
+        TVITEMW ti = {0};
+        ti.mask  = TVIF_CHILDREN;
+        ti.hItem = hHit;
+        TreeView_GetItem(s_hwndTree, &ti);
+        if (ti.cChildren) {
+            TreeView_SelectItem(s_hwndTree, hHit);
+            TreeView_Expand(s_hwndTree, hHit, TVE_TOGGLE);
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Context menu
+ * ═══════════════════════════════════════════════════════════════════ */
+static void ShowContextMenu(HWND hwnd, POINT pt) {
+    /* Select the item under cursor */
+    TVHITTESTINFO ht = {0};
+    ht.pt = pt;
+    ScreenToClient(s_hwndTree, &ht.pt);
+    HTREEITEM hHit = TreeView_HitTest(s_hwndTree, &ht);
+    if (hHit)
+        TreeView_SelectItem(s_hwndTree, hHit);
+
+    HMENU hMenu = CreatePopupMenu();
+    if (!hMenu) return;
+
+    AppendMenuW(hMenu, MF_STRING, IDM_FM_NEWFILE,    L"New File...");
+    AppendMenuW(hMenu, MF_STRING, IDM_FM_NEWFOLDER,  L"New Folder...");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    if (hHit) {
+        AppendMenuW(hMenu, MF_STRING, IDM_FM_RENAME,  L"Rename...");
+        AppendMenuW(hMenu, MF_STRING, IDM_FM_DELETE,   L"Delete");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(hMenu, MF_STRING, IDM_FM_COPYPATH, L"Copy Path");
+    }
+    AppendMenuW(hMenu, MF_STRING, IDM_FM_REFRESH,    L"Refresh");
+
+    TrackPopupMenu(hMenu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
+    DestroyMenu(hMenu);
+}
+
+/* Get the directory path for context operations (selected item's folder) */
+static void GetContextDir(WCHAR *pszDir, int cch) {
+    HTREEITEM hSel = TreeView_GetSelection(s_hwndTree);
+    if (hSel) {
+        TVITEMW ti = {0};
+        ti.mask  = TVIF_PARAM | TVIF_CHILDREN;
+        ti.hItem = hSel;
+        TreeView_GetItem(s_hwndTree, &ti);
+        if (ti.lParam) {
+            const WCHAR *path = (const WCHAR*)ti.lParam;
+            if (ti.cChildren) {
+                /* It's a folder — use it directly */
+                wcscpy_s(pszDir, cch, path);
+            } else {
+                /* It's a file — use its parent directory */
+                wcscpy_s(pszDir, cch, path);
+                PathRemoveFileSpecW(pszDir);
+            }
+            return;
+        }
+    }
+    /* Fallback to root */
+    wcscpy_s(pszDir, cch, s_rootPath);
+}
+
+static void InsertTempItemForEdit(BOOL isFolder) {
+    HTREEITEM hSel = TreeView_GetSelection(s_hwndTree);
+    HTREEITEM hParent = hSel;
+    if (!hParent) hParent = TreeView_GetRoot(s_hwndTree);
+
+    /* If selected item is a file (not folder) — use its parent */
+    if (hSel) {
+        TVITEMW ti = {0};
+        ti.mask = TVIF_CHILDREN;
+        ti.hItem = hSel;
+        TreeView_GetItem(s_hwndTree, &ti);
+        if (!ti.cChildren) {
+            hParent = TreeView_GetParent(s_hwndTree, hSel);
+            if (!hParent) hParent = TreeView_GetRoot(s_hwndTree);
+        }
+    }
+
+    TreeView_Expand(s_hwndTree, hParent, TVE_EXPAND);
+
+    TVINSERTSTRUCTW tvi = {0};
+    tvi.hParent = hParent;
+    tvi.hInsertAfter = TVI_FIRST;
+    tvi.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_CHILDREN;
+    tvi.item.pszText = isFolder ? L"new_folder" : L"untitled.txt";
+    tvi.item.lParam = 0;  /* No path — marker for new item */
+    tvi.item.cChildren = isFolder ? 1 : 0;
+    HTREEITEM hNew = TreeView_InsertItem(s_hwndTree, &tvi);
+    if (!hNew) return;
+
+    s_newItemIsFolder = isFolder;
+    TreeView_SelectItem(s_hwndTree, hNew);
+    TreeView_EditLabel(s_hwndTree, hNew);
+}
+
+static void OnContextMenuCommand(HWND hwnd, int cmd) {
+    switch (cmd) {
+    case IDM_FM_NEWFILE:
+        InsertTempItemForEdit(FALSE);
+        break;
+    case IDM_FM_NEWFOLDER:
+        InsertTempItemForEdit(TRUE);
+        break;
+    case IDM_FM_RENAME: {
+        HTREEITEM hSel = TreeView_GetSelection(s_hwndTree);
+        if (hSel) {
+            /* Use tree view's built-in label editing */
+            TreeView_EditLabel(s_hwndTree, hSel);
+        }
+        break;
+    }
+    case IDM_FM_DELETE: {
+        HTREEITEM hSel = TreeView_GetSelection(s_hwndTree);
+        if (hSel) {
+            WCHAR path[MAX_PATH];
+            if (GetItemPath(hSel, path, MAX_PATH)) {
+                WCHAR msg[MAX_PATH + 64];
+                swprintf(msg, ARRAYSIZE(msg), L"Delete \"%s\"?", PathFindFileNameW(path));
+                if (MessageBoxW(hwnd, msg, L"Confirm Delete", MB_OKCANCEL | MB_ICONWARNING) == IDOK) {
+                    if (PathIsDirectoryW(path)) {
+                        /* Recursive delete via shell */
+                        SHFILEOPSTRUCTW op = {0};
+                        op.hwnd = hwnd;
+                        op.wFunc = FO_DELETE;
+                        /* SHFileOperation needs double-null terminated string */
+                        WCHAR delPath[MAX_PATH + 2];
+                        wcscpy_s(delPath, MAX_PATH, path);
+                        delPath[wcslen(delPath) + 1] = L'\0';
+                        op.pFrom = delPath;
+                        op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION;
+                        SHFileOperationW(&op);
+                    } else {
+                        DeleteFileW(path);
+                    }
+                    FileManager_Refresh();
+                }
+            }
+        }
+        break;
+    }
+    case IDM_FM_COPYPATH: {
+        HTREEITEM hSel = TreeView_GetSelection(s_hwndTree);
+        if (hSel) {
+            WCHAR path[MAX_PATH];
+            if (GetItemPath(hSel, path, MAX_PATH)) {
+                int len = (int)wcslen(path);
+                if (OpenClipboard(hwnd)) {
+                    EmptyClipboard();
+                    HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, (len + 1) * sizeof(WCHAR));
+                    if (hg) {
+                        WCHAR *dst = (WCHAR*)GlobalLock(hg);
+                        wcscpy_s(dst, len + 1, path);
+                        GlobalUnlock(hg);
+                        SetClipboardData(CF_UNICODETEXT, hg);
+                    }
+                    CloseClipboard();
+                }
+            }
+        }
+        break;
+    }
+    case IDM_FM_REFRESH:
+        FileManager_Refresh();
+        break;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * Label editing (rename + new file/folder creation)
+ * ═══════════════════════════════════════════════════════════════════ */
+static BOOL s_newItemIsFolder = FALSE;
+
+static void OnEndLabelEdit(NMTVDISPINFOW *pdi) {
+    if (!pdi->item.pszText || pdi->item.pszText[0] == L'\0') {
+        /* User cancelled — if it's a new item (no lParam), delete it */
+        if (!pdi->item.lParam) {
+            TreeView_DeleteItem(s_hwndTree, pdi->item.hItem);
+        }
+        return;
+    }
+
+    WCHAR oldPath[MAX_PATH] = {0};
+    BOOL isNew = (pdi->item.lParam == 0);
+
+    if (isNew) {
+        /* New file/folder creation */
+        HTREEITEM hParent = TreeView_GetParent(s_hwndTree, pdi->item.hItem);
+        WCHAR parentPath[MAX_PATH];
+        if (!hParent || !GetItemPath(hParent, parentPath, MAX_PATH)) {
+            wcscpy_s(parentPath, MAX_PATH, s_rootPath);
+        }
+
+        WCHAR newPath[MAX_PATH];
+        swprintf(newPath, MAX_PATH, L"%s\\%s", parentPath, pdi->item.pszText);
+
+        if (s_newItemIsFolder) {
+            CreateDirectoryW(newPath, NULL);
+        } else {
+            HANDLE hFile = CreateFileW(newPath, GENERIC_WRITE, 0, NULL,
+                                        CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (hFile != INVALID_HANDLE_VALUE) {
+                CloseHandle(hFile);
+                FileLoad(FALSE, FALSE, FALSE, FALSE, newPath);
+            }
+        }
+        /* Remove temp item and refresh to show real item */
+        TreeView_DeleteItem(s_hwndTree, pdi->item.hItem);
+        FileManager_Refresh();
+    } else {
+        /* Rename existing item */
+        const WCHAR *existingPath = (const WCHAR*)pdi->item.lParam;
+        if (!existingPath) return;
+
+        WCHAR dirPart[MAX_PATH];
+        wcscpy_s(dirPart, MAX_PATH, existingPath);
+        PathRemoveFileSpecW(dirPart);
+
+        WCHAR newPath[MAX_PATH];
+        swprintf(newPath, MAX_PATH, L"%s\\%s", dirPart, pdi->item.pszText);
+
+        if (_wcsicmp(existingPath, newPath) != 0) {
+            MoveFileW(existingPath, newPath);
+            FileManager_Refresh();
+        }
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+ * File system watcher — monitors root dir for changes
+ * ═══════════════════════════════════════════════════════════════════ */
+static DWORD WINAPI FileWatcherThread(LPVOID pParam) {
+    (void)pParam;
+    HANDLE hDir = CreateFileW(s_rootPath,
+        FILE_LIST_DIRECTORY,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        NULL, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
+    if (hDir == INVALID_HANDLE_VALUE) return 1;
+
+    OVERLAPPED ov = {0};
+    ov.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+    BYTE buf[4096];
+    HANDLE waitHandles[1] = { ov.hEvent };
+
+    while (!s_watcherStop) {
+        ResetEvent(ov.hEvent);
+        DWORD bytesReturned = 0;
+        if (!ReadDirectoryChangesW(hDir, buf, sizeof(buf), TRUE,
+                FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+                FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE |
+                FILE_NOTIFY_CHANGE_CREATION,
+                &bytesReturned, &ov, NULL))
+            break;
+
+        DWORD waitResult = WaitForSingleObject(ov.hEvent, 500);
+        if (s_watcherStop) break;
+
+        if (waitResult == WAIT_OBJECT_0) {
+            if (GetOverlappedResult(hDir, &ov, &bytesReturned, FALSE) && bytesReturned > 0) {
+                /* Debounce: post a timer to the panel instead of refreshing immediately */
+                if (s_hwndPanel && IsWindow(s_hwndPanel)) {
+                    PostMessage(s_hwndPanel, WM_TIMER, IDT_FM_WATCH_REFRESH, 0);
+                }
+                /* Brief sleep to coalesce rapid changes */
+                Sleep(300);
+            }
+        }
+    }
+
+    CloseHandle(ov.hEvent);
+    CloseHandle(hDir);
+    return 0;
+}
+
+static void StartFileWatcher(void) {
+    StopFileWatcher();
+    if (s_rootPath[0] == L'\0') return;
+    s_watcherStop = FALSE;
+    s_hWatchThread = CreateThread(NULL, 0, FileWatcherThread, NULL, 0, NULL);
+}
+
+static void StopFileWatcher(void) {
+    if (s_hWatchThread) {
+        s_watcherStop = TRUE;
+        WaitForSingleObject(s_hWatchThread, 2000);
+        CloseHandle(s_hWatchThread);
+        s_hWatchThread = NULL;
+    }
+}
+
+/* Refresh a single subtree (expand state preserved) */
+static void RefreshSubtree(HTREEITEM hItem) {
+    if (!hItem || !s_hwndTree) return;
+    TVITEMW ti = {0};
+    ti.mask = TVIF_PARAM | TVIF_STATE | TVIF_CHILDREN;
+    ti.hItem = hItem;
+    ti.stateMask = TVIS_EXPANDED;
+    TreeView_GetItem(s_hwndTree, &ti);
+
+    if (!ti.cChildren) return;  /* File, not folder */
+    if (!(ti.state & TVIS_EXPANDED)) return;  /* Not expanded, lazy load will handle it */
+
+    const WCHAR *itemPath = (const WCHAR*)ti.lParam;
+    if (!itemPath) return;
+
+    SendMessage(s_hwndTree, WM_SETREDRAW, FALSE, 0);
+    RemoveChildren(hItem);
+    PopulateFolder(hItem, itemPath);
+    SendMessage(s_hwndTree, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(s_hwndTree, NULL, TRUE);
 }
 
 /* ═══════════════════════════════════════════════════════════════════
