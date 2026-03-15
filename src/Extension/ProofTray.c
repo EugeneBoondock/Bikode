@@ -13,6 +13,7 @@
 #include "DarkMode.h"
 #include "CommonUtils.h"
 #include <uxtheme.h>
+#include <windowsx.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -53,6 +54,12 @@ static ProofItem s_items[PT_MAX_ITEMS];
 static int    s_iItemCount = 0;
 static int    s_iSelected = -1;
 static WCHAR  s_wszMissionStatus[256] = L"Mission idle";
+
+/* Splitter drag state for top-edge resize */
+#define PT_SPLITTER_GRIP   5
+static BOOL   s_bDragging = FALSE;
+static int    s_iDragStartY = 0;
+static int    s_iDragOrigH = 0;
 
 static LRESULT CALLBACK ProofTray_WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -285,6 +292,70 @@ static LRESULT CALLBACK ProofTray_WndProc(HWND hwnd, UINT msg, WPARAM wParam, LP
         if (hbr) return (LRESULT)hbr;
         break;
     }
+
+    case WM_SETCURSOR:
+    {
+        if ((HWND)wParam == hwnd && LOWORD(lParam) == HTCLIENT)
+        {
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            if (pt.y <= PT_SPLITTER_GRIP || s_bDragging)
+            {
+                SetCursor(LoadCursor(NULL, IDC_SIZENS));
+                return TRUE;
+            }
+        }
+        break;
+    }
+    case WM_LBUTTONDOWN:
+    {
+        int my = GET_Y_LPARAM(lParam);
+        if (my <= PT_SPLITTER_GRIP)
+        {
+            s_bDragging = TRUE;
+            s_iDragStartY = my;
+            s_iDragOrigH = s_iHeight;
+            SetCapture(hwnd);
+            return 0;
+        }
+        break;
+    }
+    case WM_MOUSEMOVE:
+    {
+        if (s_bDragging && (wParam & MK_LBUTTON))
+        {
+            int my = GET_Y_LPARAM(lParam);
+            int delta = my - s_iDragStartY;
+            int newH = s_iDragOrigH - delta;
+            if (newH < 80) newH = 80;
+            if (newH > 600) newH = 600;
+            s_iHeight = newH;
+            /* Trigger parent relayout */
+            if (s_hwndMain)
+            {
+                RECT rc;
+                GetClientRect(s_hwndMain, &rc);
+                SendMessageW(s_hwndMain, WM_SIZE, SIZE_RESTORED,
+                    MAKELPARAM(rc.right - rc.left, rc.bottom - rc.top));
+            }
+            return 0;
+        }
+        break;
+    }
+    case WM_LBUTTONUP:
+    {
+        if (s_bDragging)
+        {
+            s_bDragging = FALSE;
+            ReleaseCapture();
+            return 0;
+        }
+        break;
+    }
+    case WM_CAPTURECHANGED:
+        s_bDragging = FALSE;
+        break;
 
     case WM_COMMAND:
         switch (LOWORD(wParam))

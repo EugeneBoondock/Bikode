@@ -209,6 +209,22 @@ typedef struct WideTextBuffer {
 
 static MissionControlUi s_mc;
 static BOOL s_bUseLocalBackend = FALSE;
+
+/* --- Splitter drag state --- */
+#define MC_SPLITTER_GRIP   5        /* pixels: hit-test band width */
+#define MC_SPLITTER_NONE   0
+#define MC_SPLITTER_HERO   1        /* bottom edge of COMMAND CENTER */
+#define MC_SPLITTER_HBOARD 2        /* right edge of BOARD (side-by-side mode) */
+#define MC_SPLITTER_VACT   3        /* top edge of TIMELINE */
+
+static int  s_iDragSplitter = MC_SPLITTER_NONE;
+static POINT s_ptDragStart;
+static int  s_iDragOrigVal;          /* original size before drag began */
+
+/* User-chosen persistent sizes (-1 = use automatic) */
+static int  s_iUserHeroH     = -1;   /* hero card height */
+static int  s_iUserBoardFrac = -1;   /* board width in side-by-side (px from left) */
+static int  s_iUserActivityH = -1;   /* timeline card height */
 extern WCHAR szCurFile[MAX_PATH + 40];
 
 static LRESULT CALLBACK MissionControlProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -406,7 +422,16 @@ static void RequestFullPanelRedraw(HWND hwnd)
 {
     if (!hwnd)
         return;
-    RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    if (s_iDragSplitter)
+    {
+        /* During drag: skip erase to prevent flicker, just invalidate and
+         * update synchronously so the layout feels responsive */
+        RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    }
+    else
+    {
+        RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    }
 }
 
 static void QueueRefresh(void)
@@ -1699,8 +1724,12 @@ static void LayoutChildren(HWND hwnd)
     compactHero = width < 1320;
     quickChatOwnRow = width < 1160;
     heroH = compactHero ? (quickChatOwnRow ? 268 : 248) : 228;
+    if (s_iUserHeroH > 0)
+        heroH = max(min(s_iUserHeroH, height - 300), 120);
     inspectorW = min(380, max(320, width / 3));
     stackInspector = width < 1240;
+    if (s_iUserActivityH > 0)
+        activityH = max(min(s_iUserActivityH, height - heroH - 200), 80);
     SetRect(&s_mc.rcHero, outerPad, outerPad, width - outerPad, outerPad + heroH);
     SetRect(&s_mc.rcActivityCard,
         outerPad,
@@ -1726,7 +1755,10 @@ static void LayoutChildren(HWND hwnd)
     }
     else
     {
-        boardOuterW = max(width - inspectorW - (outerPad * 3), 240);
+        if (s_iUserBoardFrac > 0)
+            boardOuterW = max(min(s_iUserBoardFrac, width - outerPad * 2 - sectionGap - 200), 240);
+        else
+            boardOuterW = max(width - inspectorW - (outerPad * 3), 240);
         boardOuterH = max(contentHeight, 220);
         SetRect(&s_mc.rcBoardCard,
             outerPad,
@@ -2945,6 +2977,34 @@ static void OpenCurrentSelection(int what)
     FreeSnapshot(snapshot);
 }
 
+/* --- Splitter hit-testing --- */
+static int HitTestSplitter(HWND hwnd, int mx, int my)
+{
+    RECT rc;
+    int grip = MC_SPLITTER_GRIP;
+    GetClientRect(hwnd, &rc);
+    (void)rc;
+
+    /* Bottom edge of Hero card */
+    if (my >= s_mc.rcHero.bottom - grip && my <= s_mc.rcHero.bottom + grip &&
+        mx >= s_mc.rcHero.left && mx <= s_mc.rcHero.right)
+        return MC_SPLITTER_HERO;
+
+    /* Top edge of Activity/Timeline card */
+    if (my >= s_mc.rcActivityCard.top - grip && my <= s_mc.rcActivityCard.top + grip &&
+        mx >= s_mc.rcActivityCard.left && mx <= s_mc.rcActivityCard.right)
+        return MC_SPLITTER_VACT;
+
+    /* Right edge of Board card (side-by-side mode only) */
+    if (!IsRectEmpty(&s_mc.rcInspectorCard) &&
+        s_mc.rcBoardCard.right < s_mc.rcInspectorCard.right &&
+        mx >= s_mc.rcBoardCard.right - grip && mx <= s_mc.rcBoardCard.right + grip &&
+        my >= s_mc.rcBoardCard.top && my <= s_mc.rcBoardCard.bottom)
+        return MC_SPLITTER_HBOARD;
+
+    return MC_SPLITTER_NONE;
+}
+
 static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg)
@@ -3036,6 +3096,8 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         return 0;
     case WM_ERASEBKGND:
     {
+        if (s_iDragSplitter)
+            return 1;  /* suppress erase during drag to prevent flicker */
         RECT rc;
         GetClientRect(hwnd, &rc);
         FillRect((HDC)wParam, &rc, s_mc.hbrAppBg ? s_mc.hbrAppBg : (HBRUSH)(COLOR_WINDOW + 1));
@@ -3048,6 +3110,107 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         PaintPanel(hwnd, hdc);
         EndPaint(hwnd, &ps);
         return 0;
+    }
+    case WM_SETCURSOR:
+    {
+        if ((HWND)wParam == hwnd && LOWORD(lParam) == HTCLIENT)
+        {
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            int hit = s_iDragSplitter ? s_iDragSplitter : HitTestSplitter(hwnd, pt.x, pt.y);
+            if (hit == MC_SPLITTER_HBOARD)
+            {
+                SetCursor(LoadCursor(NULL, IDC_SIZEWE));
+                return TRUE;
+            }
+            if (hit == MC_SPLITTER_HERO || hit == MC_SPLITTER_VACT)
+            {
+                SetCursor(LoadCursor(NULL, IDC_SIZENS));
+                return TRUE;
+            }
+        }
+        break;
+    }
+    case WM_LBUTTONDOWN:
+    {
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        int hit = HitTestSplitter(hwnd, mx, my);
+        if (hit != MC_SPLITTER_NONE)
+        {
+            s_iDragSplitter = hit;
+            s_ptDragStart.x = mx;
+            s_ptDragStart.y = my;
+            switch (hit)
+            {
+            case MC_SPLITTER_HERO:
+                s_iDragOrigVal = s_mc.rcHero.bottom - s_mc.rcHero.top;
+                break;
+            case MC_SPLITTER_HBOARD:
+                s_iDragOrigVal = s_mc.rcBoardCard.right - s_mc.rcBoardCard.left;
+                break;
+            case MC_SPLITTER_VACT:
+                s_iDragOrigVal = s_mc.rcActivityCard.bottom - s_mc.rcActivityCard.top;
+                break;
+            }
+            SetCapture(hwnd);
+            return 0;
+        }
+        break;
+    }
+    case WM_MOUSEMOVE:
+    {
+        if (s_iDragSplitter && (wParam & MK_LBUTTON))
+        {
+            int mx = GET_X_LPARAM(lParam);
+            int my = GET_Y_LPARAM(lParam);
+            int delta;
+            switch (s_iDragSplitter)
+            {
+            case MC_SPLITTER_HERO:
+                delta = my - s_ptDragStart.y;
+                s_iUserHeroH = s_iDragOrigVal + delta;
+                break;
+            case MC_SPLITTER_HBOARD:
+                delta = mx - s_ptDragStart.x;
+                s_iUserBoardFrac = s_iDragOrigVal + delta;
+                break;
+            case MC_SPLITTER_VACT:
+                delta = my - s_ptDragStart.y;
+                s_iUserActivityH = s_iDragOrigVal - delta;
+                break;
+            }
+            LayoutChildren(hwnd);
+            return 0;
+        }
+        else
+        {
+            /* Update cursor on hover even without drag */
+            int mx = GET_X_LPARAM(lParam);
+            int my = GET_Y_LPARAM(lParam);
+            int hit = HitTestSplitter(hwnd, mx, my);
+            if (hit == MC_SPLITTER_HBOARD)
+                SetCursor(LoadCursor(NULL, IDC_SIZEWE));
+            else if (hit == MC_SPLITTER_HERO || hit == MC_SPLITTER_VACT)
+                SetCursor(LoadCursor(NULL, IDC_SIZENS));
+        }
+        break;
+    }
+    case WM_LBUTTONUP:
+    {
+        if (s_iDragSplitter)
+        {
+            s_iDragSplitter = MC_SPLITTER_NONE;
+            ReleaseCapture();
+            return 0;
+        }
+        break;
+    }
+    case WM_CAPTURECHANGED:
+    {
+        s_iDragSplitter = MC_SPLITTER_NONE;
+        break;
     }
     case WM_CTLCOLORDLG:
     case WM_CTLCOLORSTATIC:
