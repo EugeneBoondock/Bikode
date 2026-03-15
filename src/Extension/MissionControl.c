@@ -21,6 +21,8 @@
 #include "ui/theme/BikodeTheme.h"
 #include <commctrl.h>
 #include <shellapi.h>
+#define NO_SHOBJIDL_SORTDIRECTION 1
+#include <shlobj.h>
 #include <shlwapi.h>
 #include <uxtheme.h>
 #include <windowsx.h>

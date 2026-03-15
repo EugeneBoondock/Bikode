@@ -84,6 +84,7 @@ static HFONT s_fontTree    = NULL;
 static BOOL  s_dragging    = FALSE;
 static int   s_dragStartX  = 0;
 static int   s_dragStartW  = 0;
+static BOOL  s_newItemIsFolder = FALSE;
 
 /* File system watcher */
 static HANDLE s_hWatcher     = NULL;
@@ -119,6 +120,7 @@ static BOOL    GetItemPath(HTREEITEM hItem, WCHAR *pszPath, int cch);
 static void    StartFileWatcher(void);
 static void    StopFileWatcher(void);
 static void    RefreshSubtree(HTREEITEM hItem);
+static void    OnEndLabelEdit(NMTVDISPINFOW *pdi);
 
 /* ── Helpers to store full path in tree item lParam ── */
 static WCHAR* AllocPathStr(const WCHAR *s) {
@@ -996,7 +998,6 @@ static void OnContextMenuCommand(HWND hwnd, int cmd) {
 /* ═══════════════════════════════════════════════════════════════════
  * Label editing (rename + new file/folder creation)
  * ═══════════════════════════════════════════════════════════════════ */
-static BOOL s_newItemIsFolder = FALSE;
 
 static void OnEndLabelEdit(NMTVDISPINFOW *pdi) {
     if (!pdi->item.pszText || pdi->item.pszText[0] == L'\0') {
