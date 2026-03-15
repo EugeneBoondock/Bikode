@@ -216,6 +216,7 @@ static BOOL s_bUseLocalBackend = FALSE;
 #define MC_SPLITTER_HERO   1        /* bottom edge of COMMAND CENTER */
 #define MC_SPLITTER_HBOARD 2        /* right edge of BOARD (side-by-side mode) */
 #define MC_SPLITTER_VACT   3        /* top edge of TIMELINE */
+#define MC_SPLITTER_VBOARD 4        /* bottom edge of BOARD (stacked mode) */
 
 static int  s_iDragSplitter = MC_SPLITTER_NONE;
 static POINT s_ptDragStart;
@@ -225,6 +226,7 @@ static int  s_iDragOrigVal;          /* original size before drag began */
 static int  s_iUserHeroH     = -1;   /* hero card height */
 static int  s_iUserBoardFrac = -1;   /* board width in side-by-side (px from left) */
 static int  s_iUserActivityH = -1;   /* timeline card height */
+static int  s_iUserBoardH    = -1;   /* board height in stacked mode */
 extern WCHAR szCurFile[MAX_PATH + 40];
 
 static LRESULT CALLBACK MissionControlProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -1740,8 +1742,12 @@ static void LayoutChildren(HWND hwnd)
     contentHeight = max(s_mc.rcActivityCard.top - contentTop - sectionGap, 220);
     if (stackInspector)
     {
-        stackedInspectorH = max(min(260, contentHeight / 3), 186);
-        boardOuterH = max(contentHeight - stackedInspectorH - sectionGap, 220);
+        if (s_iUserBoardH > 0)
+            boardOuterH = max(min(s_iUserBoardH, contentHeight - sectionGap - 186), 220);
+        else {
+            stackedInspectorH = max(min(260, contentHeight / 3), 186);
+            boardOuterH = max(contentHeight - stackedInspectorH - sectionGap, 220);
+        }
         SetRect(&s_mc.rcBoardCard,
             outerPad,
             contentTop,
@@ -3002,6 +3008,14 @@ static int HitTestSplitter(HWND hwnd, int mx, int my)
         my >= s_mc.rcBoardCard.top && my <= s_mc.rcBoardCard.bottom)
         return MC_SPLITTER_HBOARD;
 
+    /* Bottom edge of Board card (stacked mode: inspector below board) */
+    if (!IsRectEmpty(&s_mc.rcInspectorCard) &&
+        s_mc.rcBoardCard.left == s_mc.rcInspectorCard.left &&
+        s_mc.rcBoardCard.right == s_mc.rcInspectorCard.right &&
+        my >= s_mc.rcBoardCard.bottom - grip && my <= s_mc.rcBoardCard.bottom + grip &&
+        mx >= s_mc.rcBoardCard.left && mx <= s_mc.rcBoardCard.right)
+        return MC_SPLITTER_VBOARD;
+
     return MC_SPLITTER_NONE;
 }
 
@@ -3124,7 +3138,7 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 SetCursor(LoadCursor(NULL, IDC_SIZEWE));
                 return TRUE;
             }
-            if (hit == MC_SPLITTER_HERO || hit == MC_SPLITTER_VACT)
+            if (hit == MC_SPLITTER_HERO || hit == MC_SPLITTER_VACT || hit == MC_SPLITTER_VBOARD)
             {
                 SetCursor(LoadCursor(NULL, IDC_SIZENS));
                 return TRUE;
@@ -3153,6 +3167,9 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             case MC_SPLITTER_VACT:
                 s_iDragOrigVal = s_mc.rcActivityCard.bottom - s_mc.rcActivityCard.top;
                 break;
+            case MC_SPLITTER_VBOARD:
+                s_iDragOrigVal = s_mc.rcBoardCard.bottom - s_mc.rcBoardCard.top;
+                break;
             }
             SetCapture(hwnd);
             return 0;
@@ -3180,6 +3197,10 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 delta = my - s_ptDragStart.y;
                 s_iUserActivityH = s_iDragOrigVal - delta;
                 break;
+            case MC_SPLITTER_VBOARD:
+                delta = my - s_ptDragStart.y;
+                s_iUserBoardH = s_iDragOrigVal + delta;
+                break;
             }
             LayoutChildren(hwnd);
             return 0;
@@ -3192,7 +3213,7 @@ static LRESULT MissionControlProcImpl(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             int hit = HitTestSplitter(hwnd, mx, my);
             if (hit == MC_SPLITTER_HBOARD)
                 SetCursor(LoadCursor(NULL, IDC_SIZEWE));
-            else if (hit == MC_SPLITTER_HERO || hit == MC_SPLITTER_VACT)
+            else if (hit == MC_SPLITTER_HERO || hit == MC_SPLITTER_VACT || hit == MC_SPLITTER_VBOARD)
                 SetCursor(LoadCursor(NULL, IDC_SIZENS));
         }
         break;
