@@ -2622,19 +2622,61 @@ static char* BuildNodePrompt(int nodeIndex)
         sb_append(&sb, "Do not mutate files in this node. Inspect and report only.\n", -1);
     else
         sb_append(&sb, "You may change files directly in the workspace if needed. Keep changes reviewable.\n", -1);
-    if (spec->dependsOnCount > 0)
+    // Give this agent context about ALL completed prior agents so it can
+    // build on their work, coordinate, and avoid duplicating effort.
+    EnterCriticalSection(&s_runtime.cs);
     {
-        sb_append(&sb, "Dependencies and prior summaries:\n", -1);
-        for (i = 0; i < spec->dependsOnCount; i++)
+        BOOL hasPriorWork = FALSE;
+        // First pass: check if any prior nodes have completed
+        for (i = 0; i < s_runtime.org.nodeCount; i++)
         {
-            int depIndex = FindNodeIndexByIdLocked(spec->dependsOn[i]);
-            if (depIndex >= 0)
+            if (i == nodeIndex) continue;
+            if (s_runtime.nodes[i].state == AGENT_NODE_DONE && s_runtime.nodes[i].summary[0])
             {
-                sb_appendf(&sb, "- %s: %s\n", s_runtime.nodes[depIndex].title,
-                           s_runtime.nodes[depIndex].summary[0] ? s_runtime.nodes[depIndex].summary : "(no summary)");
+                hasPriorWork = TRUE;
+                break;
+            }
+        }
+
+        if (hasPriorWork)
+        {
+            BOOL isDep;
+            sb_append(&sb, "\n## Prior agent work\n"
+                "The following agents have already completed their tasks. "
+                "Build on their output \xe2\x80\x94 do not redo work they already did.\n\n", -1);
+
+            for (i = 0; i < s_runtime.org.nodeCount; i++)
+            {
+                if (i == nodeIndex) continue;
+                if (s_runtime.nodes[i].state != AGENT_NODE_DONE) continue;
+                if (!s_runtime.nodes[i].summary[0]) continue;
+
+                // Check if this is an explicit dependency
+                isDep = FALSE;
+                {
+                    int d;
+                    for (d = 0; d < spec->dependsOnCount; d++)
+                    {
+                        int depIdx = FindNodeIndexByIdLocked(spec->dependsOn[d]);
+                        if (depIdx == i) { isDep = TRUE; break; }
+                    }
+                }
+
+                sb_appendf(&sb, "### %s (%s)%s\n",
+                    s_runtime.nodes[i].title,
+                    s_runtime.org.nodes[i].role,
+                    isDep ? " [DEPENDENCY]" : "");
+                sb_appendf(&sb, "**Task:** %.*s\n",
+                    (int)(strlen(s_runtime.org.nodes[i].prompt) < 300 ?
+                          strlen(s_runtime.org.nodes[i].prompt) : 300),
+                    s_runtime.org.nodes[i].prompt);
+                if (strlen(s_runtime.org.nodes[i].prompt) > 300)
+                    sb_append(&sb, "...", 3);
+                sb_appendf(&sb, "\n**Result:** %s\n\n", s_runtime.nodes[i].summary);
             }
         }
     }
+    LeaveCriticalSection(&s_runtime.cs);
     if (spec->toolCount > 0)
     {
         sb_append(&sb, "Preferred tools:\n", -1);
@@ -2884,7 +2926,10 @@ static char* BuildApiNodeSystemPrompt(const OrgNodeSpec* spec, const char* works
         "- Use replace_in_file for targeted edits; write_file for new files.\n"
         "- Relative paths resolve from the workspace root.\n"
         "- All JSON strings must use proper escaping (\\n for newlines, \\\" for quotes).\n"
-        "- When your answer is complete (no more tools needed), respond with plain text and summarize the changes.\n", -1);
+        "- When your work is complete, stop calling tools and return a final summary.\n"
+        "- Your final message becomes the handoff to the next agent. Keep it under 3000 chars.\n"
+        "  Structure it as: what you did, key files created/changed, decisions made,\n"
+        "  and anything the next agent needs to know.\n", -1);
 
     if (spec->workspacePolicy == AGENT_WORKSPACE_SHARED_READONLY)
         sb_append(&sb, "- IMPORTANT: This node is READ-ONLY. Do NOT write or modify any files.\n", -1);
